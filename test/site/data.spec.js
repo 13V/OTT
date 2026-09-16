@@ -486,10 +486,12 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(tiles).toContainText(fmtCountdownLike(CUR_WEEK_END));
   await expect(tiles).toContainText('does not carry over');
 
-  // The past order came from a plain GET, so it is listed but redacted: no code, no QR, no
-  // install links, no manual line — only what was never gated (name, price, ICCID) shows.
-  await expect(mine).toContainText('THIS WEEK’S ESIMS');
-  const pastCard = mine.locator('.data-orders .data-order');
+  // The past order came from a plain GET, so its SIM card is listed but redacted: no code, no QR,
+  // no install links, no manual line — only what was never gated (name, price, ICCID) shows. This
+  // fixture names no `sims` and no `topupOf` (the shape written before nadanada tracked a standing
+  // profile), so the past order is its own eSIM, exactly as one order always was.
+  await expect(mine).toContainText('YOUR ESIM');
+  const pastCard = mine.locator('.data-sim').filter({ hasText: '8900000000000000001' });
   await expect(pastCard).toHaveCount(1);
   await expect(pastCard).toContainText('Germany · 1 GB · 7 days');
   await expect(pastCard).toContainText('$1.99');
@@ -524,7 +526,9 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(mine.locator('.data-sizes button[data-code="fixed_5GB_30D_DE"]')).toHaveClass(/active/);
   await mine.getByRole('button', { name: 'Redeem Germany · 5 GB — $4.99' }).click();
 
-  const card = mine.locator('.data-order.fresh');
+  // A fresh claim that names no top-up mints its own eSIM, so it is the SIM card itself — not just
+  // a bundle row — that gets the "this is new" treatment.
+  const card = mine.locator('.data-sim.fresh');
   await expect(card).toBeVisible();
   await expect(card.locator('img.data-qr')).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(card.locator('.data-ac')).toHaveText('LPA:1$smdp.nadanada.me$MATCH-123');
@@ -688,7 +692,7 @@ test('when the redeem API cannot be reached, what the indexer last published sti
   expect(errors).toEqual([]);
 });
 
-test('previous weeks’ eSIMs are shown separately from this week’s, and say they do not expire', async ({ page }) => {
+test('a bundle claimed in a previous week is still shown, filed under its eSIM and tagged with the week that claimed it', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page, { calls: CALLS });
@@ -709,14 +713,15 @@ test('previous weeks’ eSIMs are shown separately from this week’s, and say t
 
   await page.goto('/index.html#/');
   const mine = page.locator('.data-mine');
-  await expect(mine).toContainText('THIS WEEK’S ESIMS');
-  await expect(mine).toContainText('Nothing redeemed yet this week.');
-  await expect(mine).toContainText('PREVIOUS WEEKS');
-  await expect(mine).toContainText('do not expire when the week does');
-  const orderGroups = mine.locator('.data-orders');
-  const historyGroup = orderGroups.last();
-  await expect(historyGroup.locator('.data-order')).toHaveCount(1);
-  await expect(historyGroup).toContainText('Week of ' + fmtDate(weekStartOf(oldWeek)));
-  await expect(historyGroup).toContainText('Europe · 1 GB · 7 days');
+  // Nothing was claimed this week, only two weeks ago — but the eSIM that bundle minted is still
+  // the one SIM card shown, with that one bundle listed underneath and tagged with its own week,
+  // because an eSIM already issued does not disappear once the week that paid for it rolls.
+  await expect(mine).toContainText('YOUR ESIM');
+  const simCard = mine.locator('.data-sim');
+  await expect(simCard).toHaveCount(1);
+  await expect(simCard).toContainText('8900000000000000009');
+  await expect(simCard.locator('.data-bundle')).toHaveCount(1);
+  await expect(simCard).toContainText('Week of ' + fmtDate(weekStartOf(oldWeek)));
+  await expect(simCard).toContainText('Europe · 1 GB · 7 days');
   expect(errors).toEqual([]);
 });

@@ -29,7 +29,7 @@
  * router, the RPC rotation, the wallet flow and the DOM helper, and hands them in as `ctx` — so
  * nothing here is a second copy of something app.js already does, and the file can be read on its
  * own. It exposes exactly one global, window.WhateverData, with one method: render(view, ctx). A
- * second global, window.WhateverQr (site/qr.js), draws the activation QR for the rare order whose
+ * second global, window.WhateverQr (site/qr.js), draws the activation QR for the rare eSIM whose
  * qrCodeUrl came back empty; this file calls it defensively and does not depend on it being loaded.
  *
  * Everything this page needs is loaded when the page is opened and never at boot — config/esim.json
@@ -648,22 +648,25 @@
       body.appendChild(notice('This wallet holds no OTT, so it has no data this week.', 'plain'));
       body.appendChild(h('div', { class: 'data-actions' },
         h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Get OTT on whatever.fun')));
-      if (standing && (((standing.orders || []).length) || ((standing.history || []).length))) {
-        body.appendChild(pastEsims(ctx, cfg, addr, standing, freshOrder));
-      }
+      // A wallet that now holds nothing can still have an eSIM from a week it did — simsSection
+      // shows it, and quietly shows nothing when there truly is none, the same hasAny guard always
+      // gated this on.
+      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
       return;
     }
 
     body.appendChild(dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd, weekEnd }));
-    if (freshOrder) body.appendChild(orderCard(ctx, cfg, freshOrder, true));
 
     if (!standing) {
       body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
       return;
     }
 
+    // The SIM is the object: what this wallet already has, and what is queued on it, comes before
+    // the picker that adds more — so a returning holder reads "here is your eSIM" before "buy more
+    // data", not the other way around.
+    body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
     body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel));
-    body.appendChild(pastEsims(ctx, cfg, addr, standing, freshOrder));
   }
 
   // A live countdown reads at most one at a time on this single-page app, so one module-level timer
@@ -741,6 +744,10 @@
     const regions = plist.filter((p) => p.kind === 'region');
     const countries = plist.filter((p) => p.kind === 'country');
     const remaining = Number(standing.remainingUsd) || 0;
+    // Every place this wallet already has a standing eSIM for — nadanada's own sims list, not a
+    // guess from past orders, because it is the only thing that actually knows whether the next
+    // claim for a place will queue on a profile already installed or mint a new one.
+    const simSlugs = new Set((standing.sims || []).map((s) => s.slug).filter(Boolean));
     const optionsFor = (list) => list.map((p) => h('option', { value: p.slug }, p.name));
     // Two optgroups only when the catalogue actually has both kinds — a fork selling only regions,
     // say, gets a plain list rather than one empty group.
@@ -751,12 +758,17 @@
       : h('select', { id: 'f-place' }, optionsFor(plist));
     const sizes = h('div', { class: 'data-sizes' });
     const packageInput = h('input', { type: 'hidden', id: 'f-package' });
+    // Says, before the click, whether this claim adds to an eSIM already in the holder's phone or
+    // issues a new one — the thing item 3 most needs said plainly, right where the place is picked.
+    const placeNote = h('p', { class: 'small' }, '');
     const hint = h('p', { class: 'hint' }, '');
     const btn = h('button', { class: 'btn btn-primary btn-block', onclick: () => doRedeem() }, 'Redeem');
     const result = h('div', {});
     const wrap = h('div', { class: 'data-redeem' },
       h('div', { class: 'divider' }),
+      h('div', { class: 'label' }, simSlugs.size ? 'ADD DATA' : 'GET YOUR ESIM'),
       h('div', { class: 'field' }, h('label', { for: 'f-place' }, 'Place'), placeSelect),
+      placeNote,
       sizes, packageInput,
       btn, hint, result);
     if (!window.ethereum) wrap.appendChild(notice('Redeeming needs a wallet that can sign a message.', 'plain'));
@@ -776,10 +788,19 @@
       for (const el of sizes.children) el.classList.toggle('active', el.dataset.code === code);
       paintButton();
     }
+    function paintPlaceNote() {
+      const info = plist.find((p) => p.slug === placeSelect.value);
+      const name = info ? info.name : 'this place';
+      placeNote.textContent = simSlugs.has(placeSelect.value)
+        ? 'Adds to your eSIM for ' + name + ' — nothing to install again.'
+        : 'Issues a new eSIM for ' + name + ', ready to install.';
+    }
     // Changing the place repaints the size row for that place and picks the smallest size, the
-    // same as opening the picker for the first time does.
+    // same as opening the picker for the first time does — and updates the note above so it never
+    // names the place the size buttons no longer belong to.
     function paintSizes() {
       clear(sizes);
+      paintPlaceNote();
       const here = packagesAt(cfg, placeSelect.value);
       for (const p of here) {
         sizes.appendChild(h('button', { type: 'button', class: 'btn btn-sm', 'data-code': p.code, onclick: () => selectSize(p.code) },
@@ -810,7 +831,15 @@
         const n = (standing.orders || []).length;
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
         clear(result);
-        result.appendChild(orderCard(ctx, cfg, out.order, true));
+        // A preview of the eSIM this bundle just landed on — built the same way the repainted
+        // panel below will build it, from `out.sims` (nadanada's fresher-than-`standing` picture) —
+        // so there is something to look at for the second or two the fuller signed read below
+        // takes, not just a toast.
+        const previewed = Object.assign({}, standing, {
+          orders: (standing.orders || []).concat([out.order]), sims: out.sims || standing.sims || [],
+        });
+        const previewGroup = groupIntoSims(cfg, previewed).find((g) => g.bundles.some((o) => o.transactionId === out.order.transactionId));
+        if (previewGroup) result.appendChild(simCard(ctx, cfg, previewGroup, out.order));
         if (typeof ctx.toast === 'function') ctx.toast(out.order && out.order.pending ? 'eSIM ordered' : 'eSIM ready', packageLabel(pkg), 'success');
         // The signature that just redeemed also proves who is asking, so it buys a signed read
         // too — the panel repaints with every code this wallet is now owed to see, not only the
@@ -828,6 +857,7 @@
             remainingUsd: out.remainingUsd,
             redeemedUsd: Math.round((Number(standing.redeemedUsd || 0) + spent) * 100) / 100,
             orders: (standing.orders || []).concat([out.order]),
+            sims: out.sims || standing.sims || [],
           });
           repaintFrom(ctx, cfg, addr, allow, fallback, panel, out.order);
         }
@@ -868,38 +898,39 @@
   }
 
   /**
-   * Everything this wallet has ever been issued a code for: this week's orders, which is what the
-   * balance above is spent against, and — separately — the eSIMs from the three weeks before it,
-   * kept for display because an eSIM that has already been issued does not expire just because the
-   * week that paid for it did. One sign-in and one button reveal every code in both lists at once,
-   * since the API already answers both lists in the same signed call.
+   * Everything this wallet has queued onto an eSIM, one card per profile nadanada actually issued
+   * it. A wallet gets one eSIM per PLACE it buys — not one eSIM full stop — because bundles on a
+   * profile run consecutively: a Japan bundle queued behind an unused Europe one would be
+   * unreachable until the Europe one ended, and the holder would land in Tokyo with data already
+   * paid for and no way to use it. A second profile for a second place costs nothing (the SIM is
+   * free; only data is billed) and always works on arrival, so buying two places is two SIMs, each
+   * topped up on its own from then on. Almost every wallet has exactly one, because almost every
+   * wallet keeps buying the same place.
    *
    * A GET, or any unsigned load, never carries a code — an activation code is a one-time thing, and
-   * only the wallet that signs for it gets to see one — so every card here starts redacted
-   * (orderCard already renders that correctly: it just has nothing to show). `freshOrder` is the
-   * order just pinned above this section as "new", so it is never shown twice.
+   * only the wallet that signs for it gets to see one — so every card here starts redacted; "Show my
+   * eSIM codes" signs in once and repaints every SIM and every bundle on it from that one signed
+   * answer, since the API already answers the whole standing, codes and all, in one signed call.
+   * Nothing is shown here at all for a wallet that has never redeemed — the plan picker below is
+   * the whole of that state, exactly as it always was.
    */
-  function pastEsims(ctx, cfg, addr, standing, freshOrder) {
+  function simsSection(ctx, cfg, addr, standing, freshOrder) {
     const { h } = ctx;
-    const thisWeek = h('div', {});
-    const history = h('div', {});
-    const without = (items, id) => (id ? items.filter((o) => o.transactionId !== id) : items);
+    const groups = groupIntoSims(cfg, standing);
+    // The reveal button — and the section itself — only appear when there is something to reveal.
+    // Offering to show codes to a wallet that has redeemed nothing is an invitation to sign a
+    // message for an empty answer.
+    const hasAny = ((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length) > 0;
+    if (!hasAny) return h('div', {});
 
-    function paint(list) {
-      const shown = without(list.orders || [], freshOrder && freshOrder.transactionId);
-      clear(thisWeek);
-      if (!shown.length) thisWeek.appendChild(h('p', { class: 'small' }, 'Nothing redeemed yet this week.'));
-      // Newest first: the one you need at the gate is the one you just ordered.
-      else for (const o of shown.slice().reverse()) thisWeek.appendChild(orderCard(ctx, cfg, o, false));
-
-      clear(history);
-      const past = list.history || [];
-      if (!past.length) history.appendChild(h('p', { class: 'small' }, 'Nothing from previous weeks.'));
-      else for (const o of past.slice().reverse()) history.appendChild(orderCard(ctx, cfg, o, false, weekLabel(o.week)));
-    }
-    paint(standing);
+    const label = h('div', { class: 'label' }, groups.length > 1 ? 'YOUR ESIMS' : 'YOUR ESIM');
+    const cards = h('div', {}, groups.map((g) => simCard(ctx, cfg, g, freshOrder)));
 
     const hint = h('p', { class: 'hint' }, '');
+    // Only offer to reveal what is actually still hidden. A wallet that has just redeemed is
+    // already holding its codes — the redeem answered with them — and a button offering to show
+    // what is already on the screen reads as a second, different thing to press.
+    const stillHidden = (gs) => gs.some((g) => !g.sim || !g.sim.codes);
     const btn = h('button', { class: 'btn btn-sm', onclick: async () => {
       if (!window.ethereum) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
       btn.disabled = true;
@@ -907,25 +938,82 @@
       try {
         const { message, signature } = await signIn(addr);
         const out = await api('POST', './api/redeem', { address: addr, message, signature });
-        paint(out);
+        const fresh = groupIntoSims(cfg, out);
+        clear(cards);
+        for (const g of fresh) cards.appendChild(simCard(ctx, cfg, g, freshOrder));
+        label.textContent = fresh.length > 1 ? 'YOUR ESIMS' : 'YOUR ESIM';
+        if (!stillHidden(fresh)) btn.remove();
       } catch (e) {
         hint.textContent = 'Could not read your codes: ' + errText(e);
         hint.classList.add('err');
       } finally { btn.disabled = false; }
     } }, 'Show my eSIM codes');
 
-    // The reveal button, and the previous-weeks band, only appear when there is something to
-    // reveal. Offering to show codes to a wallet that has redeemed nothing is an invitation to
-    // sign a message for an empty answer.
-    const hasAny = ((standing.orders || []).length + (standing.history || []).length) > 0;
-    const hasPast = (standing.history || []).length > 0;
-    return h('div', {},
-      h('div', { class: 'data-orders' }, h('div', { class: 'divider' }), h('div', { class: 'label' }, 'THIS WEEK’S ESIMS'), thisWeek),
-      hasAny ? h('div', { class: 'data-actions' }, btn, hint) : null,
-      hasPast ? h('div', { class: 'data-orders' }, h('div', { class: 'divider' }),
-        h('div', { class: 'label' }, 'PREVIOUS WEEKS'),
-        h('p', { class: 'small' }, 'Already issued — these do not expire when the week does.'),
-        history) : null);
+    const actions = h('div', { class: 'data-actions' }, hint);
+    if (stillHidden(groups)) actions.insertBefore(btn, hint);
+    return h('div', { class: 'data-sims' },
+      h('div', { class: 'divider' }), label, cards, actions);
+  }
+
+  /**
+   * This wallet's orders and history, filed under the eSIM each actually lives on. `standing.sims`
+   * is nadanada's own list of profiles, and an order's `iccid` — or, before nadanada has finished
+   * issuing it, `topupOf` — says which one a bundle belongs to; both are public even before a
+   * signature reveals the codes, so grouping reads the same redacted or not. A provider with no
+   * notion of a standing profile (site/api/lib/providers/esimaccess.js, and any order fixture
+   * written before this shape existed) sends `sims: []` and puts the full code on every order
+   * instead; a completed order that names no top-up IS its own eSIM in that case, so `simFromOrder`
+   * below builds the same card straight from the order's own fields — a fork or a test with no
+   * per-profile provider still renders the one-eSIM-per-order shape it always did.
+   */
+  function groupIntoSims(cfg, standing) {
+    const byIccid = new Map();
+    const groups = (standing.sims || []).map((sim) => {
+      const g = { sim, bundles: [] };
+      if (sim.iccid) byIccid.set(sim.iccid, g);
+      return g;
+    });
+    const bundles = (standing.orders || []).map((o) => Object.assign({ fromHistory: false }, o))
+      .concat((standing.history || []).map((o) => Object.assign({ fromHistory: true }, o)));
+    for (const o of bundles) {
+      const key = o.iccid || o.topupOf || '';
+      let g = key && byIccid.get(key);
+      if (!g) { g = { sim: null, bundles: [] }; if (key) byIccid.set(key, g); groups.push(g); }
+      // A bundle naming no top-up minted this profile, whether or not its code is visible right
+      // now, so it is the one thing here allowed to stand in for a SIM this group has not seen yet.
+      if (!g.sim && !o.toppedUp && !o.topupOf) g.sim = simFromOrder(o, placeOfOrder(cfg, o));
+      g.bundles.push(o);
+    }
+    groups.sort((a, b) => (Date.parse((b.sim && b.sim.createdAt) || (b.bundles[0] && b.bundles[0].createdAt) || '') || 0)
+      - (Date.parse((a.sim && a.sim.createdAt) || (a.bundles[0] && a.bundles[0].createdAt) || '') || 0));
+    return groups;
+  }
+
+  // A SIM built from the order that minted it, for a provider (or a fixture) that never sent
+  // `sims` at all — the same fields publicSim() would have carried, read off the order instead.
+  function simFromOrder(o, slug) {
+    return {
+      iccid: o.iccid || '', slug: slug || '', createdAt: o.createdAt || null,
+      qrCodeUrl: o.qrCodeUrl || '', ac: o.ac || '', manualCode: o.manualCode || '',
+      smdpAddress: o.smdpAddress || '', matchingId: o.matchingId || '',
+      appleInstallUrl: o.appleInstallUrl || '', androidInstallUrl: o.androidInstallUrl || '',
+      codes: !!o.codes,
+    };
+  }
+
+  // The place an order/bundle was bought for, read off its package — used both to file a bundle
+  // under the right SIM and to title a SIM's own card.
+  function placeOfOrder(cfg, o) {
+    const p = packageByCode(cfg, o.packageCode);
+    return p ? p.slug : '';
+  }
+
+  // The place a slug means, read off the same catalogue the plan picker uses, so a SIM card's
+  // title is never a second copy of a place's name that could drift from the one on the plan grid.
+  // A slug the catalogue no longer carries (a discontinued package) still gets a name: itself.
+  function placeInfo(cfg, slug) {
+    if (!slug) return null;
+    return places(cfg).find((p) => p.slug === slug) || { slug, name: slug, kind: '', flag: '' };
   }
 
   // "Week of Sep 8, 2026" — for a history card, so it is clear which week paid for an eSIM that is
@@ -936,58 +1024,106 @@
 
   /**
    * One eSIM: the QR the phone scans, the same activation code as text for the phones that would
-   * rather be told than shown, and — when nadanada included them — the one-tap install links and
-   * the manual SM-DP+/matching-id pair for a phone that can use neither of the above. `weekTag`,
-   * when given, is a past week's label ("Week of Sep 8, 2026") shown for a history card.
+   * rather be told than shown, the one-tap install links and the manual SM-DP+/matching-id pair
+   * when nadanada sent them, and its ICCID — shown once, per item 1 of the brief, because
+   * installing it is a one-time thing even though claiming against it is not. Underneath, every
+   * bundle claimed onto it, this week's and previous weeks' together, newest first: what actually
+   * changes week to week is not the SIM, only what is queued on it.
+   *
+   * `group.sim` is null only for a bundle nadanada could not be matched to any known profile — a
+   * top-up whose own founding order sits outside the three weeks of history this page ever asks
+   * for — and gets a plain notice instead of a card nobody can back with a real code.
    */
-  function orderCard(ctx, cfg, o, fresh, weekTag) {
+  function simCard(ctx, cfg, group, freshOrder) {
     const { h, notice } = ctx;
-    o = o || {};
-    const pkg = packageByCode(cfg, o.packageCode);
-    const code = h('code', { class: 'mono data-ac' }, o.ac || '—');
+    const sim = group.sim;
+    const bundles = group.bundles.slice().sort(bundleNewestFirst);
+    // The card itself only reads as "new" when the fresh claim minted it — a top-up onto an eSIM
+    // already in the holder's phone does not get the same highlight; the bundle row below still
+    // says which line is new either way.
+    const mintedByFresh = !!freshOrder && !freshOrder.toppedUp && !freshOrder.topupOf
+      && bundles.some((o) => o.transactionId === freshOrder.transactionId);
+    const info = sim ? placeInfo(cfg, sim.slug) : placeInfo(cfg, bundles[0] ? placeOfOrder(cfg, bundles[0]) : '');
+    const placeName = info ? info.name : 'eSIM';
+    // The card's own heading carries the flag, the same way the plan picker's options do; running
+    // prose below does not — a flag mid-sentence reads as an emoji text, not a carrier's own copy.
+    const title = info && info.flag ? info.flag + ' ' + info.name : placeName;
+
+    if (!sim) {
+      return h('div', { class: 'card-quiet data-sim' },
+        h('div', { class: 'data-sim-head' }, h('span', { class: 'cc-sym' }, title)),
+        notice('Queued on an eSIM you already have — its code was shown when that eSIM was first issued.', 'plain'),
+        h('div', { class: 'data-bundles' }, bundles.map((o) => bundleRow(ctx, cfg, o, freshOrder))));
+    }
+
+    const code = h('code', { class: 'mono data-ac' }, sim.ac || '—');
     const copy = h('button', { class: 'btn btn-sm', onclick: async () => {
-      try { await navigator.clipboard.writeText(o.ac || ''); copy.textContent = 'Copied'; }
+      try { await navigator.clipboard.writeText(sim.ac || ''); copy.textContent = 'Copied'; }
       catch (e) { copy.textContent = 'Select and copy'; }
       setTimeout(() => { copy.textContent = 'Copy'; }, 1800);
     } }, 'Copy');
-    const when = o.createdAt ? new Date(o.createdAt) : null;
-
-    // What "still working on it" means depends on the stage: the Lightning invoice can be sitting
-    // unpaid, or paid and waiting on nadanada to issue the profile. o.note, when the pool left one,
-    // is the one line of why.
-    let pendingText = null;
-    if (o.pending) {
-      pendingText = o.stage === 'invoiced' ? 'Paying the invoice… open this page again in a minute.'
-        : o.stage === 'paid' ? 'Paid. nadanada is issuing the profile — open this page again in a minute and the QR will be here.'
-        : 'Ordered. The provider is still issuing the profile — open this page again in a minute and the QR will be here.';
-      if (o.note) pendingText += ' (' + o.note + ')';
-    }
 
     // nadanada usually sends a picture of the QR; when it does not, the activation code alone is
     // enough to draw the same one here — a phone only ever reads the code, never the provider's PNG.
-    let qrSrc = o.qrCodeUrl || '';
-    if (!qrSrc && o.ac && window.WhateverQr) {
-      try { qrSrc = window.WhateverQr.svg(o.ac); } catch (e) { qrSrc = ''; }
+    let qrSrc = sim.qrCodeUrl || '';
+    if (!qrSrc && sim.ac && window.WhateverQr) {
+      try { qrSrc = window.WhateverQr.svg(sim.ac); } catch (e) { qrSrc = ''; }
     }
     const install = [
-      o.appleInstallUrl ? h('a', { class: 'btn btn-sm', href: o.appleInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on iPhone') : null,
-      o.androidInstallUrl ? h('a', { class: 'btn btn-sm', href: o.androidInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on Android') : null,
+      sim.appleInstallUrl ? h('a', { class: 'btn btn-sm', href: sim.appleInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on iPhone') : null,
+      sim.androidInstallUrl ? h('a', { class: 'btn btn-sm', href: sim.androidInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on Android') : null,
     ].filter(Boolean);
 
-    return h('div', { class: 'card-quiet data-order' + (fresh ? ' fresh' : '') },
-      h('div', { class: 'data-order-head' },
-        h('span', { class: 'badge badge-hold' }, fresh ? 'NEW' : '#' + (Number.isFinite(Number(o.n)) ? Number(o.n) + 1 : '?')),
-        h('span', { class: 'cc-sym' }, pkg ? packageLabel(pkg) : (o.packageCode || 'eSIM')),
-        Number.isFinite(Number(o.priceUsd)) ? h('span', { class: 'small' }, fmtPrice(Number(o.priceUsd))) : null,
-        when && !Number.isNaN(when.getTime()) ? h('span', { class: 'small' }, when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) : null,
-        weekTag ? h('span', { class: 'small' }, weekTag) : null),
-      pendingText ? notice(pendingText, 'plain') : null,
-      qrSrc ? h('img', { class: 'data-qr', src: qrSrc, alt: 'eSIM QR code for ' + (pkg ? pkg.name : o.packageCode || 'this package'), width: '180', height: '180' }) : null,
+    return h('div', { class: 'card-quiet data-sim' + (mintedByFresh ? ' fresh' : '') },
+      h('div', { class: 'data-sim-head' },
+        h('span', { class: 'cc-sym' }, title),
+        sim.iccid ? h('span', { class: 'small mono' }, 'ICCID ' + sim.iccid) : null),
+      qrSrc ? h('img', { class: 'data-qr', src: qrSrc, alt: 'eSIM QR code for ' + placeName, width: '180', height: '180' }) : null,
       install.length ? h('div', { class: 'data-install' }, install) : null,
       h('div', { class: 'data-ac-row' }, code, copy),
-      o.smdpAddress ? h('p', { class: 'small' }, 'SM-DP+ ', h('span', { class: 'mono' }, o.smdpAddress), ' · code ', h('span', { class: 'mono' }, o.matchingId || '')) : null,
-      o.iccid ? h('p', { class: 'small' }, 'ICCID ', h('span', { class: 'mono' }, o.iccid)) : null,
-      h('p', { class: 'small' }, 'Order ', h('span', { class: 'mono' }, o.transactionId || '—')));
+      sim.smdpAddress ? h('p', { class: 'small' }, 'SM-DP+ ', h('span', { class: 'mono' }, sim.smdpAddress), ' · code ', h('span', { class: 'mono' }, sim.matchingId || '')) : null,
+      // The one line the brief asked for instead of any amount of UI: bundles run in sequence, and
+      // none of them start counting down until the phone is actually on network in this place.
+      h('p', { class: 'small' }, 'Bundles on this eSIM queue one after another — the next starts only once the last one runs out, and none of them start counting down until your phone connects to a network in ' + placeName + '.'),
+      h('div', { class: 'divider' }),
+      h('div', { class: 'data-bundles' }, bundles.map((o) => bundleRow(ctx, cfg, o, freshOrder))));
+  }
+
+  /** One claimed bundle: the package, the GB, the place (all three read off packageLabel's own
+   *  "name · GB · days"), when it was claimed, and — for a history entry — which week paid for it. */
+  function bundleRow(ctx, cfg, o, freshOrder) {
+    const { h, notice } = ctx;
+    const pkg = packageByCode(cfg, o.packageCode);
+    const isFresh = !!freshOrder && o.transactionId === freshOrder.transactionId;
+    const when = o.createdAt ? new Date(o.createdAt) : null;
+
+    // What "still working on it" means depends on the stage: the Lightning invoice can be sitting
+    // unpaid, or paid and waiting on nadanada to issue it. o.note, when the pool left one, is why.
+    let pendingText = null;
+    if (o.pending) {
+      pendingText = o.stage === 'invoiced' ? 'Paying the invoice… open this page again in a minute.'
+        : o.stage === 'paid' ? 'Paid. nadanada is issuing this bundle — open this page again in a minute.'
+        : 'Ordered. The provider is still issuing this bundle — open this page again in a minute.';
+      if (o.note) pendingText += ' (' + o.note + ')';
+    }
+
+    return h('div', { class: 'data-bundle' },
+      h('div', { class: 'data-bundle-head' },
+        isFresh ? h('span', { class: 'badge badge-hold' }, 'NEW') : null,
+        h('span', { class: 'cc-sym' }, pkg ? packageLabel(pkg) : (o.packageCode || 'eSIM')),
+        Number.isFinite(Number(o.priceUsd)) ? h('span', { class: 'small' }, fmtPrice(Number(o.priceUsd))) : null,
+        h('span', { class: 'small' },
+          when && !Number.isNaN(when.getTime()) ? when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null,
+          o.fromHistory && weekLabel(o.week) ? ' · ' + weekLabel(o.week) : null)),
+      pendingText ? notice(pendingText, 'plain') : null);
+  }
+
+  // Newest claim first, the same ordering the old per-week lists used — the one at the top of the
+  // queue is the one most recently added to it, not the one that will run next.
+  function bundleNewestFirst(a, b) {
+    const ta = Date.parse(a.createdAt || '') || 0, tb = Date.parse(b.createdAt || '') || 0;
+    if (tb !== ta) return tb - ta;
+    return ((Number(b.week) || 0) - (Number(a.week) || 0)) || ((Number(b.n) || 0) - (Number(a.n) || 0));
   }
 
   /**

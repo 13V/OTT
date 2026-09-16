@@ -455,12 +455,17 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 /* Buttons, not a second dropdown, so the price shows without a click to reveal it. */
 .data-sizes { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
 .data-sizes .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-.data-orders .label { margin-top: 2px; }
-.data-order { padding: 16px; margin-top: 12px; }
-/* A just-placed order gets a positive-tinted border, never a glow, to say "this is new". */
-.data-order.fresh { border-color: var(--positive); }
-.data-order-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.data-order-head .small { margin-left: auto; }
+.data-sims .label { margin-top: 2px; }
+/* One eSIM: a card, the way an order used to be one — it is the thing that lifts off the page now,
+   because item 1 of the brief made the SIM the object and an order only ever a line underneath it. */
+.data-sim { padding: 16px; margin-top: 12px; }
+/* The eSIM a just-placed bundle minted gets a positive-tinted border, never a glow, to say "this is
+   new". A bundle that only topped up an eSIM the holder already has does not move this card at
+   all — it is not new, only what is queued on it is, and the bundle row below says so instead. */
+.data-sim.fresh { border-color: var(--positive); }
+.data-sim-head, .data-bundle-head { display: flex; align-items: center; gap: 10px; }
+.data-sim-head { justify-content: space-between; margin-bottom: 12px; }
+.data-bundle-head .small { margin-left: auto; }
 /* The QR sits on white no matter what — a phone camera reads dark-on-light, and a themed dark tile
    is a real scan failure. Hardcoded #fff, not a token, so this never moves even if the page did. */
 .data-qr { width: 180px; height: 180px; background: #fff; border: 1px solid var(--border); padding: 8px; border-radius: var(--radius-control); margin-bottom: 12px; }
@@ -471,6 +476,11 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
   background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.4; letter-spacing: .02em;
   overflow-wrap: anywhere; user-select: all;
 }
+/* One queued bundle: a plain hairline-divided row, not a card — the SIM above it is the one thing
+   here that should lift off the page, and a list of what queues on it should read like a list. */
+.data-bundles { margin-top: 4px; }
+.data-bundle { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.data-bundle:last-child { border-bottom: 0; }
 
 /* The progress-bar idiom shared by the home programme card and the status route: a hairline track,
    a flat accent fill that draws in once on load (never a loop; prefers-reduced-motion below cuts it
