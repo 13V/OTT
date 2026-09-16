@@ -68,13 +68,23 @@ const eip191 = require('./lib/eip191');
 const { provider: chooseProvider } = require('./lib/providers');
 const { weekOf, weekEnd: weekEndOf } = require('./lib/week');
 
-const MESSAGE_HEAD = 'OT+T data';
+const MESSAGE_HEAD = 'OT+T';
 const SIGNIN_WINDOW_S = 10 * 60;
 const MAX_ORDERS = 200;
 const HISTORY_WEEKS = 3;
 const FETCH_TIMEOUT_MS = 5000;
 const CACHE_TTL_MS = 60 * 1000;
 const MAX_BODY_BYTES = 16 * 1024;
+// A public GET costs this deployment five round trips to the store — one for this week's orders,
+// three for the weeks of history, one for the wallet's eSIMs — for any address at all, invented
+// ones included. Answering the same address twice inside this window from memory is what stops
+// that being an amplifier: a page load is one read, a loop is still one read.
+const STANDING_TTL_MS = 10 * 1000;
+// And a ceiling on how many DISTINCT addresses one warm instance will do that work for per
+// minute, so the same loop cannot simply vary the address. Generous enough that a real burst of
+// holders never meets it; serverless means this is per instance, which makes it a brake rather
+// than a gate, and the brake is the part worth having.
+const STANDING_BURST = 240;
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 
 // ---------------------------------------------------------------------------------------------
@@ -82,6 +92,32 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 // one page load costs the deployment one static-file read a minute rather than one per request.
 // ---------------------------------------------------------------------------------------------
 const cache = new Map(); // url -> { at, value }
+const standingCache = new Map(); // address:week -> { at, body }
+let burst = { minute: 0, count: 0 };
+
+/** True while this instance is still willing to compute a standing it has not got cached. */
+function withinBurst(nowMs) {
+  const minute = Math.floor(nowMs / 60000);
+  if (burst.minute !== minute) burst = { minute, count: 0 };
+  burst.count += 1;
+  return burst.count <= STANDING_BURST;
+}
+
+/**
+ * Nothing an upstream said, verbatim, ever reaches a caller. Every error here is ours or a
+ * provider's, and none of them interpolate a key today — but status.js already learned to scrub
+ * its details rather than rely on that staying true, and the endpoint that spends money should
+ * not have the weaker posture of the two.
+ */
+function scrubbed(message) {
+  let out = String(message || 'redeem failed');
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value || value.length < 8) continue;
+    if (!/_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_CODE$|PRIVATE_KEY/i.test(name)) continue;
+    out = out.split(value).join('[' + name + ']');
+  }
+  return out.slice(0, 160);
+}
 
 async function fetchJson(url) {
   const hit = cache.get(url);
@@ -118,6 +154,18 @@ async function readConfig() {
 
 async function readAllowances() {
   return fetchJson(process.env.ALLOWANCES_URL || selfUrl('/data/allowances.json'));
+}
+
+/**
+ * The pool, as scripts/treasury.js last measured it. Advisory, never a gate: it is up to half an
+ * hour old, and a wallet that can in fact be paid must never be refused because a file was stale.
+ * What it buys is honesty — a holder whose allowance the pool plainly cannot cover is told before
+ * they press the button, rather than after, by a provider that could not pay.
+ */
+async function readTreasury() {
+  // Defensive to the point of swallowing everything, selfUrl() included: this figure only ever
+  // makes an answer more honest, and nothing about it is worth failing a redemption over.
+  try { return await fetchJson(process.env.TREASURY_URL || selfUrl('/data/treasury.json')); } catch (e) { return null; }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -234,12 +282,55 @@ function publicOrder(o, config, { codes = false } = {}) {
  * submitted with another wallet's address (recovery would catch it anyway; this gives a better
  * error and costs nothing).
  */
-function checkMessage(message, address, nowS) {
+/**
+ * The hosts this deployment will accept a signature for. Vercel names the production host and the
+ * deployment's own host in the environment; SIGNIN_HOST covers a custom domain. A deployment that
+ * can name none of them does not enforce the line — a check that cannot be performed must not
+ * become a check that always fails, which would lock every holder out of a preview deploy.
+ */
+function knownHosts() {
+  return [process.env.SIGNIN_HOST, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.VERCEL_URL]
+    .map((h) => String(h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * What the wallet signed, and whether it authorises the thing being asked for.
+ *
+ * The message used to be three opaque lines — a header, an address, a clock reading — which made
+ * one signature a bearer token for that wallet's whole week: anything holding it could redeem any
+ * package, at any slot, until the window closed. A page that talked a holder into signing that
+ * exact string could relay it and take the eSIMs, walking it across slots to drain the allowance.
+ *
+ * Binding the site would not have stopped that on its own — whoever asks for the signature chooses
+ * the string, so a phishing page can put our domain in it just as easily. What actually shrinks the
+ * damage is binding the ACTION: a redemption's signature names the plan and the slot, so it
+ * authorises that one order and nothing else, and a read's signature cannot redeem at all. The site
+ * line stays because it is what gives a person reading their wallet prompt a chance to notice, and
+ * because the server rejects one naming somewhere else.
+ *
+ * `want` is { action: 'redeem', packageCode, n } or { action: 'read' }.
+ */
+function checkMessage(message, address, nowS, want) {
   const lines = String(message || '').split('\n');
-  if (lines.length !== 3 || lines[0] !== MESSAGE_HEAD) return 'unexpected sign-in message';
-  if (lines[1] !== address) return 'sign-in message is for another address';
-  if (!/^\d{1,12}$/.test(lines[2])) return 'sign-in message has no timestamp';
-  if (Math.abs(Number(lines[2]) - nowS) > SIGNIN_WINDOW_S) return 'sign-in expired, sign again';
+  const head = want.action === 'redeem' ? MESSAGE_HEAD + ' — authorise a data redemption' : MESSAGE_HEAD + ' — show my eSIM codes';
+  if (lines[0] !== head) return 'this signature does not authorise ' + (want.action === 'redeem' ? 'a redemption' : 'a read');
+  const field = (name) => {
+    const line = lines.find((l) => l.startsWith(name + ': '));
+    return line === undefined ? null : line.slice(name.length + 2);
+  };
+  const hosts = knownHosts();
+  const site = String(field('Site') || '').toLowerCase();
+  if (!site) return 'sign-in message names no site';
+  if (hosts.length && !hosts.includes(site)) return 'sign-in message was signed for ' + site + ', not this site';
+  if (field('Wallet') !== address) return 'sign-in message is for another address';
+  if (want.action === 'redeem') {
+    if (field('Plan') !== String(want.packageCode)) return 'this signature authorises a different plan';
+    if (field('Slot') !== String(want.n)) return 'this signature authorises a different order; sign again';
+  }
+  const issued = field('Issued');
+  if (!/^\d{1,12}$/.test(String(issued))) return 'sign-in message has no timestamp';
+  if (Math.abs(Number(issued) - nowS) > SIGNIN_WINDOW_S) return 'sign-in expired, sign again';
   return null;
 }
 
@@ -283,7 +374,7 @@ const fail = (res, status, error) => send(res, status, { ok: false, error });
  * `share` are holdings, not spending power, so they are still reported from whatever the file last
  * said even while stale — a wallet can see what it holds; it just cannot spend against it yet.
  */
-async function standing(prov, config, allowances, address, week) {
+async function standing(prov, config, allowances, address, week, treasury = null) {
   const stale = Number(allowances.week) !== week;
   const row = (allowances.wallets && allowances.wallets[address]) || {};
   const tokens = String(row.tokens || '0');
@@ -301,7 +392,12 @@ async function standing(prov, config, allowances, address, week) {
   }
   let holds = false;
   try { holds = BigInt(tokens) > 0n; } catch (e) { holds = false; }
-  return { stale, week, weekEnd: weekEndOf(week), tokens, share, allowanceUsd, redeemedUsd, remainingUsd, orders, history, sims, holds };
+  const poolRaw = Number(treasury && treasury.reseller && treasury.reseller.balanceUsd);
+  const poolUsd = Number.isFinite(poolRaw) ? round6(poolRaw) : null;
+  return {
+    stale, week, weekEnd: weekEndOf(week), tokens, share, allowanceUsd, redeemedUsd, remainingUsd,
+    orders, history, sims, holds, poolUsd,
+  };
 }
 
 /** This wallet's eSIMs, for a response that has just changed them. Never fatal: codes also ride on the order. */
@@ -319,6 +415,11 @@ function standingBody(s, address, allowances, config, codes) {
     tokens: s.tokens, share: s.share,
     allowanceUsd: s.allowanceUsd, redeemedUsd: s.redeemedUsd, remainingUsd: s.remainingUsd,
     stale: s.stale, allowancesWeek: Number.isFinite(fileWeek) ? fileWeek : null,
+    // What the pool holds, so the page can say plainly when this week has promised more data than
+    // there is money to buy — the one thing a holder cannot otherwise discover until the button
+    // fails. null when the treasury file could not be read, which the page reads as "no idea"
+    // rather than "nothing there".
+    poolUsd: s.poolUsd,
     orders: s.orders.map((o) => publicOrder(o, config, { codes })),
     history: s.history.map((o) => publicOrder(o, config, { codes })),
     sims: (s.sims || []).map((x) => publicSim(x, { codes })),
@@ -343,12 +444,28 @@ module.exports = async (req, res) => {
       const url = new URL(req.url || '/', 'http://local');
       const address = String(url.searchParams.get('address') || '').toLowerCase();
       if (!isAddress(address)) return fail(res, 400, 'address required');
-      const prov = chooseProvider();
+      const nowMs = Date.now();
+      const week = weekOf(Math.floor(nowMs / 1000));
+      // The allowances file is read first and cheaply — fetchJson keeps it for a minute — because
+      // its own stamp goes into the cache key. A freshly published ledger must never be answered
+      // from a picture taken against the old one, however few seconds old that picture is.
       const allowances = await readAllowances().catch(() => null);
       if (!allowances) return fail(res, 503, 'allowances unavailable');
-      const week = weekOf(Math.floor(Date.now() / 1000));
-      const s = await standing(prov, config, allowances, address, week);
-      return send(res, 200, standingBody(s, address, allowances, config, false));
+      const key = address + ':' + week + ':' + (allowances.asOf || 0) + ':' + (allowances.week || 0);
+      const hit = standingCache.get(key);
+      if (hit && nowMs - hit.at < STANDING_TTL_MS) return send(res, 200, hit.body);
+      if (!withinBurst(nowMs)) {
+        res.setHeader('retry-after', '30');
+        return fail(res, 429, 'too many requests; try again in a moment');
+      }
+      const prov = chooseProvider();
+      const s = await standing(prov, config, allowances, address, week, await readTreasury());
+      const out = standingBody(s, address, allowances, config, false);
+      standingCache.set(key, { at: nowMs, body: out });
+      // Bounded, because the keys come from the caller: an attacker walking addresses must not be
+      // able to grow this instance's memory without limit. Oldest out first.
+      if (standingCache.size > 2000) for (const k of [...standingCache.keys()].slice(0, 1000)) standingCache.delete(k);
+      return send(res, 200, out);
     }
 
     let body;
@@ -364,14 +481,14 @@ module.exports = async (req, res) => {
     const address = String(body.address || '').toLowerCase();
     if (!isAddress(address)) return fail(res, 400, 'address required');
 
-    const nowS = Math.floor(Date.now() / 1000);
-    const why = checkMessage(body.message, address, nowS);
-    if (why) return fail(res, 401, why);
-    const signer = eip191.recoverAddress(body.message, body.signature);
-    if (!signer || signer !== address) return fail(res, 401, 'signature does not match address');
-
-    // A signed request with no package is a read: the standing, with the codes this time.
+    // A signed request with no package is a read: the standing, with the codes this time. Which it
+    // is has to be settled BEFORE the signature is checked, because the signature says which one it
+    // authorises — that is the whole point of binding the action into it.
     const reading = body.packageCode === undefined || body.packageCode === null || body.packageCode === '';
+
+    // The shape of the request is settled before the signature, because the signature now names
+    // the plan and the slot: a body missing either is a malformed request, not a bad signature,
+    // and answering 401 for it would send a caller looking for a wallet problem they do not have.
     let pkg = null, priceUsd = 0;
     if (!reading) {
       pkg = config.packages.find((p) => p && p.code === body.packageCode);
@@ -381,10 +498,22 @@ module.exports = async (req, res) => {
       if (body.n === undefined || body.n === null || !/^\d{1,6}$/.test(String(body.n))) return fail(res, 400, 'n required: how many orders you have seen this week');
     }
 
+    const nowS = Math.floor(Date.now() / 1000);
+    const why = checkMessage(body.message, address, nowS,
+      reading ? { action: 'read' } : { action: 'redeem', packageCode: String(body.packageCode), n: String(body.n) });
+    if (why) return fail(res, 401, why);
+    const signer = eip191.recoverAddress(body.message, body.signature);
+    if (!signer || signer !== address) return fail(res, 401, 'signature does not match address');
+
     const prov = chooseProvider();
     const allowances = await readAllowances().catch(() => null);
     if (!allowances) return fail(res, 503, 'allowances unavailable');
     const week = weekOf(nowS);
+    // A signed request is about to change this wallet's standing. The cached public answer is then
+    // the wrong one to hand the page when it refetches a moment later — a holder who has just
+    // redeemed must not be shown their balance from ten seconds ago — and the key carries the
+    // ledger's stamp, so every picture of this wallet goes, not just the one matching this read.
+    for (const k of standingCache.keys()) if (k.startsWith(address + ':')) standingCache.delete(k);
     const s = await standing(prov, config, allowances, address, week);
     if (reading) return send(res, 200, standingBody(s, address, allowances, config, true));
 
@@ -429,10 +558,16 @@ module.exports = async (req, res) => {
     // Provider and config failures land here. The message is the provider's or ours, never a
     // stack, and never anything that came from the environment. A provider that knows its problem
     // is temporary (the pool cannot pay right now) says so with a 503; anything else is a 502.
-    return fail(res, (e && e.status) || 502, String(e && e.message || 'redeem failed').slice(0, 160));
+    return fail(res, (e && e.status) || 502, scrubbed(e && e.message));
   }
 };
 
 // Exposed for tests; not part of the HTTP contract.
 module.exports.transactionIdFor = transactionIdFor;
 module.exports.MESSAGE_HEAD = MESSAGE_HEAD;
+module.exports.checkMessage = checkMessage;
+// Tests only. The public GET is answered from memory for a few seconds, which is correct in a
+// deployment — the only thing that changes a wallet's standing there is a POST, and a POST clears
+// it — but a test that reaches past the endpoint to reset the provider underneath it has changed
+// the world in a way no request did, and has to say so.
+module.exports._resetCaches = () => { cache.clear(); standingCache.clear(); burst = { minute: 0, count: 0 }; };

@@ -33,6 +33,7 @@ const SITE = path.join(__dirname, '..', 'site');
 const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const OUT_PATH = path.join(SITE, 'data', 'funding.json');
+const TREASURY_PATH = path.join(SITE, 'data', 'treasury.json');
 const KEEP = 100;
 
 const ACROSS_API = () => (process.env.ACROSS_API || 'https://app.across.to/api').replace(/\/$/, '');
@@ -41,7 +42,12 @@ const BASE_CHAIN_ID = 8453;
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const FF_FROM = 'USDCBASE', FF_TO = 'BTCLN';
 
-const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 200, waitMs: 10 * 60 * 1000, pollMs: 15000 };
+// targetUsd is the FLOOR the pool is kept at when nothing is owed; what it actually aims for is
+// this week's outstanding allowances (see plan()). maxUsd caps one FixedFloat order, which is the
+// real exposure in a single run — the money is with two intermediaries between leaving the
+// treasury and arriving as sats. maxPoolUsd caps the standing balance of what is, after all, a hot
+// wallet at a third party: past this the pool stays behind on purpose and the treasury file says so.
+const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 500, maxPoolUsd: 1000, waitMs: 10 * 60 * 1000, pollMs: 15000 };
 const QUOTE_TOLERANCE = 0.05;   // FixedFloat's rate vs Blink's price
 const ASK_TOLERANCE = 0.03;     // USDC FixedFloat asks for vs the amount quoted
 const BRIDGE_TOLERANCE = 0.02;  // USDG in vs USDC out across the bridge
@@ -88,13 +94,47 @@ function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf
 // The pure part.
 // ---------------------------------------------------------------------------
 
-/** How much to move: fill the wallet to the target from what the treasury holds, within the floors. */
-function plan({ walletUsd, poolUsd, targetUsd = DEFAULTS.targetUsd, minUsd = DEFAULTS.minUsd, maxUsd = DEFAULTS.maxUsd }) {
-  const need = round2(targetUsd - poolUsd);
-  if (need < minUsd) return { amountUsd: 0, reason: `the pool holds $${poolUsd.toFixed(2)} of a $${targetUsd.toFixed(2)} target; under the $${minUsd.toFixed(2)} floor` };
+/**
+ * How much to move, and what the pool is actually aiming at.
+ *
+ * `owedUsd` is what this week's holders can still spend — the published budget less what they
+ * have already redeemed, written by scripts/treasury.js. Aiming at a flat hundred dollars while
+ * scripts/allowances.js published an unbounded budget was the worst thing about this system: a
+ * week that collected four thousand dollars of tax promised four thousand dollars of data against
+ * a hundred-dollar wallet, and everyone past the first few redeemers got a 503 on the button while
+ * their dashboard showed a real balance. So the target follows the promise.
+ *
+ * Three things still bound it. maxPoolUsd, because the pool is a hot wallet at a third party and
+ * an unbounded balance there is its own risk; maxUsd, because one FixedFloat order is the real
+ * exposure in a single run; and the treasury's own balance, because we cannot move what we do not
+ * have. When a bound is what stops it, the reason says which — a pool deliberately behind reads
+ * very differently from a pool nobody noticed was behind.
+ */
+function plan({ walletUsd, poolUsd, owedUsd = null, targetUsd = DEFAULTS.targetUsd, minUsd = DEFAULTS.minUsd, maxUsd = DEFAULTS.maxUsd, maxPoolUsd = DEFAULTS.maxPoolUsd }) {
+  const owed = Number.isFinite(Number(owedUsd)) ? Number(owedUsd) : null;
+  const wanted = owed !== null && owed > targetUsd ? Math.min(owed, maxPoolUsd) : targetUsd;
+  const capped = owed !== null && owed > maxPoolUsd;
+  const aim = `pool $${poolUsd.toFixed(2)}, aiming at $${wanted.toFixed(2)}`
+    + (owed === null ? '' : ` of $${owed.toFixed(2)} promised this week`)
+    + (capped ? ` (held at the $${maxPoolUsd.toFixed(2)} ceiling)` : '');
+  const need = round2(wanted - poolUsd);
+  if (need < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reason: `${aim}; the shortfall is under the $${minUsd.toFixed(2)} floor` };
   const amountUsd = round2(Math.min(need, walletUsd, maxUsd));
-  if (amountUsd < minUsd) return { amountUsd: 0, reason: `the treasury holds $${walletUsd.toFixed(2)} USDG; under the $${minUsd.toFixed(2)} floor` };
-  return { amountUsd, reason: `pool $${poolUsd.toFixed(2)}, target $${targetUsd.toFixed(2)}, treasury $${walletUsd.toFixed(2)}` };
+  if (amountUsd < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reason: `${aim}; the treasury holds $${walletUsd.toFixed(2)} USDG, under the $${minUsd.toFixed(2)} floor` };
+  const short = round2(need - amountUsd);
+  return {
+    amountUsd, targetUsd: wanted, owedUsd: owed,
+    reason: `${aim}, treasury $${walletUsd.toFixed(2)}`
+      + (short > 0 ? ` — $${short.toFixed(2)} short of the aim this run, ${amountUsd === maxUsd ? 'capped per run' : 'all the treasury has'}` : ''),
+  };
+}
+
+/** This week's outstanding allowances, from the treasury file, or null when it cannot say. */
+function owedFrom(treasuryFile) {
+  // Not `treasuryFile && treasuryFile.owedUsd`: that yields null for a missing file, and
+  // Number(null) is 0 — a confident "nothing is owed" where the truth is "we cannot tell".
+  const owed = Number(treasuryFile ? treasuryFile.owedUsd : undefined);
+  return Number.isFinite(owed) ? owed : null;
 }
 
 function appendLog(existing, entry) {
@@ -151,7 +191,7 @@ function across({ api = ACROSS_API() } = {}) {
 // ---------------------------------------------------------------------------
 // The run.
 // ---------------------------------------------------------------------------
-async function run({ chain, config, addresses, treasury, payer, ff, bridge, targetUsd, minUsd, maxUsd, dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, now = () => Date.now(), log = () => {} }) {
+async function run({ chain, config, addresses, treasury, payer, ff, bridge, targetUsd, minUsd, maxUsd, maxPoolUsd, dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH, now = () => Date.now(), log = () => {} }) {
   const want = lower(config.treasury);
   if (!want) throw new Error('no treasury in site/config/esim.json');
   if (lower(treasury) !== want) throw new Error(`wrong wallet: the key is for ${treasury}, the treasury is ${config.treasury}`);
@@ -163,7 +203,11 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   const pool = await payer.balance();
   const [walletUnits] = await chain.call(usdg, 'balanceOf(address)', [treasury], ['uint256']);
   const walletUsd = Number(walletUnits) / 10 ** decimals;
-  const p = plan({ walletUsd, poolUsd: Number(pool.usd), targetUsd, minUsd, maxUsd });
+  // What this week still owes its holders, as scripts/treasury.js last measured it. A day old at
+  // worst — the keepers run in the order claim, fund, treasury — which is close enough to aim by
+  // and enormously better than the flat target this used before. Absent, the flat target stands.
+  const owedUsd = owedFrom(readJson(treasuryPath, null));
+  const p = plan({ walletUsd, poolUsd: Number(pool.usd), owedUsd, targetUsd, minUsd, maxUsd, maxPoolUsd });
   log(`  pool $${Number(pool.usd).toFixed(2)} (${pool.sats} sats), treasury $${walletUsd.toFixed(2)} USDG`);
   if (!p.amountUsd) { log(`  nothing to move: ${p.reason}`); return { action: 'none', reason: p.reason }; }
   const amountUsd = p.amountUsd;
@@ -257,7 +301,7 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   }
 }
 
-module.exports = { plan, appendLog, run, fixedFloat, across, DEFAULTS, OUT_PATH, USDC_BASE, BASE_CHAIN_ID };
+module.exports = { plan, appendLog, owedFrom, run, fixedFloat, across, DEFAULTS, OUT_PATH, TREASURY_PATH, USDC_BASE, BASE_CHAIN_ID };
 
 if (require.main === module) {
   const chain = require(path.join(__dirname, 'chain.js'));
@@ -277,6 +321,7 @@ if (require.main === module) {
     targetUsd: flag('target', DEFAULTS.targetUsd),
     minUsd: flag('min', DEFAULTS.minUsd),
     maxUsd: flag('max', DEFAULTS.maxUsd),
+    maxPoolUsd: flag('max-pool', DEFAULTS.maxPoolUsd),
     dryRun: chain.dryRun,
     log: (m) => process.stderr.write(m + '\n'),
   })

@@ -26,11 +26,19 @@ const SITE = path.join(__dirname, '..', 'site');
 const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const CLAIMS_PATH = path.join(SITE, 'data', 'claims.json');
+const ALLOWANCES_PATH = path.join(SITE, 'data', 'allowances.json');
+// The one place week arithmetic lives, so this file and the indexer can never disagree on when a
+// week started — which is the boundary "what has been spent this week" is measured from.
+const { weekStart } = require(path.join(SITE, 'api', 'lib', 'week.js'));
 const OUT_PATH = path.join(SITE, 'data', 'treasury.json');
 
 const DAYS = 30;
 const LOW_BALANCE_USD = 50;
 const LOW_DAYS = 14;
+// How far the pool may sit under this week's outstanding allowances before that is the headline.
+// Some gap is ordinary — the whole week's budget is published on Monday and spent over seven days,
+// and the keeper only tops up once a day — so this is not a hair trigger.
+const BEHIND_RATIO = 0.5;
 
 const lower = (a) => String(a || '').toLowerCase();
 const round2 = (x) => Math.round(x * 100) / 100;
@@ -49,6 +57,30 @@ function priceOf(order, config) {
   const pkg = (config.packages || []).find((p) => p && (p.code === code || p.packageCode === code));
   if (pkg && Number.isFinite(Number(pkg.priceUsd))) return Number(pkg.priceUsd);
   return (config.packages || []).reduce((m, p) => Math.max(m, Number(p && p.priceUsd) || 0), 0);
+}
+
+/**
+ * What this week's holders can still spend, and whether the pool could pay if they all did.
+ *
+ * The two numbers had nothing to do with each other until now, which was the single worst thing
+ * about this system: scripts/allowances.js publishes a budget computed purely from tax collected
+ * on chain, unbounded and growing with volume, while the Lightning wallet that actually pays for
+ * the eSIMs was topped up to a flat hundred dollars. A good week published thousands of dollars of
+ * allowances against a hundred-dollar wallet, every holder saw a real balance on their dashboard,
+ * and everyone after the first few got a 503 on the button. This is the figure that makes that
+ * visible — to the funding keeper, which now aims at it, and to the alert, which now fires on it.
+ *
+ * Counted at the catalogue price the holder was charged rather than the discounted price the pool
+ * pays, which errs toward funding slightly more than strictly needed. That is the safe direction.
+ */
+function owing({ orders, config, budgetUsd, weekStartMs }) {
+  if (!Number.isFinite(Number(budgetUsd))) return { budgetUsd: null, redeemedUsd: null, owedUsd: null };
+  const thisWeek = (orders || []).filter((o) => {
+    const at = Date.parse(o && o.createdAt);
+    return Number.isFinite(at) && at >= weekStartMs;
+  });
+  const redeemedUsd = round2(thisWeek.reduce((sum, o) => sum + priceOf(o, config), 0));
+  return { budgetUsd: round2(Number(budgetUsd)), redeemedUsd, owedUsd: round2(Math.max(0, Number(budgetUsd) - redeemedUsd)) };
 }
 
 /**
@@ -79,10 +111,14 @@ function runway({ balanceUsd, perDayUsd }) {
  * reading; "empty" is a balance of nothing; "low" is either under the floor or under two weeks
  * at the current rate; everything else is funded.
  */
-function statusOf({ balanceUsd, runwayDays, lowBalanceUsd = LOW_BALANCE_USD, lowDays = LOW_DAYS }) {
+function statusOf({ balanceUsd, runwayDays, owedUsd = null, lowBalanceUsd = LOW_BALANCE_USD, lowDays = LOW_DAYS, behindRatio = BEHIND_RATIO }) {
   if (!Number.isFinite(balanceUsd)) return 'unknown';
   if (balanceUsd <= 0) return 'empty';
   if (balanceUsd < lowBalanceUsd) return 'low';
+  // Enough money by the old measure, and still not enough to pay what this week has promised.
+  // Ranked under 'low' and 'empty' because those are worse, but above 'funded' because a pool
+  // that cannot cover its own published allowances is not a healthy one, however full it looks.
+  if (Number.isFinite(owedUsd) && owedUsd > 0 && balanceUsd < owedUsd * behindRatio) return 'behind';
   if (runwayDays !== null && runwayDays < lowDays) return 'low';
   return 'funded';
 }
@@ -90,7 +126,7 @@ function statusOf({ balanceUsd, runwayDays, lowBalanceUsd = LOW_BALANCE_USD, low
 // ---------------------------------------------------------------------------
 // The run.
 // ---------------------------------------------------------------------------
-async function run({ rpc, config, addresses, provider = null, claims = [], now = () => Date.now(), out = OUT_PATH, log = () => {} }) {
+async function run({ rpc, config, addresses, provider = null, claims = [], now = () => Date.now(), out = OUT_PATH, allowancesPath = ALLOWANCES_PATH, log = () => {} }) {
   const chain = require(path.join(__dirname, 'chain.js'));
   const treasury = lower(config.treasury);
   const usdg = addresses.usdg;
@@ -113,15 +149,15 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
 
   // Provider side: only with a provider that can answer. For nadanada the balance is the Lightning
   // wallet's (Blink), in sats at its own price, and the sats are written down beside the dollars.
-  let reseller = null, spend = { spendUsd: 0, count: 0, perDayUsd: 0, days: DAYS };
+  let reseller = null, spend = { spendUsd: 0, count: 0, perDayUsd: 0, days: DAYS }, orderList = [];
   if (provider && typeof provider.balanceUsd === 'function') {
     try {
       const bal = typeof provider.balance === 'function' ? await provider.balance() : { usd: await provider.balanceUsd() };
       const balanceUsd = round2(Number(bal.usd));
-      const orders = typeof provider.listOrders === 'function'
+      orderList = typeof provider.listOrders === 'function'
         ? await provider.listOrders({ sinceIso: new Date(now() - DAYS * 86400 * 1000).toISOString().replace(/:\d\d\.\d{3}Z$/, '+00:00') })
         : [];
-      spend = summarise({ orders, config, now: now() });
+      spend = summarise({ orders: orderList, config, now: now() });
       reseller = { name: provider.name, balanceUsd, asOf };
       if (Number.isFinite(Number(bal.sats))) reseller.sats = Math.round(Number(bal.sats));
       if (provider.name === 'nadanada') reseller.wallet = process.env.LN_PAYER || 'blink';
@@ -133,6 +169,12 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
 
   const balanceUsd = reseller && Number.isFinite(reseller.balanceUsd) ? reseller.balanceUsd : NaN;
   const runwayDays = runway({ balanceUsd, perDayUsd: spend.perDayUsd });
+  // This week's promise, against the wallet that has to keep it.
+  const allow = readJson(allowancesPath, null) || {};
+  const wk = Number(allow.week);
+  const owed = Number.isFinite(wk)
+    ? owing({ orders: orderList, config, budgetUsd: allow.budgetUsd, weekStartMs: weekStart(wk) * 1000 })
+    : { budgetUsd: null, redeemedUsd: null, owedUsd: null };
   const last = Array.isArray(claims) && claims.length ? claims[claims.length - 1] : null;
 
   const data = {
@@ -145,8 +187,11 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     redemptions30d: spend.count,
     perDayUsd: spend.perDayUsd,
     runwayDays,
+    weekBudgetUsd: owed.budgetUsd,
+    weekRedeemedUsd: owed.redeemedUsd,
+    owedUsd: owed.owedUsd,
     lastClaim: last ? { at: last.at, kind: last.kind, amount: last.amount, txHash: last.txHash || null } : null,
-    status: statusOf({ balanceUsd, runwayDays }),
+    status: statusOf({ balanceUsd, runwayDays, owedUsd: owed.owedUsd }),
   };
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
@@ -154,6 +199,7 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     (reseller ? `, reseller $${reseller.balanceUsd === null ? '?' : reseller.balanceUsd.toFixed(2)}` : ', no reseller reading') +
     `, ${spend.count} redemption(s) / $${spend.spendUsd.toFixed(2)} in ${DAYS}d` +
     (runwayDays === null ? '' : `, runway ${runwayDays}d`) +
+    (owed.owedUsd === null ? '' : `, $${owed.owedUsd.toFixed(2)} still promised this week`) +
     (escrowClaimableUsd === null ? '' : `, escrow $${escrowClaimableUsd.toFixed(2)}`) +
     ` -> ${path.relative(process.cwd(), out)}`;
   return { data, summary };

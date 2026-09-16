@@ -54,7 +54,7 @@
     creatorTaxBalance: '0xdb2bd533',      // creatorTaxBalance()              — curve
     getLaunchedToken: '0x3cf28b5a',       // getLaunchedToken(address)        — factory
   };
-  const MESSAGE_HEAD = 'OT+T data';
+  const MESSAGE_HEAD = 'OT+T';
   const ZERO = '0x0000000000000000000000000000000000000000';
   const USDG_DECIMALS = 6;
   const LAUNCHPAD_URL = 'https://whatever-fun.vercel.app/#/new';
@@ -201,23 +201,38 @@
     return out;
   }
 
-  // The sign-in line /api/redeem checks, built here and nowhere else so the two cannot drift: the
-  // header, the lowercase address, and the moment, each on its own line.
-  const signInMessage = (address) => MESSAGE_HEAD + '\n' + address.toLowerCase() + '\n' + Math.floor(Date.now() / 1000);
+  // What the wallet is asked to sign, built here and nowhere else so this and /api/redeem cannot
+  // drift. A redemption's message names the plan and the slot, so the signature authorises that one
+  // order and nothing else — someone who talks a holder into signing it gets at most that single
+  // eSIM, not the run of their week. It is also written to be read: a person squinting at their
+  // wallet prompt should be able to tell what they are about to approve, and on whose site.
+  function signInMessage(address, want) {
+    const head = want.action === 'redeem' ? MESSAGE_HEAD + ' — authorise a data redemption' : MESSAGE_HEAD + ' — show my eSIM codes';
+    const lines = [head, 'Site: ' + location.host.toLowerCase(), 'Wallet: ' + address.toLowerCase()];
+    if (want.action === 'redeem') {
+      lines.push('Plan: ' + want.packageCode);
+      lines.push('Slot: ' + want.n);
+    }
+    lines.push('Issued: ' + Math.floor(Date.now() / 1000));
+    return lines.join('\n');
+  }
 
-  // A signed call proves who is asking, and one signature can stand for several of them in a row —
-  // a redeem and the read that follows it, or a later "show my codes" — so the last one made is
-  // kept here and reused while it is still fresh, rather than asking the wallet to sign again for
-  // every call that needs one. The API's own window is ten minutes; reusing within eight leaves
-  // margin for the request itself to land before it expires.
+  // A read's signature proves who is asking and nothing more, so the last one is kept and reused
+  // while it is fresh rather than prompting the wallet again for every "show my codes". The API's
+  // own window is ten minutes; reusing within eight leaves margin for the request to land.
+  //
+  // A REDEMPTION's signature is never reused and never cached: it names the plan and the slot, so
+  // it is spent the moment it is used. That costs a wallet prompt per order, which is the right
+  // price for the one call that spends money.
   const SIGNIN_REUSE_MS = 8 * 60 * 1000;
-  let lastSignIn = null; // { addr, message, signature, at }
-  const signInIsFresh = (addr) => !!(lastSignIn && lastSignIn.addr === addr && Date.now() - lastSignIn.at < SIGNIN_REUSE_MS);
-  async function signIn(addr) {
-    if (signInIsFresh(addr)) return { message: lastSignIn.message, signature: lastSignIn.signature };
-    const message = signInMessage(addr);
+  let lastRead = null; // { addr, message, signature, at }
+  const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
+  async function signIn(addr, want) {
+    const w = want || { action: 'read' };
+    if (w.action === 'read' && readIsFresh(addr)) return { message: lastRead.message, signature: lastRead.signature };
+    const message = signInMessage(addr, w);
     const signature = await window.ethereum.request({ method: 'personal_sign', params: [hexOfUtf8(message), addr] });
-    lastSignIn = { addr, message, signature, at: Date.now() };
+    if (w.action === 'read') lastRead = { addr, message, signature, at: Date.now() };
     return { message, signature };
   }
 
@@ -818,17 +833,17 @@
       hint.textContent = ''; hint.classList.remove('err');
       btn.disabled = true;
       clear(result);
-      // Only worth saying when a wallet prompt is actually about to appear — a reused signature
-      // costs nothing to reuse, and saying "sign" when nothing will pop up reads as a stuck page.
-      if (signInIsFresh(addr)) result.appendChild(notice('Sign the message in your wallet — it proves the address, and costs nothing.', 'plain'));
+      // n names the slot this redeem means to fill — the count of orders the panel was painted
+      // from — so a picture that has gone stale is refused rather than risking two eSIMs for one
+      // balance. It is settled before the signature because the signature names it: what the
+      // holder approves in their wallet is this plan, in this slot, and nothing else.
+      const n = (standing.orders || []).length;
+      // A redemption always prompts — its signature is spent on this one order and never reused.
+      result.appendChild(notice('Approve the order in your wallet — it names the plan and costs nothing to sign.', 'plain'));
       try {
-        const { message, signature } = await signIn(addr);
+        const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n });
         clear(result);
         result.appendChild(notice('Ordering your eSIM… the pool pays nadanada over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
-        // n names the slot this redeem means to fill — the count of orders the panel was painted
-        // from — so a picture that has gone stale is refused rather than risking two eSIMs for one
-        // balance.
-        const n = (standing.orders || []).length;
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
         clear(result);
         // A preview of the eSIM this bundle just landed on — built the same way the repainted

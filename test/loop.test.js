@@ -369,12 +369,19 @@ function call(handler, { method, url, body }) {
   });
 }
 const now = () => Math.floor(Date.now() / 1000);
-const message = (address) => 'OT+T data\n' + address + '\n' + now();
+// The message /api/redeem checks. A redemption's signature names the plan and the slot it
+// authorises, so it is good for that one order and nothing else; a read's names neither.
+const message = (address, want, ts) => [
+  want && want.action === 'redeem' ? 'OT+T \u2014 authorise a data redemption' : 'OT+T \u2014 show my eSIM codes',
+  'Site: ott.test',
+  'Wallet: ' + address,
+].concat(want && want.action === 'redeem' ? ['Plan: ' + want.packageCode, 'Slot: ' + want.n] : [])
+  .concat(['Issued: ' + (ts === undefined ? now() : ts)]).join('\n');
 function signed(key, packageCode, n = 0) {
   const address = secp.addressOf(key).toLowerCase();
-  const msg = message(address);
+  const msg = message(address, packageCode == null ? { action: 'read' } : { action: 'redeem', packageCode, n });
   const bodyObj = { address, message: msg, signature: eip191.sign(key, msg) };
-  if (packageCode !== null) { bodyObj.packageCode = packageCode; bodyObj.n = n; }
+  if (packageCode != null) { bodyObj.packageCode = packageCode; bodyObj.n = n; }
   return bodyObj;
 }
 

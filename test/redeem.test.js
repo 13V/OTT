@@ -105,14 +105,23 @@ function call(handler, { method, url, body, rawBody }) {
 }
 
 const now = () => Math.floor(Date.now() / 1000);
-const message = (address, ts) => 'OT+T data\n' + address + '\n' + (ts === undefined ? now() : ts);
+// The message /api/redeem checks. A redemption's signature names the plan and the slot it
+// authorises, so it is good for that one order and nothing else; a read's names neither.
+const message = (address, want, ts) => [
+  want && want.action === 'redeem' ? 'OT+T \u2014 authorise a data redemption' : 'OT+T \u2014 show my eSIM codes',
+  'Site: ott.test',
+  'Wallet: ' + address,
+].concat(want && want.action === 'redeem' ? ['Plan: ' + want.packageCode, 'Slot: ' + want.n] : [])
+  .concat(['Issued: ' + (ts === undefined ? now() : ts)]).join('\n');
 // A redeem names the slot it fills (n); every scenario below starts from a clean ledger, so the
 // default is the first slot, and the sequences that fill more say so.
 function signed(key, packageCode, opts = {}) {
   const address = opts.address || addr(key);
-  const msg = message(address, opts.ts);
+  const n = opts.n === undefined ? 0 : opts.n;
+  const want = packageCode == null ? { action: 'read' } : { action: 'redeem', packageCode, n };
+  const msg = opts.message !== undefined ? opts.message : message(address, want, opts.ts);
   const body = { address: opts.sendAddress || address, message: msg, signature: opts.signature || eip191.sign(key, msg) };
-  if (packageCode !== null) { body.packageCode = packageCode; body.n = opts.n === undefined ? 0 : opts.n; }
+  if (packageCode != null) { body.packageCode = packageCode; body.n = n; }
   return body;
 }
 
@@ -174,7 +183,7 @@ async function main() {
   // Each accepted POST below spends $0.62 of RICH's $5.30, so the ledger is wiped between them.
   r = await POST(signed(RICH, 'EU-35_1_7', { ts: now() - 9 * 60 }));
   check('nine minutes old is still fine', r.status, 200);
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   r = await POST(signed(RICH, 'MARS_1_7'));
   check('a package that is not in the config is 400', [r.status, r.body.error], [400, 'unknown package']);
   // Wallets and hardware signers disagree on whether v is 27/28 or 0/1; both must recover.
@@ -182,12 +191,55 @@ async function main() {
   const vLow = good.signature.slice(0, 130) + (parseInt(good.signature.slice(130), 16) - 27).toString(16).padStart(2, '0');
   r = await POST(Object.assign({}, good, { signature: vLow }));
   check('a signature with v in {0,1} is accepted', r.status, 200);
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   r = await POST(Object.assign({}, good, { address: addr(RICH).toUpperCase().replace('0X', '0x') }));
   check('a checksummed / upper-case address is the same wallet', r.status, 200);
 
+  // ------------------------------------------------------------------------------------------
+  // A signature authorises ONE action. It used to authorise the wallet: anything holding a
+  // captured message-and-signature could redeem any package at any slot until the window closed,
+  // which made a page that talked a holder into signing it able to spend their whole week. Naming
+  // the plan and the slot inside the signed text is what bounds that to a single order.
+  // ------------------------------------------------------------------------------------------
+  console.log('\none signature, one order');
+  mock._reset(); redeem._resetCaches();
+  const forEurope = signed(RICH, 'EU-35_1_7');
+  r = await POST(Object.assign({}, forEurope, { packageCode: 'GL-120_1_7' }));
+  check('a signature for Europe cannot buy Worldwide', r.status, 401);
+  checkThat('and says it authorises a different plan', /different plan/.test(r.body.error), r.body.error);
+  r = await POST(Object.assign({}, forEurope, { n: 1 }));
+  check('a signature for slot 0 cannot fill slot 1 — no walking it across the week', r.status, 401);
+  checkThat('and says to sign again', /different order|sign again/.test(r.body.error), r.body.error);
+  r = await POST(Object.assign({}, signed(RICH, null), { packageCode: 'EU-35_1_7', n: 0 }));
+  check('a read signature cannot redeem at all', r.status, 401);
+  checkThat('and says it does not authorise a redemption', /authorise a redemption/.test(r.body.error), r.body.error);
+  r = await POST(Object.assign({}, forEurope, { packageCode: undefined, n: undefined }));
+  check('and a redemption signature cannot be used to read the codes', r.status, 401);
+  check('none of that spent anything', (await GET(addr(RICH))).body.redeemedUsd, 0);
+  r = await POST(forEurope);
+  check('the signature it was actually issued for still works', r.status, 200);
+  mock._reset(); redeem._resetCaches();
+
+  // The site line is what gives a person reading their wallet prompt a chance to notice where the
+  // request came from, so a message naming somewhere else is refused when this deployment knows
+  // its own name. A deployment that knows no host cannot check it, and must not therefore refuse
+  // everything — that would lock every holder out of a preview deploy.
+  console.log('\nthe site the signature names');
+  process.env.SIGNIN_HOST = 'ott.test';
+  r = await POST(signed(RICH, 'EU-35_1_7'));
+  check('a message naming this host is fine', r.status, 200);
+  mock._reset(); redeem._resetCaches();
+  process.env.SIGNIN_HOST = 'ott.example';
+  r = await POST(signed(RICH, 'EU-35_1_7'));
+  check('one naming a different host is 401', r.status, 401);
+  checkThat('and says which it was signed for', /signed for ott\.test/.test(r.body.error), r.body.error);
+  delete process.env.SIGNIN_HOST;
+  r = await POST(signed(RICH, 'EU-35_1_7'));
+  check('a deployment that cannot name its own host does not refuse everything', r.status, 200);
+  mock._reset(); redeem._resetCaches();
+
   console.log('\nhow much: $5.30 this week buys Worldwide ($4.60) then Europe ($0.62), then nothing');
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   r = await GET(addr(RICH));
   check('before anything: $5.30 allowance, $0 redeemed, $5.30 remaining, no orders, not stale',
     [r.status, r.body.week, r.body.allowanceUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders, r.body.stale, r.body.allowancesWeek],
@@ -245,7 +297,7 @@ async function main() {
   checkThat('and says plainly that the wallet holds nothing, not just "not enough"', /holds no ott/i.test(r.body.error), r.body.error);
 
   console.log('\nthe week boundary: last week\'s orders do not spend this week\'s allowance, and ids do not collide');
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   // Four weeks of history, seeded directly at the provider the way a real wallet's past
   // redemptions would sit there — bypassing the API entirely, exactly as the idempotence check
   // above does, because there is no other way to have "already redeemed last week" in a fixture.
@@ -269,7 +321,7 @@ async function main() {
   checkThat('and on every history order too', r.body.history.length === 3 && r.body.history.every((o) => o.codes === true && !!o.ac));
 
   console.log('\na stale allowances file: last week\'s numbers do not carry over, and nothing can be spent');
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   process.env.ALLOWANCES_URL = base + '/data/allowances-stale.json';
   r = await GET(addr(RICH));
   check('GET still succeeds and says plainly that the file is stale', [r.status, r.body.ok, r.body.stale, r.body.allowancesWeek, r.body.week], [200, true, true, STALE_WEEK, CUR]);
@@ -281,7 +333,7 @@ async function main() {
   process.env.ALLOWANCES_URL = base + '/data/allowances.json';
 
   console.log('\nVercel hands the function a pre-parsed body');
-  mock._reset();
+  mock._reset(); redeem._resetCaches();
   r = await call(redeem, { method: 'POST', url: '/api/redeem', rawBody: signed(RICH, 'EU-35_1_7') });
   check('an object body works the same as a string', [r.status, r.body.order.n], [200, 0]);
 

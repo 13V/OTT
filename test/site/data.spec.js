@@ -557,23 +557,36 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   const readPosts = posts.filter((p) => !p.packageCode);
   expect(readPosts).toHaveLength(2);
 
-  // What was signed and what was posted: the contract's exact message, hex-encoded for the
-  // wallet, the same on every one of those three calls, and only ever signed once — the wallet
-  // was not asked again for the redeem, nor for the read that followed it.
+  // What was signed, and what each signature authorises. A redemption's message names the plan
+  // and the slot, so it is spent on that one order and can never be walked across the week; a
+  // read's names neither and is reused while it is fresh, which is why three calls cost two
+  // signatures rather than three. Both are written to be read in a wallet prompt.
   expect(posts).toHaveLength(3);
-  expect(new Set(posts.map((p) => p.signature)).size).toBe(1);
-  expect(new Set(posts.map((p) => p.message)).size).toBe(1);
+  const reads = posts.filter((p) => !p.packageCode);
+  expect(reads).toHaveLength(2);
+  expect(new Set(reads.map((p) => p.signature)).size).toBe(1);
   expect(redeemPost.signature).toBe('0x' + 'ab'.repeat(65));
+  expect(redeemPost.message).not.toBe(reads[0].message);
+
   const lines = redeemPost.message.split('\n');
-  expect(lines).toHaveLength(3);
-  expect(lines[0]).toBe('OT+T data');
-  expect(lines[1]).toBe(ADDR);
-  expect(Math.abs(Number(lines[2]) - Math.floor(Date.now() / 1000))).toBeLessThan(60);
+  expect(lines[0]).toBe('OT+T — authorise a data redemption');
+  expect(lines).toContain('Wallet: ' + ADDR);
+  expect(lines).toContain('Plan: fixed_5GB_30D_DE');
+  expect(lines).toContain('Slot: 1');
+  const site = lines.find((l) => l.startsWith('Site: '));
+  expect(site).toMatch(/^Site: 127\.0\.0\.1:\d+$/);
+  const issued = Number((lines.find((l) => l.startsWith('Issued: ')) || '').slice(8));
+  expect(Math.abs(issued - Math.floor(Date.now() / 1000))).toBeLessThan(60);
+
+  const readLines = reads[0].message.split('\n');
+  expect(readLines[0]).toBe('OT+T — show my eSIM codes');
+  expect(readLines.some((l) => l.startsWith('Plan: '))).toBe(false);
+
   const signs = await page.evaluate(() => window.__eth.filter((c) => c.method === 'personal_sign'));
-  expect(signs).toHaveLength(1);
-  expect(signs[0].params[1]).toBe(ADDR);
+  expect(signs).toHaveLength(2);
+  expect(signs.every((c) => c.params[1] === ADDR)).toBe(true);
   const hex = '0x' + Buffer.from(redeemPost.message, 'utf8').toString('hex');
-  expect(signs[0].params[0]).toBe(hex);
+  expect(signs.map((c) => c.params[0])).toContain(hex);
   expect(errors).toEqual([]);
 });
 

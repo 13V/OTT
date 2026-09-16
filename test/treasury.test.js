@@ -126,6 +126,15 @@ const SEL = {
   check('status: under two weeks', T.statusOf({ balanceUsd: 200, runwayDays: 9 }), 'low');
   check('status: fine', T.statusOf({ balanceUsd: 200, runwayDays: 90 }), 'funded');
   check('status: fine with no spend yet', T.statusOf({ balanceUsd: 200, runwayDays: null }), 'funded');
+  // A pool can be comfortably full by every backward-looking measure and still be unable to pay
+  // what this week has already promised — which is the shape a good week takes, not a bad one.
+  check('status: full by the old measure, short of what this week promised',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 4000 }), 'behind');
+  check('status: enough of the promise covered to be getting on with',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 300 }), 'funded');
+  check('status: nothing promised yet is not behind',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 0 }), 'funded');
+  check('status: empty still beats behind', T.statusOf({ balanceUsd: 0, runwayDays: null, owedUsd: 4000 }), 'empty');
 
   console.log('\ntreasury: the run');
   const rpc = async (method, params) => {
@@ -142,6 +151,7 @@ const SEL = {
     asOf: Math.floor(now / 1000), treasury: TREASURY, escrowClaimableUsd: 123.45, walletUsd: 67.89,
     reseller: { name: 'fake', balanceUsd: 412, asOf: Math.floor(now / 1000) },
     spend30dUsd: 10.44, redemptions30d: 4, perDayUsd: 0.35, runwayDays: 1177,
+    weekBudgetUsd: 0, weekRedeemedUsd: 0, owedUsd: 0,
     lastClaim: { at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }, status: 'funded',
   });
   process.env.LN_PAYER = 'blink';
