@@ -1,0 +1,12 @@
+node_modules
+node_modules/
+__pycache__/
+# never commit keys
+.env
+test-results/
+playwright-report/
+
+# vercel CLI writes project ids here; never commit it
+.vercel/
+build/
+.env.local

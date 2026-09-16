@@ -1,0 +1,82 @@
+# Sweep the creator tax out of Pons's fee escrow into the treasury, top the Lightning wallet up
+# from it (scripts/fund.js: treasury USDG -> FixedFloat -> Blink, over Across and Lightning), and
+# refresh the treasury file so the programme page shows all three. Claiming needs TREASURY_PRIVATE_KEY —
+# the treasury wallet's key, which makes that wallet a hot wallet: only fee income ever sits in it,
+# and the daily sweep is what keeps the escrow from holding more than a day's worth either. Funding
+# needs that same key plus BLINK_API_KEY, FIXEDFLOAT_API_KEY and FIXEDFLOAT_API_SECRET. Either step
+# without its keys is skipped, and says so; the treasury refresh after them always runs.
+#
+# Runs with the same GITHUB_TOKEN commit as the data workflow, under the same concurrency group,
+# so the two never push over each other.
+name: claim
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-refresh
+  cancel-in-progress: false
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HAS_KEY: ${{ secrets.TREASURY_PRIVATE_KEY != '' }}
+      HAS_FUND: ${{ secrets.FIXEDFLOAT_API_KEY != '' && secrets.BLINK_API_KEY != '' && secrets.TREASURY_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Claim
+        if: env.HAS_KEY == 'true'
+        env:
+          PRIVATE_KEY: ${{ secrets.TREASURY_PRIVATE_KEY }}
+        run: node scripts/claim.js
+
+      - name: No key, no claim
+        if: env.HAS_KEY != 'true'
+        run: echo "TREASURY_PRIVATE_KEY is not set; nothing claimed"
+
+      - name: Fund the pool
+        if: env.HAS_FUND == 'true'
+        continue-on-error: true
+        env:
+          PRIVATE_KEY: ${{ secrets.TREASURY_PRIVATE_KEY }}
+          BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
+          FIXEDFLOAT_API_KEY: ${{ secrets.FIXEDFLOAT_API_KEY }}
+          FIXEDFLOAT_API_SECRET: ${{ secrets.FIXEDFLOAT_API_SECRET }}
+        run: node scripts/fund.js
+
+      - name: No keys, no funding
+        if: env.HAS_FUND != 'true'
+        run: echo "TREASURY_PRIVATE_KEY, BLINK_API_KEY or FIXEDFLOAT_API_KEY is not set; nothing funded"
+
+      - name: Refresh treasury
+        continue-on-error: true
+        env:
+          ESIM_PROVIDER: nadanada
+          BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+        run: node scripts/treasury.js
+
+      - name: Commit if anything changed
+        run: |
+          git add site/data/*.json
+          if git diff --quiet --cached; then
+            echo "nothing changed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "data: claim + fund + treasury"
+          git push

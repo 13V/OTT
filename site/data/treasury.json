@@ -1,0 +1,13 @@
+{
+ "asOf": 1789524152,
+ "treasury": "",
+ "escrowClaimableUsd": null,
+ "walletUsd": null,
+ "reseller": null,
+ "spend30dUsd": 0,
+ "redemptions30d": 0,
+ "perDayUsd": 0,
+ "runwayDays": null,
+ "lastClaim": null,
+ "status": "unknown"
+}

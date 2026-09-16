@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OT+T — trade the coin, fly with data</title>
+<meta name="description" content="A memecoin whose creator tax buys mobile data. Trade OTT on Robinhood Chain and a share of what you traded comes back as eSIM gigabytes, paid for over Lightning — not a dividend for holding, a rebate for trading.">
+<meta name="theme-color" content="#07030D">
+<link rel="icon" href="data:,">
+<link href="fonts.css" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="./ui.css">
+</head>
+<body>
+<a class="skip-link" href="#view">Skip to content</a>
+
+<header id="masthead">
+  <div class="mh-top">
+    <!-- The wordmark is also the home link, the same as whatever.fun's; "The plan" beside it still
+         earns its place because "OT+T" alone does not say what the page under it is. -->
+    <a class="brand" href="#/" data-route="home">OT<span class="dot-fun">+</span>T</a>
+    <nav id="nav" aria-label="Primary">
+      <a data-route="home" href="#/">The plan</a>
+      <a data-route="status" href="#/status">Status</a>
+      <a data-route="about" href="#/about">How it works</a>
+    </nav>
+    <div class="mh-right">
+      <!-- app.js fills this. There is no search slot here — that box only ever filtered the
+           launchpad's menu table, and this site has no menu. -->
+      <div id="wallet-slot" class="wallet-slot"></div>
+      <button id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-controls="nav" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<main id="view" tabindex="-1"></main>
+
+<footer id="site-footer">
+  <div class="footer-inner">
+    <p class="foot-quote">Trade the coin. Fly with data.</p>
+    <!-- Decoration: this is set large enough to be furniture rather than text, and the real name is
+         in the meta row below, so reading both aloud would only say it twice. -->
+    <p class="foot-mark" aria-hidden="true">OT+T</p>
+    <p class="disclaimer">
+      OT+T is a phone carrier that runs on a memecoin: a creator tax on every trade funds a treasury, and
+      the treasury spends it on mobile data for the people who traded, not on a payout for the people who
+      only hold. A memecoin can go to zero, and most do. Nothing here is financial advice.
+    </p>
+    <p class="foot-links">
+      <span class="foot-name">OT+T</span>
+      <span aria-hidden="true">·</span>
+      <span id="foot-chain">Robinhood Chain · 4663</span>
+      <span aria-hidden="true">·</span>
+      <a id="foot-explorer" href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Explorer</a>
+      <span aria-hidden="true">·</span>
+      <a href="#/about">How this works</a>
+    </p>
+  </div>
+</footer>
+
+<script src="./ui.js"></script>
+<!-- The QR encoder draws an activation code with when nadanada answers an order without a picture
+     of its own. It defines window.WhateverQr and does nothing on its own, so loading it here costs
+     the page nothing until a redemption actually needs it. -->
+<script src="./qr.js"></script>
+<!-- The programme page, home route (#/). app.js hands it its helpers when the route is opened; it
+     loads nothing at boot. -->
+<script src="./esim.js"></script>
+<!-- The Status route (#/status): the network status page and the operator's dashboard. Same wiring
+     as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
+<script src="./status.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

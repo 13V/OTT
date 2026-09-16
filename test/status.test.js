@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+'use strict';
+/**
+ * site/api/status.js, end to end, offline.
+ *
+ * A node:http server stands in for the deployment's own config and allowances files, exactly as
+ * test/redeem.test.js's does; a second tiny server stands in for nadanada's bundle listing; the
+ * mock Lightning payer (site/api/lib/payers/mock.js) stands in for a wallet. What is asserted is
+ * the wire contract (GET only, JSON, never cached, no CORS), that a fully wired deployment reports
+ * every check healthy with the numbers read from the real config, that one broken leg — a payer
+ * that throws, a store that is not configured — never fails the other checks or the request
+ * itself, that the response is cached for a while and ?fresh=1 breaks the cache, and — the one that
+ * matters most — that a secret never reaches the response even along the one path (a Blink error
+ * message) that could plausibly carry one.
+ *
+ *   node test/status.test.js
+ */
+const http = require('node:http');
+const path = require('path');
+
+const API = path.join(__dirname, '..', 'site', 'api');
+const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
+
+let failures = 0, checks = 0;
+const check = (what, got, want) => {
+  checks++;
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (ok) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
+};
+const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}${detail !== undefined ? '\n       ' + detail : ''}`); } };
+
+// --------------------------------------------------------------------------- fixtures
+const COIN = '0x1111111111111111111111111111111111111111';
+const CURVE = '0x2222222222222222222222222222222222222222';
+const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT' };
+// Four packages across three places, so packages/places are two different numbers and a mistake
+// between them (counting rows instead of distinct slugs) would be caught.
+const PACKAGES = [
+  { code: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99 },
+  { code: 'fixed_5GB_30D_DE', slug: 'germany', priceUsd: 4.99 },
+  { code: 'fixed_1GB_7D_FR', slug: 'france', priceUsd: 1.19 },
+  { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', priceUsd: 8.99 },
+];
+const LAUNCHED_CONFIG = {
+  coin: COIN, curve: CURVE, treasury: '', provider: 'nadanada', catalogueAt: '2026-09-15',
+  rebateBps: 800, taxBps: 1000, brand: BRAND, packages: PACKAGES,
+};
+const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
+const ALLOWANCES = {
+  asOf: 1789500000, block: 64082470, coin: COIN, curve: CURVE, rebateBps: 800,
+  wallets: {
+    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': { tradedUsd: 10, earnedUsd: 0.8 },
+    '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb': { tradedUsd: 20, earnedUsd: 1.6 },
+    '0xcccccccccccccccccccccccccccccccccccccccc': { tradedUsd: 30, earnedUsd: 2.4 },
+  },
+};
+const FILES = {
+  '/config/esim.json': LAUNCHED_CONFIG,
+  '/config/esim-unlaunched.json': UNLAUNCHED_CONFIG,
+  '/data/allowances.json': ALLOWANCES,
+};
+
+// A fake req/res pair in the shape Node gives a Vercel function, the same one test/redeem.test.js uses.
+function call(handler, { method = 'GET', url = '/api/status' } = {}) {
+  return new Promise((resolve) => {
+    const req = { method, url, headers: {} };
+    const headers = {};
+    const res = {
+      statusCode: 200,
+      setHeader(k, v) { headers[k.toLowerCase()] = v; },
+      end(text) { resolve({ status: res.statusCode, headers, body: JSON.parse(text) }); },
+    };
+    handler(req, res).catch((e) => resolve({ status: 'THREW', headers, body: { error: String(e && e.message) } }));
+  });
+}
+
+async function main() {
+  // The deployment's own files.
+  const fileServer = http.createServer((req, res) => {
+    const file = FILES[new URL(req.url, 'http://x').pathname];
+    if (!file) { res.statusCode = 404; return res.end('nope'); }
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(file));
+  });
+  await new Promise((r) => fileServer.listen(0, '127.0.0.1', r));
+  const fileBase = 'http://127.0.0.1:' + fileServer.address().port;
+
+  // A tiny fake of nadanada's own bundle listing, and nothing else — proving the provider check
+  // never reaches for purchase or complete.
+  let bundleHits = 0;
+  const nadanadaServer = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/esim/bundles') {
+      bundleHits++;
+      res.setHeader('content-type', 'application/json');
+      return res.end(JSON.stringify({ success: true, data: { bundles: Array.from({ length: 8 }, (_, i) => ({ name: 'bundle-' + i })) } }));
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'not stubbed: ' + req.url }));
+  });
+  await new Promise((r) => nadanadaServer.listen(0, '127.0.0.1', r));
+  const nadanadaBase = 'http://127.0.0.1:' + nadanadaServer.address().port;
+
+  process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+  process.env.ALLOWANCES_URL = fileBase + '/data/allowances.json';
+  process.env.ESIM_PROVIDER = 'nadanada';
+  process.env.LN_PAYER = 'mock';
+  process.env.STORE = 'memory';
+  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
+  process.env.NADANADA_BASE_URL = nadanadaBase;
+  delete process.env.VERCEL_URL;
+  delete process.env.BLINK_API_KEY;
+  delete process.env.BLINK_API_URL;
+  mockPayer._reset();
+
+  const status = require(path.join(API, 'status.js'));
+  const GET = (qs = '?fresh=1') => call(status, { method: 'GET', url: '/api/status' + qs });
+
+  console.log('the wire format');
+  let r = await call(status, { method: 'POST' });
+  check('a non-GET method is 405', r.status, 405);
+  check('with an allow header naming GET', r.headers.allow, 'GET');
+  check('and the same JSON, no-store contract as a real response', [r.headers['content-type'], r.headers['cache-control']], ['application/json; charset=utf-8', 'no-store']);
+  r = await GET();
+  check('GET answers 200 as JSON that is never cached', [r.status, r.headers['content-type'], r.headers['cache-control']], [200, 'application/json; charset=utf-8', 'no-store']);
+  checkThat('no CORS header is ever set', !('access-control-allow-origin' in r.headers));
+
+  console.log('\na fully wired deployment');
+  r = await GET();
+  check('ok is true and every check is healthy', [r.body.ok, r.body.checks.store.ok, r.body.checks.payer.ok, r.body.checks.provider.ok, r.body.checks.allowances.ok], [true, true, true, true, true]);
+  check('ready mirrors every check, config included', r.body.ready, { config: true, provider: true, payer: true, store: true, allowances: true });
+  check('the brand comes from the config', r.body.brand, BRAND);
+  check('packages counts rows, places counts distinct slugs', [r.body.config.packages, r.body.config.places, r.body.config.catalogueAt], [4, 3, '2026-09-15']);
+  check('launched, rebate and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.rebateBps, r.body.config.taxBps], [true, COIN, 800, 1000]);
+  check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
+  check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'nadanada', payer: 'mock', store: 'memory' });
+  checkThat('the allowances check names the wallet count and the block', /3 wallets?, block 64082470/.test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
+  checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
+  checkThat('and nadanada saw only the bundle listing, never purchase or complete', bundleHits > 0);
+
+  console.log('\na payer that cannot answer');
+  mockPayer._state.mode = 'down';
+  r = await GET();
+  check('the request still succeeds', r.status, 200);
+  check('the payer check fails and the pool is null', [r.body.checks.payer.ok, r.body.pool], [false, null]);
+  checkThat('every other check is unaffected by the payer failing', r.body.checks.store.ok && r.body.checks.provider.ok && r.body.checks.allowances.ok, JSON.stringify(r.body.checks));
+  mockPayer._state.mode = 'success';
+
+  console.log('\nno store configured');
+  delete process.env.STORE;
+  delete process.env.STORE_URL; delete process.env.STORE_TOKEN;
+  delete process.env.KV_REST_API_URL; delete process.env.KV_REST_API_TOKEN;
+  delete process.env.UPSTASH_REDIS_REST_URL; delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  r = await GET();
+  check('the request still succeeds', r.status, 200);
+  check('the store check fails', r.body.checks.store.ok, false);
+  checkThat('and names the env var to set', /KV_REST_API_URL/.test(r.body.checks.store.detail), r.body.checks.store.detail);
+  checkThat('every other check is unaffected by the store failing', r.body.checks.payer.ok && r.body.checks.provider.ok && r.body.checks.allowances.ok);
+  process.env.STORE = 'memory';
+
+  console.log('\nan unlaunched config');
+  process.env.ESIM_CONFIG_URL = fileBase + '/config/esim-unlaunched.json';
+  r = await GET();
+  check('the request still succeeds and says the coin is not launched', [r.status, r.body.ok, r.body.config.launched], [200, true, false]);
+  check('but the config itself still loaded fine', r.body.ready.config, true);
+  process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+
+  console.log('\nthe cache');
+  await GET('?fresh=1');
+  const baseline = bundleHits;
+  await GET('');
+  await GET('');
+  check('two more calls with no ?fresh=1 cost nothing more: the cache answered both', bundleHits, baseline);
+  await GET('?fresh=1');
+  check('?fresh=1 always costs a fresh hit on nadanada', bundleHits, baseline + 1);
+
+  console.log('\nan unknown provider name is a broken deployment, not a clean bill of health');
+  process.env.ESIM_PROVIDER = 'atlantis';
+  r = await GET();
+  check('the request still succeeds', r.status, 200);
+  check('the provider and store checks both fail rather than reporting nothing to probe', [r.body.checks.provider.ok, r.body.checks.store.ok], [false, false]);
+  checkThat('the wiring still names what was actually asked for', r.body.wiring.provider === 'atlantis', r.body.wiring.provider);
+  process.env.ESIM_PROVIDER = 'nadanada';
+
+  console.log('\nscrubbing a secret');
+  process.env.LN_PAYER = 'blink';
+  const SECRET = 'sk-distinctive-937zx-do-not-leak';
+  process.env.BLINK_API_KEY = SECRET;
+  // A Blink that misbehaves by echoing the key it was sent back in its own error message — the
+  // one shape of failure that could actually carry a secret through blink.js's own error path.
+  const blinkServer = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ errors: [{ message: 'bad key ' + req.headers['x-api-key'] }] }));
+  });
+  await new Promise((resolve) => blinkServer.listen(0, '127.0.0.1', resolve));
+  process.env.BLINK_API_URL = 'http://127.0.0.1:' + blinkServer.address().port + '/graphql';
+  r = await GET();
+  check('the request still succeeds', r.status, 200);
+  check('the payer check fails', r.body.checks.payer.ok, false);
+  checkThat('the pool is null', r.body.pool === null);
+  checkThat('the wallet\'s own error text still comes through', /bad key/.test(r.body.checks.payer.detail), r.body.checks.payer.detail);
+  checkThat('but the secret itself never reaches the response, scrubbed or not', JSON.stringify(r.body).indexOf(SECRET) === -1, JSON.stringify(r.body));
+  await new Promise((resolve) => blinkServer.close(resolve));
+  process.env.LN_PAYER = 'mock';
+  delete process.env.BLINK_API_KEY;
+  delete process.env.BLINK_API_URL;
+
+  await new Promise((r2) => fileServer.close(r2));
+  await new Promise((r2) => nadanadaServer.close(r2));
+  console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
+  process.exit(failures ? 1 : 0);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
