@@ -408,6 +408,24 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: outB, week: 10, now: () => 1700000000000 });
   check('the two runs\' files are byte-identical', fs.readFileSync(outA, 'utf8'), fs.readFileSync(outB, 'utf8'));
 
+  // Both workflows commit only when a data file actually changed, which is what makes a quiet
+  // half-hour cost nothing downstream. asOf and block move every run regardless, so writing them
+  // unconditionally made that guard a no-op: every run pushed a commit and triggered a redeploy,
+  // forty-eight times a day, for a file whose contents had not changed.
+  console.log('\na run that finds nothing new leaves the file alone');
+  const quiet = path.join(tmp, 'quiet.json');
+  const args = (at) => ({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: quiet, week: 10, now: () => at });
+  await A.run(args(1700000000000));
+  const firstBytes = fs.readFileSync(quiet, 'utf8');
+  const firstMtime = fs.statSync(quiet).mtimeMs;
+  await new Promise((r) => setTimeout(r, 20));
+  await A.run(args(1700003600000));   // an hour later; every figure the same
+  check('the file is untouched, clock and all', fs.readFileSync(quiet, 'utf8'), firstBytes);
+  check('and was not rewritten at all', fs.statSync(quiet).mtimeMs, firstMtime);
+  // A real change still lands, clock included — the guard skips noise, not news.
+  await A.run(Object.assign(args(1700007200000), { rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: coinTransfers.concat([xfer(ZERO, DAVE, 250, 1500)]), taxTransfers }).rpc }));
+  checkThat('a week whose balances moved is written', fs.readFileSync(quiet, 'utf8') !== firstBytes, 'unchanged');
+
   console.log('\n--from-block and --to-block still work: they skip the launch lookup and pin the head');
   const explicitNode = fakeNode({ head: 999999, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers });
   const rExplicit = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: explicitNode.rpc, out: path.join(tmp, 'explicit.json'), week: 10, fromBlock: '900', toBlock: String(HEAD) });

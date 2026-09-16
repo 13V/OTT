@@ -193,8 +193,15 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     lastClaim: last ? { at: last.at, kind: last.kind, amount: last.amount, txHash: last.txHash || null } : null,
     status: statusOf({ balanceUsd, runwayDays, owedUsd: owed.owedUsd }),
   };
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
+  // Same reasoning as writeAllowances(): asOf moves every run, and rewriting the file for that
+  // alone turned both workflows' "commit only if something changed" into a commit every time.
+  let existing = null;
+  try { existing = JSON.parse(fs.readFileSync(out, 'utf8')); } catch (e) { existing = null; }
+  const strip = (o) => JSON.stringify(o, (k, v) => (k === 'asOf' || k === 'block' ? undefined : v));
+  if (!existing || strip(existing) !== strip(data)) {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
+  }
   const summary = `treasury: ${data.status}` +
     (reseller ? `, reseller $${reseller.balanceUsd === null ? '?' : reseller.balanceUsd.toFixed(2)}` : ', no reseller reading') +
     `, ${spend.count} redemption(s) / $${spend.spendUsd.toFixed(2)} in ${DAYS}d` +

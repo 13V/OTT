@@ -232,9 +232,26 @@ function emptyAllowances({ asOf, block = 0, week }) {
   };
 }
 
+/**
+ * The two fields that move on every run whether or not anything happened: when the run was, and
+ * where the chain head was. Both workflows commit only when a data file actually changed — that is
+ * what their own comments promise — and stamping these unconditionally made the guard a no-op, so
+ * every half-hourly run pushed a commit and triggered a full redeploy, forty-eight times a day,
+ * for a file whose contents were identical. Comparing without them is what makes the promise true.
+ */
+function sameButForTheClock(a, b) {
+  if (!a || !b) return false;
+  const strip = (o) => JSON.stringify(o, (k, v) => (k === 'asOf' || k === 'block' ? undefined : v));
+  return strip(a) === strip(b);
+}
+
 function writeAllowances(out, data) {
+  let existing = null;
+  try { existing = JSON.parse(fs.readFileSync(out, 'utf8')); } catch (e) { existing = null; }
+  if (sameButForTheClock(existing, data)) return false;
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +494,14 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
 
   // The snapshot: the last block at or before this week's start, i.e. one block before the first
   // block whose timestamp is past it.
+  // No confirmation-depth margin here, deliberately. The snapshot is the last block at or before
+  // the week boundary — a wall-clock instant, not a distance behind head — so a run starting
+  // seconds after the boundary picks a block only seconds old, and on a chain making one every
+  // tenth of a second a reorg there would invalidate what was read. The mitigation costs more than
+  // the risk: requiring real depth would refuse the first run after every boundary and leave
+  // holders unable to spend for another half hour, every Monday, to guard against a reorg on an
+  // Arbitrum Nitro chain with a single sequencer. The scan itself takes minutes, so the snapshot
+  // is thousands of blocks deep by the time anything is written; what is exposed is only the read.
   const snapshotBlock = (await firstBlockAtOrAfter(rpc, weekStart(wk) + 1, head)) - 1;
   const launchBlk = fromBlock != null ? Number(fromBlock) : await launchBlock({ rpc, factory, coin, curve, head, log });
 
