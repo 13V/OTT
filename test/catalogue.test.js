@@ -22,12 +22,12 @@ const check = (what, got, want) => {
 const bundle = (name, gb, days, price, extra) => Object.assign({ name, dataInGB: gb, durationInDays: days, price, unlimited: false, roamingEnabled: [] }, extra || {});
 const portfolio = {
   countries: [
-    { code: 'DE', name: 'Germany', slug: 'germany', bundles: [
+    { code: 'DE', name: 'Germany', slug: 'germany', flag: '🇩🇪', bundles: [
       bundle('fixed_1GB_7D_DE', 1, 7, 1.99), bundle('fixed_2GB_15D_DE', 2, 15, 2.99), bundle('fixed_5GB_30D_DE', 5, 30, 4.99),
       bundle('fixed_10GB_30D_DE', 10, 30, 7.99), bundle('fixed_10GB_15D_DE', 10, 15, 6.49),          // a cheaper 10 GB: it wins
       bundle('unlimited_7D_DE', 0, 7, 19.99, { unlimited: true }), bundle('fixed_100GB_30D_DE', 100, 30, 0), // skipped
     ] },
-    { code: 'JP', name: 'Japan', slug: 'japan', bundles: [bundle('fixed_1GB_7D_JP', 1, 7, 2.99), bundle('fixed_3GB_30D_JP', 3, 30, 4.99)] },
+    { code: 'JP', name: 'Japan', slug: 'japan', flag: '🇯🇵', bundles: [bundle('fixed_1GB_7D_JP', 1, 7, 2.99), bundle('fixed_3GB_30D_JP', 3, 30, 4.99)] },
   ],
   regions: [
     { name: 'Europe', slug: 'europe', bundles: [
@@ -46,8 +46,11 @@ check('a size a place lacks is absent (Japan has no 5 or 10)', out.filter((p) =>
 check('the cheapest bundle of a size wins, whatever its duration', out.find((p) => p.code === 'fixed_10GB_15D_DE').priceUsd, 6.49);
 check('unlimited and unpriced bundles are never chosen', out.some((p) => /unlimited|100GB/.test(p.code)), false);
 check('a region entry: name, kind, days, price, and how many countries', out[0],
-  { code: 'fixed_1GB_7D_EUROPE', slug: 'europe', name: 'Europe', kind: 'region', gb: 1, days: 7, priceUsd: 1.19, regions: '38 countries' });
-check('a country entry carries its ISO code', out[3], { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' });
+  { code: 'fixed_1GB_7D_EUROPE', slug: 'europe', name: 'Europe', flag: '', kind: 'region', gb: 1, days: 7, priceUsd: 1.19, regions: '38 countries' });
+check('a country entry carries its ISO code and its flag', out[3], { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', flag: '🇩🇪', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' });
+// nadanada gives regions no flag of their own, so the field is present and empty rather than absent —
+// the coverage grid on the site falls back to the place's name when it is.
+check('a region has no flag, and says so with an empty string rather than nothing', out[0].flag, '');
 check('the defaults name the places the site sells', [C.REGIONS.length, C.COUNTRIES.length, C.SIZES_GB], [8, 20, [1, 5, 10]]);
 check('an empty portfolio is an empty menu', C.pick({}), []);
 

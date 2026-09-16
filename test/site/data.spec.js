@@ -28,12 +28,15 @@ const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 // gigabyte in this fixture, so `cheapest()` picks it. Global's 1 GB at $8.99 is the dearest per
 // gigabyte. $1,234.56 of treasury therefore pools to 1,545 GB at Germany's rate, or 137 GB at
 // Global's — the numbers the pool tile is checked against below.
+// Germany carries a flag (a real country does, in the real catalogue) and the two regions do not,
+// exactly like production data — so the plan picker and the coverage grid each get one real case of
+// a place with a flag and one without, rather than every place in the fixture agreeing.
 const PACKAGES = [
   { code: 'fixed_1GB_7D_EUROPE', slug: 'europe', name: 'Europe', kind: 'region', gb: 1, days: 7, priceUsd: 1.19, regions: '38 countries' },
   { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', name: 'Global', kind: 'region', gb: 1, days: 7, priceUsd: 8.99, regions: '105 countries' },
-  { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' },
-  { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 5, days: 30, priceUsd: 4.99, regions: 'DE' },
-  { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE' },
+  { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE', flag: '🇩🇪' },
+  { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 5, days: 30, priceUsd: 4.99, regions: 'DE', flag: '🇩🇪' },
+  { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE', flag: '🇩🇪' },
 ];
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' };
 const base = { pair: USDG, taxBps: 1000, rebateBps: 800, provider: 'nadanada', packages: PACKAGES, brand: BRAND };
@@ -91,13 +94,17 @@ test('before launch, #/ shows the rules and the launch link', async ({ page }) =
   await stubConfig(page, NOT_LAUNCHED);
 
   await page.goto('/index.html#/');
-  await expect(page.locator('#view h1')).toHaveText('Trade the coin. Fly with data.');
+  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, paid for by your trades.');
+  await expect(page.locator('.hero-sub')).toHaveText('A rebate on every trade, banked as credit for an eSIM.');
   await expect(page).toHaveTitle('OT+T — trade the coin, fly with data');
-  // The brand, read from config: the head names the carrier by its display name and its full
-  // corporate name, and the explainer names it in the first sentence.
-  await expect(page.locator('.page-head .label')).toHaveText('OT+T · ONCHAIN TELEPHONE + TELEGRAPH');
-  await expect(page.locator('.page-lede')).toContainText('OT+T is a phone carrier');
-  await expect(page.locator('.data-explainer')).toContainText('OT+T’s bonding curve');
+  // No wallet in this browser context, so the hero's primary action offers to connect one rather
+  // than jumping straight to the plans.
+  await expect(page.locator('.hero-actions').getByRole('button', { name: 'Connect wallet' })).toBeVisible();
+  // Scoped to .hero-actions: the primary nav also has a "How it works" link, to #/about.
+  await expect(page.locator('.hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
+  // The brand, read from config, is named in the how-it-works band — see the dedicated test below
+  // for the catalogue-driven sections, which render identically before and after launch.
+  await expect(page.locator('.step-body').first()).toContainText('OT+T’s bonding curve');
   const card = page.locator('.data-notlaunched');
   await expect(card).toContainText('Not launched yet');
   await expect(card).toContainText('Carrier');
@@ -120,6 +127,89 @@ test('before launch, #/ shows the rules and the launch link', async ({ page }) =
   expect(errors).toEqual([]);
 });
 
+// volumeFor() in esim.js: priceUsd ÷ (rebateBps / 10000) — computed here with the identical
+// arithmetic rather than a hand-typed literal, so the assertion cannot drift from a rounding
+// difference between this file and the page.
+const volStr = (priceUsd) => '$' + (priceUsd / (base.rebateBps / 10000)).toFixed(2);
+
+test('the plan catalogue, how-it-works and coverage render from config alone, the same before or after launch', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
+  stubNetwork(page);
+  await stubConfig(page, NOT_LAUNCHED);
+
+  await page.goto('/index.html#/');
+
+  // Trust row: four checkable claims, two of them read straight off this fixture's own catalogue.
+  const trust = page.locator('.trust-item');
+  await expect(trust).toHaveCount(4);
+  await expect(trust).toContainText(['3 places on the menu', 'eSIMs from $1.19', 'No app, no SIM swap, no contract', 'Paid over Bitcoin Lightning — no person in the loop']);
+
+  // The plan picker opens on the first place (Europe), grouped into the same two optgroups the
+  // catalogue's kinds imply — one region for each of Europe and Global, one country for Germany.
+  const picker = page.locator('#plan-place');
+  await expect(picker.locator('optgroup[label="Regions"] option')).toHaveCount(2);
+  await expect(picker.locator('optgroup[label="Countries"] option')).toHaveCount(1);
+  // Germany's option carries its flag; the two regions do not.
+  await expect(picker.locator('option', { hasText: 'Germany' })).toHaveText('🇩🇪 Germany');
+  await expect(picker.locator('option', { hasText: 'Europe' })).toHaveText('Europe');
+
+  // Europe sells one size in this fixture, so its one card is not "featured" — that badge only
+  // means something when there is a second size in the running to lose to.
+  const grid = page.locator('.plan-grid');
+  await expect(grid.locator('.plan-card')).toHaveCount(1);
+  await expect(grid.locator('.plan-card.featured')).toHaveCount(0);
+  await expect(grid.locator('.plan-size')).toHaveText('1 GB');
+  await expect(grid.locator('.plan-price')).toHaveText('$1.19');
+  await expect(grid.locator('.plan-term')).toHaveText('7 days');
+  await expect(grid.locator('.plan-meta')).toContainText('38 countries');
+  await expect(grid.locator('.plan-meta')).toContainText(volStr(1.19) + ' traded');
+  await expect(grid.getByRole('link', { name: 'Get this eSIM' })).toHaveAttribute('href', '#your-data');
+
+  // Switching the place repaints the grid: Germany sells three sizes, and the honestly-computed
+  // best deal is the 10 GB one (80¢/GB against 5 GB's ~$1.00 and 1 GB's $1.99) — not whichever
+  // card happens to sit in the middle.
+  await picker.selectOption('germany');
+  await expect(grid.locator('.plan-card')).toHaveCount(3);
+  await expect(grid.locator('.plan-card.featured')).toHaveCount(1);
+  const featured = grid.locator('.plan-card.featured');
+  await expect(featured.locator('.plan-size')).toHaveText('10 GB');
+  await expect(featured.locator('.plan-price')).toHaveText('$7.99');
+  await expect(featured.locator('.plan-badge')).toHaveText('Most data per dollar');
+  await expect(grid).toContainText('$1.99');
+  await expect(grid).toContainText('$4.99');
+  await expect(grid.locator('.plan-meta').first()).toContainText('DE');
+  await expect(grid.locator('.plan-meta').first()).toContainText(volStr(1.99) + ' traded');
+
+  // How it works: three plain steps, numbered, and the trader-not-holder point in the first one,
+  // named for this fixture's own brand.
+  const steps = page.locator('.step');
+  await expect(steps).toHaveCount(3);
+  await expect(steps.nth(0).locator('.step-n')).toHaveText('1');
+  await expect(steps.nth(0).locator('.step-title')).toHaveText('Trade the coin');
+  await expect(steps.nth(0).locator('.step-body')).toContainText('OT+T’s bonding curve');
+  await expect(steps.nth(0).locator('.step-body')).toContainText('Holding the coin earns nothing on its own');
+  await expect(steps.nth(1).locator('.step-n')).toHaveText('2');
+  await expect(steps.nth(1).locator('.step-body')).toContainText('8%');
+  await expect(steps.nth(1).locator('.step-body')).toContainText('pre-graduation trades in USDG only');
+  await expect(steps.nth(2).locator('.step-n')).toHaveText('3');
+  await expect(steps.nth(2).locator('.step-body')).toContainText('nadanada');
+  await expect(steps.nth(2).locator('.step-body')).toContainText('scan the QR at the airport');
+
+  // Coverage: every place in the catalogue, once each, with its cheapest shelf price (not its
+  // cheapest per-gigabyte price — Germany's cheapest entry is 1 GB at $1.99, even though 10 GB is
+  // the better deal per gigabyte).
+  const cov = page.locator('.cov-item');
+  await expect(cov).toHaveCount(3);
+  await expect(cov.filter({ hasText: 'Europe' })).toContainText('from $1.19');
+  await expect(cov.filter({ hasText: 'Global' })).toContainText('from $8.99');
+  const deItem = cov.filter({ hasText: 'Germany' });
+  await expect(deItem).toContainText('from $1.99');
+  await expect(deItem.locator('.cov-flag')).toHaveText('🇩🇪');
+
+  expect(errors).toEqual([]);
+});
+
 test('a config with no brand block renders exactly as it did before the brand existed', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
@@ -127,10 +217,11 @@ test('a config with no brand block renders exactly as it did before the brand ex
   await stubConfig(page, NOT_LAUNCHED_NO_BRAND);
 
   await page.goto('/index.html#/');
-  await expect(page.locator('#view h1')).toHaveText('Trade the coin. Fly with data.');
-  await expect(page.locator('.page-head .label')).toHaveText('MOBILE DATA, EARNED BY TRADING');
-  await expect(page.locator('.page-lede')).toContainText('A coin whose creator tax buys eSIM gigabytes');
-  await expect(page.locator('.data-explainer')).toContainText('the coin’s bonding curve');
+  // The hero itself names no brand, so it renders identically either way; only the how-it-works
+  // band's first step, which names whoever runs the curve, falls back to the generic wording.
+  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, paid for by your trades.');
+  await expect(page.locator('.step-body').first()).toContainText('the coin’s bonding curve');
+  await expect(page.locator('.step-body').first()).not.toContainText('OT+T');
   const card = page.locator('.data-notlaunched');
   await expect(card).toContainText('Not launched yet');
   await expect(card).not.toContainText('Carrier');
@@ -161,7 +252,13 @@ test('once launched, the treasury and pool are read from the chain, and a wallet
   });
 
   await page.goto('/index.html#/');
-  await expect(page.locator('#view h1')).toHaveText('Trade the coin. Fly with data.');
+  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, paid for by your trades.');
+  // With a wallet available (stubNetwork does not add one, but the redeem flow test below does;
+  // here there is none), the hero still offers to connect rather than assuming one.
+  await expect(page.locator('.hero-actions').getByRole('button', { name: 'Connect wallet' })).toBeVisible();
+  // The programme's own numbers are supporting detail, painted last — below the wallet section
+  // this visitor has not connected to yet, not beside it.
+  await expect(page.locator('#programme .section-head')).toContainText('The programme’s numbers');
   // The pool card: the Lightning wallet's balance, published, with one word on it.
   const pool = page.locator('.data-pool');
   await expect(pool).toContainText('FUNDED');

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OT+T — trade the coin, fly with data</title>
 <meta name="description" content="A memecoin whose creator tax buys mobile data. Trade OTT on Robinhood Chain and a share of what you traded comes back as eSIM gigabytes, paid for over Lightning — not a dividend for holding, a rebate for trading.">
-<meta name="theme-color" content="#07030D">
+<meta name="theme-color" content="#FFFFFF">
 <link rel="icon" href="data:,">
 <link href="fonts.css" rel="stylesheet">
 <link rel="stylesheet" href="./style.css">
@@ -15,9 +15,9 @@
 <a class="skip-link" href="#view">Skip to content</a>
 
 <header id="masthead">
-  <div class="mh-top">
-    <!-- The wordmark is also the home link, the same as whatever.fun's; "The plan" beside it still
-         earns its place because "OT+T" alone does not say what the page under it is. -->
+  <div class="mh-top wrap">
+    <!-- The wordmark is also the home link. "The plan" beside it still earns its place because
+         "OT+T" alone does not say what the page under it is. -->
     <a class="brand" href="#/" data-route="home">OT<span class="dot-fun">+</span>T</a>
     <nav id="nav" aria-label="Primary">
       <a data-route="home" href="#/">The plan</a>
@@ -40,25 +40,36 @@
 <main id="view" tabindex="-1"></main>
 
 <footer id="site-footer">
-  <div class="footer-inner">
-    <p class="foot-quote">Trade the coin. Fly with data.</p>
-    <!-- Decoration: this is set large enough to be furniture rather than text, and the real name is
-         in the meta row below, so reading both aloud would only say it twice. -->
-    <p class="foot-mark" aria-hidden="true">OT+T</p>
-    <p class="disclaimer">
-      OT+T is a phone carrier that runs on a memecoin: a creator tax on every trade funds a treasury, and
-      the treasury spends it on mobile data for the people who traded, not on a payout for the people who
-      only hold. A memecoin can go to zero, and most do. Nothing here is financial advice.
-    </p>
-    <p class="foot-links">
-      <span class="foot-name">OT+T</span>
-      <span aria-hidden="true">·</span>
-      <span id="foot-chain">Robinhood Chain · 4663</span>
-      <span aria-hidden="true">·</span>
-      <a id="foot-explorer" href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Explorer</a>
-      <span aria-hidden="true">·</span>
-      <a href="#/about">How this works</a>
-    </p>
+  <div class="footer-inner wrap">
+    <div class="foot-grid">
+      <div class="foot-brand-col">
+        <span class="foot-brand">OT+T</span>
+        <p class="foot-tagline">Trade the coin. Fly with data.</p>
+      </div>
+      <nav class="foot-col" aria-label="Programme">
+        <p class="foot-col-title">Programme</p>
+        <a href="#/">The plan</a>
+        <a href="#/status">Status</a>
+        <a href="#/about">How it works</a>
+      </nav>
+      <nav class="foot-col" aria-label="Network">
+        <p class="foot-col-title">Network</p>
+        <a id="foot-explorer" href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Explorer</a>
+        <a href="https://whatever-fun.vercel.app/#/new" target="_blank" rel="noopener">The launchpad</a>
+      </nav>
+      <nav class="foot-col" aria-label="Source">
+        <p class="foot-col-title">Source</p>
+        <a href="https://github.com/13V/ott" target="_blank" rel="noopener">The repo</a>
+      </nav>
+    </div>
+    <div class="foot-bottom">
+      <p class="disclaimer">
+        OT+T is a phone carrier that runs on a memecoin: a creator tax on every trade funds a treasury, and
+        the treasury spends it on mobile data for the people who traded, not on a payout for the people who
+        only hold. A memecoin can go to zero, and most do. Nothing here is financial advice.
+      </p>
+      <p class="foot-meta"><span id="foot-chain">Robinhood Chain · 4663</span> · © 2026 OT+T</p>
+    </div>
   </div>
 </footer>
 

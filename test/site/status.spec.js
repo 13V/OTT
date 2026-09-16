@@ -113,10 +113,11 @@ async function stubAllFresh(page, { cfg = LAUNCHED, api = API_OK } = {}) {
   await stubApiStatus(page, api);
 }
 
-// A section is its .card, found by its own heading rather than by position or by a row's text —
-// the health card also contains a row literally named "The coin", so matching on .card-title is
-// what tells the two apart.
-const cardByTitle = (page, title) => page.locator('.card').filter({ has: page.locator('.card-title', { hasText: title }) });
+// A band is its .section, found by its own heading rather than by position or by a row's text —
+// the health section also contains a row literally named "The coin", so matching on .section-head
+// is what tells the two apart. Each .section still wraps exactly one .card of content, so a
+// locator scoped to the .section also reaches everything inside that card.
+const cardByTitle = (page, title) => page.locator('.section').filter({ has: page.locator('.section-head', { hasText: title }) });
 // Matched on the row's own <b> name, not the whole row's text — "Claim keeper" and "Funding
 // keeper" both say "the coin has not launched" in their detail, which is a substring match for
 // "The coin" too if the whole row's text is searched instead of just its name.

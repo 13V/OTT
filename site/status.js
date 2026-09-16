@@ -120,9 +120,15 @@
     const has = Number.isFinite(num);
     return ctx.tile(label, has ? fmtFn(num) : '—', has ? okSub : whySub, icon);
   }
-  function cardHead(ctx, title) {
+  // Every one of the six blocks below shares the home page's own rhythm: a full-width band, a
+  // centred column, and a heading above the card rather than inside it. The card itself is kept —
+  // this is still six distinct, bordered readings, closer to a table than to a marketing page — so
+  // only where the heading lives moves, not what it says or what sits under it.
+  function section(ctx, title, card) {
     const { h } = ctx;
-    return h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, title));
+    return h('div', { class: 'section' }, h('div', { class: 'wrap' },
+      h('div', { class: 'section-head' }, h('h2', {}, title)),
+      card));
   }
   function txLink(ctx, hash) {
     const { h } = ctx;
@@ -261,13 +267,13 @@
     rows.appendChild(indexerRow(ctx, d.allow, d.allowErr));
     rows.appendChild(claimKeeperRow(ctx, launchedLocally, d.claims, d.claimsErr));
     rows.appendChild(fundKeeperRow(ctx, launchedLocally, d.fund, d.fundErr));
-    return h('div', { class: 'card status-strip' }, cardHead(ctx, 'Health'), rows);
+    return h('div', { class: 'card status-strip' }, rows);
   }
 
   // ============================================================================ 2. the coin
   function coinSection(ctx, cfg, cfgErr, launched, chain, chainErr) {
     const { h, notice } = ctx;
-    const card = h('div', { class: 'card' }, cardHead(ctx, 'The coin'));
+    const card = h('div', { class: 'card' });
     if (cfgErr) { card.appendChild(notice('site/config/esim.json could not be read (' + cfgErr + ').', 'warn')); return card; }
     if (!launched) {
       const brand = brandOf(cfg);
@@ -299,7 +305,7 @@
   // ============================================================================ 3. the pool
   function poolSection(ctx, d) {
     const { h, notice } = ctx;
-    const card = h('div', { class: 'card' }, cardHead(ctx, 'The pool'));
+    const card = h('div', { class: 'card' });
     const { treas, treasErr, api, apiErr } = d;
     if (treasErr && apiErr) {
       card.appendChild(notice('Nothing is known about the pool (data/treasury.json: ' + treasErr + '; the health check: ' + apiErr + '). Run node scripts/treasury.js.', 'warn'));
@@ -348,7 +354,7 @@
     const { h } = ctx;
     const { treas, treasErr, claims, claimsErr, fund, fundErr } = d;
     const t = treas || {};
-    const card = h('div', { class: 'card' }, cardHead(ctx, 'The treasury'));
+    const card = h('div', { class: 'card' });
     card.appendChild(h('div', { class: 'stat-grid' },
       fmtTile(ctx, 'Claimable in escrow', numOr(t.escrowClaimableUsd), fmtMoney, 'USDG waiting in the Pons fee escrow',
         treasErr ? 'data/treasury.json: ' + treasErr : 'not read yet', 'wallet'),
@@ -362,7 +368,7 @@
   // ============================================================================ 5. the programme
   function programmeSection(ctx, d) {
     const { h, notice } = ctx;
-    const card = h('div', { class: 'card' }, cardHead(ctx, 'The programme'));
+    const card = h('div', { class: 'card' });
     if (d.allowErr) {
       card.appendChild(notice('The indexer has not run yet (data/allowances.json: ' + d.allowErr + '). Run node scripts/allowances.js.', 'warn'));
       return card;
@@ -398,7 +404,7 @@
   // ============================================================================ 6. the catalogue
   function catalogueSection(ctx, cfg, cfgErr) {
     const { h, notice } = ctx;
-    const card = h('div', { class: 'card' }, cardHead(ctx, 'The catalogue'));
+    const card = h('div', { class: 'card' });
     if (cfgErr) { card.appendChild(notice('site/config/esim.json could not be read (' + cfgErr + ').', 'warn')); return card; }
     const list = packagesOf(cfg);
     if (!list.length) { card.appendChild(notice('No packages are configured yet in config/esim.json.', 'warn')); return card; }
@@ -425,7 +431,7 @@
       'The coin, the pool, the treasury, the programme and the catalogue — read straight off the same files and the same chain every other route uses, with whatever is missing named instead of hidden.');
     view.appendChild(h('div', { class: 'page-head' }, label, h('h1', {}, 'Everything, and whether it is running.'), lede));
 
-    const body = h('div', { class: 'data-page' }, notice('Reading the network…', 'plain'));
+    const body = h('div', {}, notice('Reading the network…', 'plain'));
     view.appendChild(body);
 
     try {
@@ -458,12 +464,12 @@
       }
 
       clear(body);
-      body.appendChild(healthStrip(ctx, { cfg, api, apiErr, allow, allowErr, claims, claimsErr, fund, fundErr }));
-      body.appendChild(coinSection(ctx, cfg, cfgErr, launched, chain, chainErr));
-      body.appendChild(poolSection(ctx, { treas, treasErr, api, apiErr }));
-      body.appendChild(treasurySection(ctx, launched, { treas, treasErr, claims, claimsErr, fund, fundErr }));
-      body.appendChild(programmeSection(ctx, { allow, allowErr }));
-      body.appendChild(catalogueSection(ctx, cfg, cfgErr));
+      body.appendChild(section(ctx, 'Health', healthStrip(ctx, { cfg, api, apiErr, allow, allowErr, claims, claimsErr, fund, fundErr })));
+      body.appendChild(section(ctx, 'The coin', coinSection(ctx, cfg, cfgErr, launched, chain, chainErr)));
+      body.appendChild(section(ctx, 'The pool', poolSection(ctx, { treas, treasErr, api, apiErr })));
+      body.appendChild(section(ctx, 'The treasury', treasurySection(ctx, launched, { treas, treasErr, claims, claimsErr, fund, fundErr })));
+      body.appendChild(section(ctx, 'The programme', programmeSection(ctx, { allow, allowErr })));
+      body.appendChild(section(ctx, 'The catalogue', catalogueSection(ctx, cfg, cfgErr)));
     } catch (e) {
       // Every expected failure is handled above, source by source; this is only a backstop against
       // a bug in this file itself, so the page still says something honest instead of going blank.

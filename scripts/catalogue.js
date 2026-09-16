@@ -41,6 +41,9 @@ function pick(portfolio, { regions = REGIONS, countries = COUNTRIES, sizes = SIZ
         code: b.name,
         slug: place.slug,
         name: place.name,
+        // The flag is nadanada's own, and only countries have one — the coverage grid on the site
+        // shows it beside the place, and falls back to the name alone for a region.
+        flag: place.flag || '',
         kind,
         gb,
         days: Number(b.durationInDays) || 0,

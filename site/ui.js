@@ -1,25 +1,28 @@
 'use strict';
 /**
- * whatever.fun — shared visual components: token badges, delta pills, the featured area chart
- * and its hover crosshair, sparklines, a range selector, a buy/sell pressure bar, a debounced
- * search box, a sortable table header, and the KPI stat tile. This file began as a copy of
- * ../../manna/site/ui.js (Manna's own dark trading terminal) and every export still keeps its
- * original name and signature — app.js calls them by name and silently does without one that is
- * missing — but the markup is repainted here for whatever.fun's warm paper identity instead of
- * Manna's cold one. Every export is a plain function that returns a real DOM node (SVG nodes via
+ * OT+T — shared visual components: token badges, delta pills, the featured area chart and its
+ * hover crosshair, sparklines, a range selector, a buy/sell pressure bar, a debounced search box, a
+ * sortable table header, and the KPI stat tile. This file predates the OT+T pivot (it began life on
+ * a dark trading-terminal predecessor, then a warm-paper identity, then a violet-magenta one) and
+ * every export still keeps its original name and signature — app.js calls them by name and silently
+ * does without one that is missing — but the markup is repainted here for the current light "Signal"
+ * identity. Every export is a plain function that returns a real DOM node (SVG nodes via
  * createElementNS); none of them build markup out of strings, so there is nothing here an
  * unsanitised value could break out of.
  *
  * This is a plain script, not a module — it is loaded with a bare <script src> ahead of app.js,
  * and it does not require app.js. Where a formatted string would normally come from
- * window.MANNA (Manna's lib.js, not part of this repo), a tiny local fallback stands in when
- * that global is absent, so a component still renders something sane if this file is ever opened
- * on its own.
+ * window.MANNA (an older sibling's lib.js, not part of this repo), a tiny local fallback stands in
+ * when that global is absent, so a component still renders something sane if this file is ever
+ * opened on its own.
  *
- * Everything is namespaced under the "u-" class prefix in ui.css, which reads its colours
- * straight off the tokens style.css defines on :root — paper, ink, the hairline border, Persimmon
- * as the one accent, the positive/negative pair, the mono stack — rather than inventing a second
- * palette. The export name is window.WhateverUI; app.js reads it by that name.
+ * Everything is namespaced under the "u-" class prefix in ui.css, which reads its colours straight
+ * off the tokens style.css defines on :root — --bg/--surface, --text/--text-secondary, --border,
+ * --accent, the positive/negative/warning set, the font stack, --radius-card/--radius-control —
+ * rather than inventing a second palette. The export name is window.WhateverUI; app.js reads it by
+ * that name. Of the exports below, only statTile is actually reached today (via app.js's tile()
+ * helper); the rest are kept working and on-brand for whichever future route needs a chart, a
+ * search box or a sortable table.
  */
 (function () {
   // ============================================================================ tiny fallbacks
@@ -60,25 +63,25 @@
   function hideFromAT(node) { node.setAttribute('aria-hidden', 'true'); return node; }
 
   // ============================================================================ 1. coinAvatar
-  /** Ten swatches inside the hero model's own hue range — 240 to 330 degrees, violet through
-   * magenta — so a coin badge never introduces a colour the rest of the page does not already have.
-   * The earlier set was earthy and mid-dark, chosen to sit on white paper; on a near-black ground
-   * every one of them disappeared. Each of these holds at least 4.5:1 against the white monogram it
-   * carries AND at least 3.5:1 against the page behind it, which is the pair of constraints that
-   * actually matters: legible text on a chip you can still see. Fixed rather than spun from a live
-   * hue rotation, so nothing can land on a near-accent hue and start competing with it.
+  /** Ten swatches in the current identity's own family — the accent blue and a run of muted
+   * blue-greys either side of it — so a coin badge never introduces a hue the rest of the page does
+   * not already have (no arbitrary multi-hue category colouring; see style.css's :root comment).
+   * Each of these holds at least 4.5:1 against the white monogram it carries AND at least 3.5:1
+   * against a white page behind it, which is the pair of constraints that actually matters: legible
+   * text on a chip you can still see. Fixed rather than spun from a live hue rotation, so nothing
+   * can land on the accent hue itself and start competing with it.
    */
   const AVATAR_PALETTE = [
-    '#8B5BC2', // iris
-    '#A453BF', // orchid
-    '#BA44BA', // fuchsia
-    '#BB489E', // plum
-    '#745BC2', // periwinkle
-    '#BC4C84', // rose
-    '#5B5BC2', // indigo
-    '#AD4CBC', // amethyst
-    '#995BC2', // violet
-    '#BB48AC', // magenta
+    '#3E6CC4', // mid blue
+    '#08409E', // accent-hover
+    '#5C7093', // slate
+    '#2F6690', // teal-blue
+    '#5B6169', // text-secondary
+    '#476582', // steel
+    '#3E5C86', // denim
+    '#0B57D6', // accent
+    '#345F8C', // ocean
+    '#4A5568', // graphite
   ];
   /** A short, stable hash of `str` picking one of the ten swatches above, so a symbol always
    * lands on the same badge colour without a lookup table to keep in sync with the menu. Not

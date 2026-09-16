@@ -230,21 +230,24 @@
       ? places + ' places, ' + sizesText + ' GB packages, from $' + cheapest.toFixed(2) + ' — read live from config/esim.json.'
       : 'The eSIM catalogue is not configured yet.';
 
-    const card = (title, ...text) => h('div', { class: 'card' }, h('h3', { class: 'card-title' }, title), h('p', { class: 'small', style: 'margin-top:8px' }, ...text));
+    // Prose, not cards. Five bordered boxes stacked down a page is the "cards on cards" habit every
+    // carrier site avoids: a card is for one thing that needs lifting off the page, and an article
+    // is not that. A hairline between entries and a measure the eye can actually track do the work.
+    const entry = (title, ...text) => h('section', { class: 'prose-entry' }, h('h2', { class: 'prose-title' }, title), h('p', { class: 'prose-body' }, ...text));
 
     clear(body);
-    body.appendChild(h('div', { class: 'stack' },
-      card('What OT+T is',
+    body.appendChild(h('div', { class: 'prose' },
+      entry('What OT+T is',
         'OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin. The coin trades on Robinhood Chain against a bonding curve, and its contract carries ' + taxPhrase + ' on every trade. That tax is the whole of the carrier’s revenue: it funds a treasury, and the treasury’s only job is buying mobile data.'),
-      card('How a trade becomes a gigabyte',
+      entry('How a trade becomes a gigabyte',
         'Every buy or sell against the curve, in USDG, pays the trader — not the holder — ' + rebatePhrase + ' of what they traded, banked as dollars of data credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js watches the curve’s USDG transfers and keeps a running balance per wallet in site/data/allowances.json; /api/redeem is what turns that balance into an eSIM from nadanada. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet is what actually pays nadanada for every eSIM ordered. No person sits in either loop.'),
-      card('Why the trader, and not the holder',
+      entry('Why the trader, and not the holder',
         'The tax is paid by trading, in either direction, so the rebate goes to whoever paid it. Buy and hold, and you earn once, on the way in; buy and sell repeatedly, and you earn again on every pass, because every trade paid tax. Nothing here rewards sitting still — it rewards using the market the tax is funded by.'),
-      card('What v1 deliberately leaves out',
+      entry('What v1 deliberately leaves out',
         'Two limits are fixed for now, and both are named on the programme page itself rather than hidden. Only pre-graduation trades count: the indexer watches the bonding curve’s own escrow, and once a coin graduates to a public pool, its volume stops being counted here. And only a USDG-paired coin counts at all — rebates are computed from USDG Transfer events between a wallet and the curve, and a coin paired to native ETH produces none of those, so it would earn nothing under v1.'),
-      card('The coin is the receipt',
+      entry('The coin is the receipt',
         'OTT is a bonding-curve memecoin, not equity and not a claim on the treasury. What it is a receipt for is the right to trade against the curve and be paid back for it. Holding it and never trading again is just a bet on its price, the same bet holding any memecoin is — and a memecoin can go to zero. Nothing on this site is financial advice.')));
-    body.appendChild(h('p', { class: 'small', style: 'margin-top:14px' }, catalogueText));
+    body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 
   const RENDERERS = { home: renderHome, status: renderStatus, about: renderAbout };
