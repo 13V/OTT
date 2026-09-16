@@ -83,10 +83,14 @@ async function fetchJson(url) {
 }
 
 function selfUrl(p) {
-  // VERCEL_URL is the deployment's own host (no scheme). Locally, or on another host, the two
-  // explicit env vars below are the only way to say where the files are.
-  if (!process.env.VERCEL_URL) throw new Error('no VERCEL_URL');
-  return 'https://' + process.env.VERCEL_URL + p;
+  // Where this deployment serves its own static files from. VERCEL_PROJECT_PRODUCTION_URL is the
+  // project's production domain and is preferred, because VERCEL_URL is the *deployment's* host —
+  // and a project with deployment protection turned on answers 401 there, even to itself, which
+  // is exactly how this was found. Locally, or on another host, the explicit env overrides
+  // (ESIM_CONFIG_URL, ALLOWANCES_URL) are the only way to say where the files are.
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (!host) throw new Error('no VERCEL_PROJECT_PRODUCTION_URL or VERCEL_URL');
+  return 'https://' + host + p;
 }
 
 async function readConfig() {
