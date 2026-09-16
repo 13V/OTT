@@ -15,6 +15,8 @@
  *     `true` refuses every top-up purchase, an ICCID string refuses only that profile's, and ''
  *     (the default) refuses none. state.wrongTopupIccid, when set, echoes that ICCID instead of the
  *     one actually asked for — a nadanada bug (or a test of the guard against paying for it).
+ *     state.omitTopupIccid, when true, answers a top-up quote with no iccid field at all — the
+ *     same bug, in the shape "forgot to say" rather than "said the wrong thing".
  *   - POST /esim/{iccid}/complete is the same 402/404 as /esim/complete, plus 403 when the payment
  *     hash names a checkout for a different ICCID, and 200 with only { iccid, bundleName, toppedUp }
  *     — no installationDetails, because the profile is already on the phone.
@@ -61,7 +63,7 @@ const round2 = (x) => Math.round(x * 100) / 100;
 function start({ mockPayer, catalogue = CATALOGUE } = {}) {
   const state = {
     checkouts: new Map(), seq: 1, tamper: '', settleAfterCalls: 0, expirySeconds: 3600,
-    refuseTopup: '', wrongTopupIccid: '', hostileInstall: false, log: [],
+    refuseTopup: '', wrongTopupIccid: '', omitTopupIccid: false, hostileInstall: false, log: [],
   };
 
   /** A quote for `bundleName`/`slug`, against `targetIccid` (a top-up) or '' (a fresh eSIM). */
@@ -87,7 +89,7 @@ function start({ mockPayer, catalogue = CATALOGUE } = {}) {
       originalPrice: c.price, price, paymentMethod: 'lightning', paymentHash, paymentRequest,
       expiresAt: new Date((now + state.expirySeconds) * 1000).toISOString(),
     };
-    if (targetIccid) data.iccid = quotedIccid;
+    if (targetIccid && !state.omitTopupIccid) data.iccid = quotedIccid;
     return { status: 200, body: { success: true, data } };
   }
 
