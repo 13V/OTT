@@ -23,7 +23,7 @@
   "test:fund": "node test/fund.test.js",
   "test:catalogue": "node test/catalogue.test.js",
   "test:status": "node test/status.test.js",
-  "test": "node test/week.test.js && node test/allowances.test.js && node test/redeem.test.js && node test/esimaccess.test.js && node test/bolt11.test.js && node test/store.test.js && node test/nadanada.test.js && node test/redeem-nadanada.test.js && node test/fund.test.js && node test/catalogue.test.js && node test/status.test.js && node test/treasury.test.js",
+  "test": "node test/week.test.js && node test/allowances.test.js && node test/redeem.test.js && node test/esimaccess.test.js && node test/bolt11.test.js && node test/store.test.js && node test/nadanada.test.js && node test/redeem-nadanada.test.js && node test/fund.test.js && node test/catalogue.test.js && node test/status.test.js && node test/treasury.test.js && node test/loop.test.js",
   "claim": "node scripts/claim.js",
   "fund": "node scripts/fund.js",
   "treasury": "node scripts/treasury.js",
