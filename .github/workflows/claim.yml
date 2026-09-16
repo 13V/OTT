@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: data-refresh
@@ -25,7 +26,13 @@ concurrency:
 jobs:
   claim:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # scripts/fund.js waits up to 10 minutes by default for FixedFloat to settle (DEFAULTS.waitMs
+    # in that file), which alone was two-thirds of the old 15-minute budget and left ~5 minutes for
+    # checkout, npm install, the claim itself, the treasury refresh and the commit/push — too tight,
+    # and the kind of failure (timeout-minutes cancellation) that skips every later step including
+    # the keeper-failure alert below, so it would have shown as nothing but a red run. 30 minutes
+    # matches data.yml and gives real headroom above fund.js's own wait.
+    timeout-minutes: 30
     env:
       HAS_KEY: ${{ secrets.TREASURY_PRIVATE_KEY != '' }}
       HAS_FUND: ${{ secrets.FIXEDFLOAT_API_KEY != '' && secrets.FIXEDFLOAT_API_SECRET != '' && secrets.BLINK_API_KEY != '' && secrets.TREASURY_PRIVATE_KEY != '' }}
@@ -36,7 +43,15 @@ jobs:
         with:
           node-version: '22'
 
+      # The cheapest check there is (scripts/lint.js): every script parses, every config is JSON.
+      # No continue-on-error here on purpose — a syntactically broken script should stop the run
+      # before it claims, funds or touches the treasury file, not get logged and quietly ignored
+      # like the keeper steps below.
+      - name: Lint
+        run: node scripts/lint.js
+
       - name: Claim
+        id: claim
         if: env.HAS_KEY == 'true'
         continue-on-error: true
         env:
@@ -48,6 +63,7 @@ jobs:
         run: echo "TREASURY_PRIVATE_KEY is not set; nothing claimed"
 
       - name: Fund the pool
+        id: fund
         if: env.HAS_FUND == 'true'
         continue-on-error: true
         env:
@@ -62,6 +78,7 @@ jobs:
         run: echo "TREASURY_PRIVATE_KEY, BLINK_API_KEY or FIXEDFLOAT_API_KEY is not set; nothing funded"
 
       - name: Refresh treasury
+        id: treasury
         continue-on-error: true
         env:
           ESIM_PROVIDER: nadanada
@@ -69,6 +86,61 @@ jobs:
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
         run: node scripts/treasury.js
+
+      # Claim, Fund and Refresh treasury are all continue-on-error, so the job goes green whatever
+      # actually happened — a claim that reverts, a swap that never lands, an indexer refusing a
+      # bad curve, none of that raises anything on its own. steps.<id>.outcome is each step's real
+      # result from before continue-on-error rewrote its conclusion to "success"; that is what this
+      # reads, never .conclusion, which is exactly the field continue-on-error overwrites to hide
+      # the failure. A step skipped by its own `if` (no key configured) reports outcome "skipped",
+      # not "failure", so an intentionally-unconfigured keeper never trips this.
+      #
+      # This still cannot see everything: a job killed by timeout-minutes is a hard cancellation
+      # that skips every later step, this one included, so that failure mode still only shows up
+      # as a red run rather than an issue — there is no step-level hook that runs after a timeout.
+      - name: Alert if a keeper failed
+        id: keeper_alert
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME_CLAIM: ${{ steps.claim.outcome }}
+          OUTCOME_FUND: ${{ steps.fund.outcome }}
+          OUTCOME_TREASURY: ${{ steps.treasury.outcome }}
+        run: |
+          names=("Claim" "Fund the pool" "Refresh treasury")
+          outcomes=("$OUTCOME_CLAIM" "$OUTCOME_FUND" "$OUTCOME_TREASURY")
+          frozen=(
+            "no tax was swept from Pons's fee escrow into the treasury today — the escrow keeps holding it, and may now hold more than a day's worth until the next successful claim."
+            "the Lightning pool was not topped up from the treasury today — site/data/funding.json still reflects the last successful top-up, and the pool is that much closer to running dry."
+            "site/data/treasury.json was not refreshed after today's claim/fund — the pool card can show a stale balance, runway and status."
+          )
+          failed=()
+          detail=""
+          for i in "${!names[@]}"; do
+            if [ "${outcomes[$i]}" = "failure" ]; then
+              failed+=("${names[$i]}")
+              detail="$detail- **${names[$i]}**: ${frozen[$i]}"$'\n'
+            fi
+          done
+          if [ ${#failed[@]} -eq 0 ]; then
+            echo "no keeper step failed this run"
+            exit 0
+          fi
+          list=""
+          for n in "${failed[@]}"; do
+            if [ -z "$list" ]; then list="$n"; else list="$list, $n"; fi
+          done
+          echo "failed step(s): $list"
+          gh label create keeper --color B60205 --description "a keeper step failed behind continue-on-error" --force >/dev/null 2>&1 || true
+          open=$(gh issue list --label keeper --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then
+            echo "an issue is already open"
+            exit 0
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="This run of **claim** had step(s) fail: $list."$'\n\n'"$detail"$'\n'"Run: $run_url"$'\n\n'"Every step above is \`continue-on-error: true\`, so the job itself still finished green — this issue is the only signal that something did not actually complete. Close it once the cause is fixed; the next failure opens a new one."
+          gh issue create --title "Keeper: $list failed in claim" --label keeper --body "$body"
 
       - name: Commit if anything changed
         run: |
@@ -80,4 +152,43 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "data: claim + fund + treasury"
-          git push
+
+          # No fetch/rebase before this commit means a PR merging to main between checkout and here
+          # leaves the remote moved by the time we get here, and a bare `git push` just fails. That
+          # is a one-run-old commit for data.yml, but this file's commit is an append-only claim/fund
+          # log written once a day — a lost push here is that whole day's log gone for good, not
+          # superseded by the next run. Fetch, rebase onto the remote and retry with backoff instead.
+          # site/data/*.json are all generated by this same run, so on a rebase conflict there the
+          # side worth keeping is this run's own output — which, during a rebase, git calls "theirs"
+          # (the branch being replayed), not "ours" (the upstream tip being replayed onto); see the
+          # NOTES section of git-rebase(1).
+          branch="${GITHUB_REF_NAME:-main}"
+          pushed=0
+          for attempt in 1 2 3 4 5; do
+            echo "push attempt $attempt/5"
+            if ! git fetch origin "$branch"; then
+              echo "fetch failed, will retry"
+            elif ! git rebase "origin/$branch"; then
+              conflicts=$(git diff --name-only --diff-filter=U)
+              other=$(printf '%s\n' "$conflicts" | grep -v -E '^site/data/.*\.json$' || true)
+              if [ -n "$conflicts" ] && [ -z "$other" ]; then
+                echo "$conflicts" | xargs -r git checkout --theirs --
+                git add site/data/*.json
+                GIT_EDITOR=true git rebase --continue
+              else
+                echo "rebase conflict outside site/data/*.json, not auto-resolving:"
+                printf '%s\n' "$conflicts"
+                git rebase --abort || true
+              fi
+            fi
+            if git push origin "HEAD:$branch"; then
+              pushed=1
+              break
+            fi
+            echo "push rejected, will retry"
+            sleep $((attempt * 10))
+          done
+          if [ "$pushed" != "1" ]; then
+            echo "could not push after 5 attempts"
+            exit 1
+          fi
