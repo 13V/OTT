@@ -224,6 +224,35 @@ test('a second region is a second eSIM, each labelled by where it works', async 
   expect(errors).toEqual([]);
 });
 
+test('a pool that cannot cover the week says so before the button, not after', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
+  stubNetwork(page, { calls: CALLS });
+  await stubConfig(page); await stubAllowances(page); await stubWallet(page);
+
+  // $20 of allowance against a pool holding $6.20. The budget comes from tax collected on chain,
+  // which has no ceiling; the pool is moved across by a keeper once a day. A holder is owed that
+  // fact up front rather than a failed order.
+  await page.route('**/data/treasury.json', (r) => r.fulfill({ status: 404, body: 'none' }));
+  await page.route('**/api/redeem**', (r) => r.fulfill(json(standing({ poolUsd: 6.2 }))));
+  await page.goto('/index.html#/');
+  const mine = page.locator('.data-mine');
+  await expect(mine).toContainText(ADDR);
+  await expect(mine).toContainText('The data pool holds $6.20 just now, less than the $20.00 you have left this week');
+  await expect(mine).toContainText('topped up');
+  // The plan picker is still there: smaller plans genuinely do go through.
+  await expect(mine.locator('.data-redeem')).toHaveCount(1);
+
+  // A pool that covers it says nothing at all, and neither does one it could not read.
+  for (const pool of [400, null]) {
+    await page.route('**/api/redeem**', (r) => r.fulfill(json(standing({ poolUsd: pool }))));
+    await page.reload();
+    await expect(page.locator('.data-mine')).toContainText(ADDR);
+    await expect(page.locator('.data-mine')).not.toContainText('The data pool holds');
+  }
+  expect(errors).toEqual([]);
+});
+
 test('the picker says whether a plan tops up an eSIM or issues one, before anything is spent', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));

@@ -149,6 +149,19 @@ function foldBalances(logs) {
   for (const [addr, bal] of balances) {
     if (bal === 0n) balances.delete(addr);
   }
+  // A balance cannot be negative, so one that is proves a Transfer INTO that address was never
+  // seen — the only way a token can be sent that was never received. That matters far past the one
+  // wallet: a negative balance is added into `circulating` like any other, shrinking the
+  // denominator every share is divided by, so one missing log inflates every OTHER holder's
+  // allowance in the same run. It is caught here because the alternative is a ledger that looks
+  // entirely plausible and is wrong for everyone.
+  const negative = [...balances].filter(([, bal]) => bal < 0n);
+  if (negative.length) {
+    const e = new Error(`${negative.length} address(es) fold to a negative balance, starting with ${negative[0][0]} at ${negative[0][1]}; `
+      + 'a Transfer was missed, so this scan is incomplete and the shares computed from it would be wrong for everyone');
+    e.incompleteScan = true;
+    throw e;
+  }
   return balances;
 }
 
@@ -309,6 +322,25 @@ async function firstBlockAtOrAfter(rpc, ts, head) {
  * binary-searched against block timestamps instead (firstBlockAtOrAfter), so there is no range
  * limit to argue with, just about 20-something eth_getBlockByNumber calls.
  */
+/*
+ * There is no totalSupply() cross-check here, and the reason is worth writing down because it is
+ * the obvious next guard and it does not work on this chain.
+ *
+ * The fold covers blocks launch..snapshot, so the number to compare it against is the supply AT
+ * the snapshot block — and these endpoints do not honour a historical block tag, which is the very
+ * reason this file reconstructs balances from logs instead of asking balanceOf at a past block in
+ * the first place. A totalSupply() call tagged at the snapshot quietly answers with the supply as
+ * it stands now, so any mint or burn since the boundary would read as a mismatch and refuse to
+ * publish a ledger that is perfectly correct. A guard that fails on healthy input is worse than
+ * no guard: it would be turned off within a week and the real check would go with it.
+ *
+ * What the fold can prove about itself, it proves — see foldBalances(), where a negative balance
+ * is caught. That catches the case that actually corrupts everyone's share: a missed mint makes
+ * one address negative, and a negative balance shrinks `circulating`, which is the denominator
+ * every holder's allowance is divided by. A missed transfer BETWEEN two holders leaves the total
+ * untouched and only those two wallets wrong, which is bad but is not systemic.
+ */
+
 async function launchBlock({ rpc, factory, coin, curve, head, log = () => {} }) {
   try {
     const logs = await rpc('eth_getLogs', [{ address: factory, topics: [LAUNCHED, pad(coin)], fromBlock: '0x0', toBlock: hex(head) }]);

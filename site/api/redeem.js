@@ -43,8 +43,11 @@
  * calls indefinitely; a wallet's allowance, being a share of one week's budget, makes 200 orders in
  * a single week implausible on its own, but the cap holds regardless.
  *
- * Sign-in is a personal_sign over "OT+T data\n<lowercase address>\n<unix seconds>", good
- * for ten minutes. It proves control of the wallet without a session, a cookie, or a nonce store.
+ * Sign-in is a personal_sign over a short labelled message, good for ten minutes, which proves
+ * control of the wallet without a session, a cookie, or a nonce store — and which names the action
+ * it authorises, so it proves rather more than that. A redemption's message carries the plan and
+ * the slot; a read's carries neither and cannot redeem. See checkMessage() for why that is the
+ * line that matters and binding the site alone would not have been.
  *
  * Idempotence: a redeem names the slot it means to fill this week, `n`. If that slot is already
  * filled with the same package, the existing order comes back and nothing is minted — so a

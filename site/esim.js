@@ -659,6 +659,24 @@
         + (fmtDate(publishedWeekEnd) || 'last week') + '. A fresh file is written every half hour.', 'plain'));
     }
 
+    // An allowance is a claim on a pool, and the pool can be behind it — the week's budget comes
+    // from tax collected on chain, which has no ceiling, while the money that actually pays for
+    // eSIMs is moved across by a keeper once a day. A holder is owed the truth about that before
+    // they press a button, not a failed order afterwards. `poolUsd` is up to half an hour old and
+    // null when the treasury file could not be read, so this only ever speaks when it is sure.
+    // Not Number(standing.poolUsd): the API sends null when the treasury file could not be read,
+    // and Number(null) is 0 — which would turn "we cannot tell" into "the pool is empty" and warn
+    // every holder on the strength of a file that simply was not there.
+    const poolRaw = standing == null ? undefined : standing.poolUsd;
+    const poolUsd = poolRaw === null || poolRaw === undefined ? NaN : Number(poolRaw);
+    const shortfall = Number.isFinite(poolUsd) && standing && Number.isFinite(standing.remainingUsd)
+      && standing.remainingUsd > 0 && poolUsd < standing.remainingUsd;
+    if (shortfall) {
+      body.appendChild(notice('The data pool holds ' + fmtMoney(poolUsd) + ' just now, less than the '
+        + fmtMoney(standing.remainingUsd) + ' you have left this week. Smaller plans will go through; the pool is topped up '
+        + 'from the treasury once a day, so the rest should clear shortly.', 'warn'));
+    }
+
     if (!(tokens > 0)) {
       body.appendChild(notice('This wallet holds no OTT, so it has no data this week.', 'plain'));
       body.appendChild(h('div', { class: 'data-actions' },
