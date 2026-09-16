@@ -70,7 +70,14 @@ jobs:
           echo "treasury status: $status (coin: ${coin:-not launched})"
           # Before launch day there is no pool to be low; an empty reseller balance is expected.
           if [ -z "$coin" ]; then exit 0; fi
-          if [ "$status" != "low" ] && [ "$status" != "empty" ]; then exit 0; fi
+          # "unknown" means the pool could not be read at all, and that is alertable too — it is
+          # not the quiet, healthy case it looks like. The balance is read through BLINK_API_KEY,
+          # which is the same secret the funding keeper needs, so a revoked or expired key stops
+          # the top-ups AND blanks the only number that would have raised the alarm. Silence in
+          # exactly the scenario the alarm exists for is the one failure the pool cannot survive,
+          # so a pool that cannot be read is treated as a pool in trouble.
+          unreadable=$(node -e "try{const t=require('./site/data/treasury.json');const r=t.reseller||{};console.log(t.status==='unknown'&&r.error?'yes':'no')}catch(e){console.log('no')}")
+          if [ "$status" != "low" ] && [ "$status" != "empty" ] && [ "$unreadable" != "yes" ]; then exit 0; fi
           gh label create treasury --color D93F0B --description "the data pool needs topping up" --force >/dev/null 2>&1 || true
           open=$(gh issue list --label treasury --state open --json number --jq 'length')
           if [ "$open" != "0" ]; then echo "an issue is already open"; exit 0; fi
@@ -86,10 +93,12 @@ jobs:
               '- Claimable in the Pons escrow: ' + (t.escrowClaimableUsd == null ? 'unknown' : '$' + t.escrowClaimableUsd.toFixed(2)),
               '- Treasury wallet: ' + (t.walletUsd == null ? 'unknown' : '$' + t.walletUsd.toFixed(2) + ' USDG'),
               '',
-              'scripts/fund.js tops the pool up from the treasury once a day; if it is still low, check site/data/funding.json and the FixedFloat order it names, and the status dashboard.',
+              (r.error ? 'The balance could not be read: ' + r.error + '. That is usually BLINK_API_KEY — and note it is the same secret scripts/fund.js needs, so the top-ups have almost certainly stopped too.' : 'scripts/fund.js tops the pool up from the treasury once a day; if it is still low, check site/data/funding.json and the FixedFloat order it names.'),
             ].join('\\n'));
           ")
-          gh issue create --title "Treasury: the data pool is $status" --label treasury --body "$body"
+          title="Treasury: the data pool is $status"
+          if [ "$unreadable" = "yes" ]; then title="Treasury: the data pool cannot be read"; fi
+          gh issue create --title "$title" --label treasury --body "$body"
 
       - name: Commit if anything changed
         run: |

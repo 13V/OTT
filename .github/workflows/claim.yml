@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 15
     env:
       HAS_KEY: ${{ secrets.TREASURY_PRIVATE_KEY != '' }}
-      HAS_FUND: ${{ secrets.FIXEDFLOAT_API_KEY != '' && secrets.BLINK_API_KEY != '' && secrets.TREASURY_PRIVATE_KEY != '' }}
+      HAS_FUND: ${{ secrets.FIXEDFLOAT_API_KEY != '' && secrets.FIXEDFLOAT_API_SECRET != '' && secrets.BLINK_API_KEY != '' && secrets.TREASURY_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +38,7 @@ jobs:
 
       - name: Claim
         if: env.HAS_KEY == 'true'
+        continue-on-error: true
         env:
           PRIVATE_KEY: ${{ secrets.TREASURY_PRIVATE_KEY }}
         run: node scripts/claim.js
