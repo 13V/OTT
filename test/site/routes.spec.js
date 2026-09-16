@@ -14,7 +14,7 @@ const { test, expect } = pwTest;
 const { stubNetwork } = require('./support/network.js');
 
 const PAGES = [
-  { hash: '#/', heading: 'Mobile data in 28 places, paid for by your trades.', title: 'OT+T — trade the coin, fly with data' },
+  { hash: '#/', heading: 'Mobile data in 28 places, just for holding OTT.', title: 'OT+T — hold the coin, fly with data' },
   { hash: '#/status', heading: 'Everything, and whether it is running.', title: 'Status — OT+T' },
   { hash: '#/about', heading: 'How this works', title: 'How this works — OT+T' },
 ];
@@ -38,8 +38,8 @@ test('an unknown hash falls back to home', async ({ page }) => {
   stubNetwork(page);
 
   await page.goto('/index.html#/nowhere');
-  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, paid for by your trades.');
-  await expect(page).toHaveTitle('OT+T — trade the coin, fly with data');
+  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, just for holding OTT.');
+  await expect(page).toHaveTitle('OT+T — hold the coin, fly with data');
   await expect(page.locator('#nav a[data-route="home"]')).toHaveClass(/active/);
   expect(errors).toEqual([]);
 });

@@ -3,22 +3,27 @@
  * OT+T — the home route (#/): a carrier landing page, not a config dump.
  *
  * One coin on Pons carries a creator tax, and that tax goes to a treasury. What the treasury buys
- * with it is mobile data: every trade against the coin's bonding curve earns the TRADER a rebate
- * of rebateBps of what they traded, banked as dollars of data credit — earnedUsd = tradedUsd ×
- * rebateBps / 10000 — and spent later on eSIMs from nadanada, in 1, 5 or 10 GB sizes across a few
- * dozen places, paid for over Lightning. A gigabyte's price depends on where you buy it and how
- * much of it you buy at once — a 10 GB package is a far better per-gigabyte deal than a 1 GB one —
- * so credit is banked in dollars rather than gigabytes, and the page says so instead of hiding it
- * in a unit. The accounting is done off chain by scripts/allowances.js, which writes
- * site/data/allowances.json; the handing out of a profile is done by /api/redeem, because it costs
- * money and needs a secret. This file is the page between the two.
+ * with it is mobile data: every week, the tax the coin collected LAST week becomes THIS week's data
+ * budget, and a wallet's allowance is its share of the circulating supply times that budget —
+ * allowanceUsd = (tokens ÷ circulating) × budgetUsd — banked as dollars of data credit and spent on
+ * eSIMs from nadanada, in 1, 5 or 10 GB sizes across a few dozen places, paid for over Lightning.
+ * Holding is the whole mechanism: there is no claim to file and no trade to make. The allowance
+ * expires at the end of the week it was published for — use it or lose it, which is what keeps the
+ * promise affordable, since the pool never owes more than one week of tax it has already collected.
+ * A gigabyte's price depends on where you buy it and how much of it you buy at once — a 10 GB
+ * package is a far better per-gigabyte deal than a 1 GB one — so credit is banked in dollars rather
+ * than gigabytes, and the page says so instead of hiding it in a unit. The accounting is done off
+ * chain by scripts/allowances.js, which writes site/data/allowances.json once a week's tax is
+ * known; the handing out of a profile is done by /api/redeem, because it costs money and needs a
+ * secret. This file is the page between the two.
  *
  * The page reads top to bottom the way a carrier's does: a hero with the offer, a row of checkable
- * facts, the plan catalogue with a place picker (the actual product), how a trade turns into an
- * eSIM, the full coverage list, the visitor's own wallet and orders, and — last, as supporting
- * detail rather than the headline — the programme's own chain numbers. Every section but the
- * wallet panel and the live numbers reads from config/esim.json alone, so the page is not empty
- * before the coin launches; only the wallet panel and the chain numbers need a launched coin.
+ * facts, the plan catalogue with a place picker (the actual product), how holding turns into an
+ * eSIM, the full coverage list, the visitor's own wallet — what it holds and what that buys this
+ * week, which is the one screen a holder actually lives on — and last, as supporting detail rather
+ * than the headline, the programme's own chain numbers. Every section but the wallet panel and the
+ * live numbers reads from config/esim.json alone, so the page is not empty before the coin launches;
+ * only the wallet panel and the chain numbers need a launched coin.
  *
  * It is a route module in the same sense site/launch.js is a signing module: app.js owns the
  * router, the RPC rotation, the wallet flow and the DOM helper, and hands them in as `ctx` — so
@@ -32,9 +37,11 @@
  * route its numbers and no other route anything. Every failure path is a notice in the page; the
  * only thing that throws is a bug.
  *
- * v1 is deliberately narrow: pre-graduation only, and USDG-paired only. Volume is counted from
- * USDG Transfer events between the wallet and the curve; a coin paired to native ETH has no such
- * events, so its trades could not be counted this way and the page says so rather than guessing.
+ * v1 is deliberately narrow: pre-graduation only, and USDG-paired only. The tax the budget is built
+ * from is read off the curve's own fee escrow in USDG; a coin paired to native ETH collects its tax
+ * in ETH instead, so v1 cannot price a dollar budget from it, and the page says so rather than
+ * guessing. Once a coin graduates, trading moves off the curve entirely, so no further tax accrues
+ * against it — a graduated coin's holders keep whatever budget is already funded, and nothing after.
  */
 (function () {
   const SEL = {
@@ -50,6 +57,7 @@
   const MESSAGE_HEAD = 'OT+T data';
   const ZERO = '0x0000000000000000000000000000000000000000';
   const USDG_DECIMALS = 6;
+  const LAUNCHPAD_URL = 'https://whatever-fun.vercel.app/#/new';
 
   // ============================================================================ small helpers
   const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
@@ -69,6 +77,35 @@
   const fmtPct = (bps) => (Number.isFinite(bps) ? (bps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%' : '—');
   // A price from the catalogue: "$0.62". Two decimals, like a shelf label.
   const fmtPrice = (n) => (Number.isFinite(n) ? '$' + n.toFixed(2) : '—');
+  // A token balance, human-scaled: thousands separators, at most two decimals — the same tabular
+  // treatment the design system gives any balance, never the raw base-unit integer a wallet
+  // actually holds on chain.
+  const fmtTokens = (n) => (Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—');
+  // A share of supply, with enough significant figures to mean something for a small holder: 0.15%
+  // is fine at two decimals, but a wallet holding a sliver of the supply would round to "0.00%" at
+  // that same precision and read as holding nothing. Three significant figures, placed adaptively.
+  function fmtSharePct(share) {
+    const s = Number(share);
+    if (!Number.isFinite(s) || s < 0) return '—';
+    if (s === 0) return '0%';
+    const pct = s * 100;
+    const digits = pct >= 100 ? 0 : Math.min(6, Math.max(0, 2 - Math.floor(Math.log10(pct))));
+    return pct.toFixed(digits) + '%';
+  }
+  // tokens/circulating arrive as decimal strings of base units — too large to trust to a JS number
+  // until BigInt has parsed them exactly — alongside a `decimals` figure. Converted to a human-scale
+  // float only at the end, the same precision trade the chain-word units() below already makes.
+  function unitsFromDecimalStr(s, decimals) {
+    try { return Number(BigInt(String(s === null || s === undefined ? '0' : s))) / Math.pow(10, Number(decimals) || 0); }
+    catch (e) { return NaN; }
+  }
+  // A short date — "Sep 15, 2026" — the one format every route in this programme uses for a week.
+  function fmtDate(sec) {
+    const n = Number(sec);
+    if (!Number.isFinite(n)) return null;
+    const d = new Date(n * 1000);
+    return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
   const packagesOf = (cfg) => (Array.isArray(cfg.packages) ? cfg.packages : []).filter((p) => p && p.code && Number(p.priceUsd) > 0 && Number(p.gb) > 0);
   // A package's price per gigabyte — what actually makes one package a better deal than another,
   // now that a place sells more than one size. "Cheapest"/"dearest" mean cheapest and dearest BY
@@ -77,8 +114,8 @@
   const perGb = (p) => Number(p.priceUsd) / (Number(p.gb) || 1);
   const cheapest = (cfg) => packagesOf(cfg).reduce((m, p) => (m && perGb(m) <= perGb(p) ? m : p), null);
   const dearest = (cfg) => packagesOf(cfg).reduce((m, p) => (m && perGb(m) >= perGb(p) ? m : p), null);
-  // The cheapest package to just buy, in dollars — "from $0.99" is a shelf price a trader with a
-  // small balance can actually afford, not a unit price nobody redeems at exactly.
+  // The cheapest package to just buy, in dollars — "from $0.99" is a shelf price a small holder can
+  // actually afford, not a unit price nobody redeems at exactly.
   const cheapestEntry = (cfg) => packagesOf(cfg).reduce((m, p) => (m && m.priceUsd <= p.priceUsd ? m : p), null);
   const packageByCode = (cfg, code) => packagesOf(cfg).find((p) => p.code === code || p.packageCode === code) || null;
   const packageLabel = (p) => p.name + ' · ' + (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days';
@@ -117,13 +154,38 @@
     if (!hi || hi === lo) return '≈ ' + a + ' GB (' + lo.name + ')';
     return '≈ ' + a + ' GB ' + lo.name + ' · ' + Math.floor(usd / perGb(hi)) + ' GB ' + hi.name;
   }
-  // What a package actually costs a trader in trades, not dollars: priceUsd ÷ the rebate rate is
-  // the volume they need to have traded to have earned that many dollars of credit. null when the
-  // rebate rate is not configured, rather than a division that quietly claims 0% funds everything.
-  function volumeFor(cfg, priceUsd) {
-    const bps = Number(cfg.rebateBps) || 0;
-    if (!bps || !Number.isFinite(priceUsd)) return null;
-    return priceUsd / (bps / 10000);
+  // How many OTT a wallet would need to hold, THIS week, to cover one package — the honest
+  // successor to "how much you'd have needed to trade": allowanceUsd(tokens) = (tokens ÷
+  // circulating) × budgetUsd, solved for tokens. null before the week's budget or the circulating
+  // supply is known (before launch, or a week with no tax yet), rather than a division that
+  // quietly claims a $0 budget covers everything.
+  function tokensToCover(allow, priceUsd) {
+    if (!allow || !Number.isFinite(priceUsd)) return null;
+    const budgetUsd = Number(allow.budgetUsd);
+    const circulating = unitsFromDecimalStr(allow.circulating, allow.decimals);
+    if (!(budgetUsd > 0) || !(circulating > 0)) return null;
+    return priceUsd * circulating / budgetUsd;
+  }
+  // Week arithmetic — identical to scripts/allowances.js and site/api/redeem.js, so "this week"
+  // never means a different Monday on two ends of the same wire. Weeks start Monday: ANCHOR is
+  // Mon 5 Jan 1970 00:00 UTC.
+  const WEEK_S = 604800;
+  const ANCHOR = 345600;
+  const weekOf = (unixSeconds) => Math.floor((unixSeconds - ANCHOR) / WEEK_S);
+  const weekStartOf = (w) => ANCHOR + w * WEEK_S;
+  const weekEndOf = (w) => weekStartOf(w) + WEEK_S;
+  // "3d 14h" — days and hours, the way the founder asked for it, narrowing to minutes once under an
+  // hour so the last stretch of a week does not read as "0h" and look broken.
+  function fmtCountdown(weekEndSec) {
+    const ms = Number(weekEndSec) * 1000 - Date.now();
+    if (!Number.isFinite(ms)) return '—';
+    if (ms <= 0) return 'any moment';
+    const totalMin = Math.ceil(ms / 60000);
+    const days = Math.floor(totalMin / 1440);
+    const hours = Math.floor((totalMin % 1440) / 60);
+    if (days > 0) return days + 'd ' + hours + 'h';
+    if (hours > 0) return hours + 'h ' + (totalMin % 60) + 'm';
+    return totalMin + 'm';
   }
   const units = (big, decimals) => Number(big) / Math.pow(10, decimals);
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
@@ -243,12 +305,19 @@
     }
     cfg = cfg || {};
     const launched = isAddress(cfg.coin) && isAddress(cfg.curve) && isAddress(cfg.treasury);
-    const rebateBps = Number(cfg.rebateBps) || 0;
 
-    // These four read config/esim.json only, so they render the same whether or not a coin has
-    // launched — which matters, because "not launched" is the state a first-time visitor sees.
+    // This week's budget and the circulating supply, read once and handed to whichever band can
+    // use them — the plan cards' "OTT to cover this" line needs them just as much as the wallet
+    // panel does, and a missing or not-yet-published file costs both the same way: the figure that
+    // needed it is left out rather than guessed at.
+    let allow = null;
+    try { allow = await loadJson('./data/allowances.json'); } catch (e) { allow = null; }
+
+    // These three read config/esim.json (and, for the plan cards' meta line, the allowances file)
+    // alone, so they render the same whether or not a coin has launched — which matters, because
+    // "not launched" is the state a first-time visitor sees.
     view.appendChild(trustRow(ctx, cfg));
-    view.appendChild(plansSection(ctx, cfg));
+    view.appendChild(plansSection(ctx, cfg, allow));
     view.appendChild(howItWorks(ctx, cfg));
     view.appendChild(coverageSection(ctx, cfg));
 
@@ -259,7 +328,7 @@
 
     const mine = h('div', { class: 'card data-mine' });
     view.appendChild(h('div', { class: 'section', id: 'your-data' }, h('div', { class: 'wrap' }, mine)));
-    refresh.mine = () => paintMine(ctx, cfg, mine);
+    refresh.mine = () => paintMine(ctx, cfg, allow, mine);
     // The wallet panel and the treasury numbers do not wait for each other: a slow RPC should not
     // hold up a balance that comes from a static file, and vice versa.
     refresh.mine();
@@ -268,7 +337,7 @@
     view.appendChild(h('div', { class: 'section', id: 'programme' }, h('div', { class: 'wrap' },
       h('div', { class: 'section-head' }, h('h2', {}, 'The programme’s numbers')),
       numbers)));
-    await paintNumbers(ctx, cfg, rebateBps, numbers);
+    await paintNumbers(ctx, cfg, numbers);
   }
 
   // A section with no header of its own — used for the two single-card fallbacks (config missing,
@@ -280,12 +349,12 @@
 
   // ============================================================================ 1. hero
   /**
-   * One headline (the offer, not the mechanism — "trade the coin" is the how, and it belongs
-   * further down), one sub-line, and two actions: the primary one either jumps to the plans a
-   * visitor with a wallet is here for, or offers to connect one for a visitor who has none yet, so
-   * connecting from the hero is not a dead end — `refresh.mine` (set once the wallet panel below
-   * exists) repaints it with the freshly connected address instead of leaving the page to say
-   * "Connect a wallet" under a wallet that is now connected.
+   * One headline (the offer, not the mechanism — the how belongs further down), one sub-line, and
+   * two actions: the primary one either jumps to the plans a visitor with a wallet is here for, or
+   * offers to connect one for a visitor who has none yet, so connecting from the hero is not a dead
+   * end — `refresh.mine` (set once the wallet panel below exists) repaints it with the freshly
+   * connected address instead of leaving the page to say "Connect a wallet" under a wallet that is
+   * now connected.
    */
   function hero(ctx, refresh) {
     const { h } = ctx;
@@ -300,16 +369,16 @@
         } }, 'Connect wallet');
     return h('div', { class: 'section hero' }, h('div', { class: 'wrap' },
       h('div', { class: 'hero-copy' },
-        h('h1', { class: 'hero-title' }, 'Mobile data in 28 places, paid for by your trades.'),
-        h('p', { class: 'hero-sub' }, 'A rebate on every trade, banked as credit for an eSIM.'),
+        h('h1', { class: 'hero-title' }, 'Mobile data in 28 places, just for holding OTT.'),
+        h('p', { class: 'hero-sub' }, 'Your share of OTT becomes a data allowance every week — spend it on an eSIM before it resets.'),
         h('div', { class: 'hero-actions' }, primary,
           h('a', { class: 'btn btn-ghost', href: '#how-it-works' }, 'How it works')))));
   }
 
   // ============================================================================ 2. trust row
   /**
-   * Three or four short, checkable claims — not a slogan. Two are read straight off the catalogue
-   * (so they can never overstate it), and two describe the mechanism itself. Nothing here is a
+   * Four or five short, checkable claims — not a slogan. Two are read straight off the catalogue
+   * (so they can never overstate it), and the rest describe the mechanism itself. Nothing here is a
    * number this file invented; a fork with a different catalogue gets different numbers rather than
    * this file's own guess.
    */
@@ -320,6 +389,7 @@
     const items = [
       plist.length ? plist.length + ' places on the menu' : 'More places added as the catalogue grows',
       cheapEntry ? 'eSIMs from ' + fmtPrice(cheapEntry.priceUsd) : 'Priced per package, shown at checkout',
+      'No trading required — holding is all it takes',
       'No app, no SIM swap, no contract',
       'Paid over Bitcoin Lightning — no person in the loop',
     ];
@@ -334,8 +404,12 @@
    * itself needs neither. The "Most data per dollar" badge is computed from each shown package's
    * own price-per-gigabyte, not pinned to a position — whichever of the three is actually the best
    * deal at this place gets it, and that is not always the same slot from one place to the next.
+   * `allow` (data/allowances.json, read once in render()) is what lets the meta line say how much
+   * OTT a wallet would need to hold to cover a package this week; before launch, or in a week with
+   * no budget published yet, that figure is not computable, so the line falls back to the plain
+   * coverage fact instead of guessing.
    */
-  function plansSection(ctx, cfg) {
+  function plansSection(ctx, cfg, allow) {
     const { h } = ctx;
     const plist = places(cfg);
     const regions = plist.filter((p) => p.kind === 'region');
@@ -355,7 +429,7 @@
       if (!here.length) { grid.appendChild(h('p', { class: 'small' }, 'No packages are configured for this place yet.')); return; }
       const best = here.reduce((m, p) => (!m || perGb(p) < perGb(m) ? p : m), null);
       for (const p of here) {
-        const vol = volumeFor(cfg, p.priceUsd);
+        const need = tokensToCover(allow, p.priceUsd);
         // "Most data per dollar" only means something when there is a second size to lose to — a
         // place with a single size is not a deal, it is the only option, so it earns no badge.
         const featured = here.length > 1 && p === best;
@@ -366,7 +440,7 @@
           h('div', { class: 'plan-term' }, (Number(p.days) || 7) + ' days'),
           h('div', { class: 'plan-meta' },
             h('span', {}, p.regions || p.name),
-            vol !== null ? h('span', {}, '≈ ' + fmtPrice(vol) + ' traded') : null),
+            need !== null ? h('span', {}, 'needs ≈ ' + fmtTokens(need) + ' OTT this week') : null),
           h('a', { class: 'btn btn-sm plan-cta', href: '#your-data' }, 'Get this eSIM')));
       }
     }
@@ -383,24 +457,23 @@
 
   // ============================================================================ 4. how it works
   /**
-   * Three plain, specific steps — trade, credit, redeem — with no marketing language. This is also
-   * where the two facts that most need a straight sentence live: that the rebate pays whoever
-   * traded rather than whoever is holding, and that v1 only counts pre-graduation, USDG-paired
-   * trades. Both are true regardless of brand, and the wording only differs from a fork with no
-   * brand configured in whose name it uses for the curve.
+   * Three plain, specific steps — hold, accrue, redeem — with no marketing language. This is also
+   * where the two facts that most need a straight sentence live: that the budget is funded by the
+   * coin's own creator tax rather than a promise, and that unused data does not carry over. Both
+   * are true regardless of brand, and the wording only differs from a fork with no brand configured
+   * in whose name it uses for the curve.
    */
   function howItWorks(ctx, cfg) {
     const { h } = ctx;
     const brand = brandOf(cfg);
     const carrier = brand ? brand.name : 'the coin';
-    const rebate = fmtPct(Number(cfg.rebateBps) || 0);
     const steps = [
-      { title: 'Trade the coin',
-        body: 'Every buy or sell against ' + carrier + '’s bonding curve, in USDG, pays back whoever placed the trade. Holding the coin earns nothing on its own.' },
-      { title: 'Credit accrues automatically',
-        body: rebate + ' of what you traded is banked to your wallet as dollars of data credit — counted from pre-graduation trades in USDG only, no claim needed.' },
+      { title: 'Hold OTT',
+        body: 'Keep any amount of OTT in your wallet. No trading, no staking, no claim to file — holding is the whole mechanism.' },
+      { title: 'Your share becomes this week’s budget',
+        body: 'Every Monday, last week’s creator tax on ' + carrier + '’s trades becomes this week’s data budget, and your allowance is your share of the circulating supply times that budget — banked as dollars of credit, because a gigabyte’s price depends on where you spend it.' },
       { title: 'Redeem an eSIM and scan it',
-        body: 'Spend the credit on an eSIM from nadanada: pick a place and size, sign a message to prove the wallet is yours, and scan the QR at the airport — that is where the credit turns into gigabytes, not at the trade.' },
+        body: 'Spend the credit on an eSIM from nadanada: pick a place and size, sign a message to prove the wallet is yours, and scan the QR at the airport — and spend it before the week ends, because what is unused does not carry over.' },
     ];
     return h('div', { class: 'section alt', id: 'how-it-works' }, h('div', { class: 'wrap' },
       h('div', { class: 'section-head' }, h('h2', {}, 'How it works')),
@@ -450,12 +523,12 @@
       row('Ticker', brand.ticker);
     }
     row('Status', 'Not launched yet');
-    row('Rebate', fmtPct(Number(cfg.rebateBps) || 0) + ' of traded volume, as data credit');
+    row('Weekly budget', 'last week’s creator tax, split by every wallet’s share of the circulating supply');
     row('Packages', plist.length && cheapEntry ? plist.length + ' places · ' + gbSizesText(cfg, 'and') + ' GB · from ' + fmtPrice(cheapEntry.priceUsd) : 'none configured yet');
     row('Redeemed as', 'eSIMs from nadanada, paid by Lightning');
     row('Creator tax', fmtPct(Number(cfg.taxBps) || 0) + ' to the treasury');
-    row('Paired to', cfg.pair === ZERO || !cfg.pair ? 'native ETH (not counted in v1)' : 'USDG');
-    row('Counts', 'pre-graduation trades only');
+    row('Paired to', cfg.pair === ZERO || !cfg.pair ? 'native ETH (tax not priced in v1)' : 'USDG');
+    row('Counts', 'balances snapshotted pre-graduation only');
     return h('div', { class: 'card data-notlaunched' },
       h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Not launched yet')),
       h('p', { class: 'small' }, 'The coin behind this programme has not been launched. These are the rules it will run under; the addresses land in config/esim.json on launch day.'),
@@ -463,20 +536,25 @@
       h('div', { class: 'data-actions' },
         // whatever.fun is the launchpad this coin would launch through; it is a different site now,
         // so this leaves rather than routes — a new tab, and a label that says exactly that.
-        h('a', { class: 'btn btn-primary', href: 'https://whatever-fun.vercel.app/#/new', target: '_blank', rel: 'noopener' }, 'Launch the coin on whatever.fun'),
+        h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Launch the coin on whatever.fun'),
         h('a', { class: 'btn btn-ghost', href: '#/about' }, 'How this works')));
   }
 
   // ============================================================================ 6. your data
   /**
-   * The wallet's side of the page. Three sources in order of how sure they are: the address (the
-   * wallet), what it has earned (allowances.json, built by the indexer), and what it has redeemed
-   * (the API, which asks the provider). Each is allowed to fail on its own and says so in place.
+   * The wallet's side of the page, and the one the founder asked for by name: how much OTT this
+   * wallet holds, and how much data that buys this week. Two sources, most-sure first — /api/redeem
+   * knows the full weekly standing, including what has already been redeemed, which nothing else
+   * knows; data/allowances.json (`allow`, read once in render() and handed in) is the fallback for
+   * the holding itself, so a wallet still sees what it holds even when the API cannot be reached.
+   * Each is allowed to fail on its own, and staleness — the week published is not the current one —
+   * is said plainly rather than shown as a zero that looks like a verdict.
    */
-  async function paintMine(ctx, cfg, panel) {
+  async function paintMine(ctx, cfg, allow, panel) {
     const { h, notice } = ctx;
     const account = currentAccount(ctx);
     clear(panel);
+    stopCountdown();
     panel.appendChild(h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Your data')));
 
     if (!account) {
@@ -485,12 +563,12 @@
         btn.disabled = true;
         try {
           const acc = await ctx.connect();
-          if (acc) { lastAccount = acc; paintMine(ctx, cfg, panel); return; }
+          if (acc) { lastAccount = acc; paintMine(ctx, cfg, allow, panel); return; }
           hint.textContent = 'No wallet connected.';
         } catch (e) { hint.textContent = 'Could not connect: ' + errText(e); hint.classList.add('err'); }
         finally { btn.disabled = false; }
       } }, 'Connect wallet');
-      panel.appendChild(h('p', { class: 'small' }, 'Connect a wallet to see the data it has banked, and to redeem it as an eSIM.'));
+      panel.appendChild(h('p', { class: 'small' }, 'Connect a wallet to see what it holds, and how much data that buys this week. The allowance is simply your share of OTT’s circulating supply — it refreshes every Monday, and does not carry over.'));
       panel.appendChild(h('div', { class: 'data-actions' }, btn));
       panel.appendChild(hint);
       return;
@@ -498,45 +576,166 @@
 
     const addr = account.toLowerCase();
     panel.appendChild(h('p', { class: 'mono data-addr' }, addr));
-    const tiles = h('div', { class: 'stat-grid data-tiles' });
-    const status = h('div', {}, notice('Reading your balance…', 'plain'));
-    panel.appendChild(tiles);
-    panel.appendChild(status);
+    const body = h('div', {}, notice('Reading your balance…', 'plain'));
+    panel.appendChild(body);
 
-    // What the indexer says this wallet earned. A missing file is "not built yet", not zero.
-    let earnedUsd = null, allowError = null;
-    try {
-      const allow = await loadJson('./data/allowances.json');
-      const row = allow && allow.wallets ? allow.wallets[addr] : null;
-      earnedUsd = row && Number.isFinite(Number(row.earnedUsd)) ? Number(row.earnedUsd) : 0;
-    } catch (e) { allowError = errText(e); }
-
-    // What the API says has been redeemed. It is the only one of the three that knows.
     let standing = null, apiError = null;
     try { standing = await api('GET', './api/redeem?address=' + addr); }
     catch (e) { apiError = errText(e); }
 
-    const earned = standing ? Number(standing.earnedUsd) : earnedUsd;
-    const redeemed = standing ? Number(standing.redeemedUsd) : null;
-    const remaining = standing ? Number(standing.remainingUsd) : null;
-    clear(tiles);
-    tiles.appendChild(ctx.tile('Earned', fmtMoney(earned), 'of data credit from your trades', 'coins'));
-    tiles.appendChild(ctx.tile('Redeemed', fmtMoney(redeemed), 'spent on eSIM packages', 'clock'));
-    tiles.appendChild(ctx.tile('Available', fmtMoney(remaining), inGb(cfg, remaining) || 'ready to spend', 'arrows'));
+    clear(body);
+    const fileRow = allow && allow.wallets ? allow.wallets[addr] : null;
+    paintWallet(ctx, cfg, addr, panel, body, { standing, apiError, allow, fileRow });
+  }
 
-    clear(status);
-    if (allowError) status.appendChild(notice('The allowances have not been built yet (data/allowances.json: ' + allowError + '). Run node scripts/allowances.js.', 'warn'));
-    if (apiError) status.appendChild(notice('Could not reach the redeem API: ' + apiError, 'warn'));
-    if (!standing) return;
+  /**
+   * standing (the API) and allow/fileRow (the indexer's own file) are merged here, standing
+   * preferred wherever both know something — it is the only one of the two that knows what has
+   * been redeemed. Staleness is believed from the API's own `stale` flag when it is there, and
+   * otherwise worked out locally from the file's own week against the wall clock, using the same
+   * week arithmetic every file in this programme uses.
+   */
+  function paintWallet(ctx, cfg, addr, panel, body, sources, freshOrder) {
+    const { h, notice } = ctx;
+    const { standing, apiError, allow, fileRow } = sources;
 
-    panel.appendChild(redeemForm(ctx, cfg, addr, standing, panel));
-    panel.appendChild(orders(ctx, cfg, addr, standing.orders || []));
+    if (!standing && !allow) {
+      body.appendChild(notice('Could not read this wallet’s standing: ' + apiError, 'warn'));
+      return;
+    }
+
+    const decimals = Number(standing && standing.decimals !== undefined && standing.decimals !== null ? standing.decimals : (allow && allow.decimals));
+    const dec = Number.isFinite(decimals) ? decimals : 18;
+    // Holdings, not spending power: the API reports tokens/share from whatever the file last said
+    // even while that file is stale, so these are trusted from `standing` whenever it answered at
+    // all — no staleness branch needed here.
+    const tokensStr = standing && standing.tokens !== undefined && standing.tokens !== null ? standing.tokens : (fileRow && fileRow.tokens !== undefined ? fileRow.tokens : '0');
+    const tokens = unitsFromDecimalStr(tokensStr, dec);
+    const shareRaw = standing && standing.share !== undefined && standing.share !== null ? standing.share : (fileRow && fileRow.share);
+    const share = Number.isFinite(Number(shareRaw)) ? Number(shareRaw) : 0;
+    const week = Number(standing && standing.week !== undefined && standing.week !== null ? standing.week : (allow && allow.week));
+    const weekEnd = Number(standing && standing.weekEnd !== undefined && standing.weekEnd !== null ? standing.weekEnd : (allow && allow.weekEnd));
+    const nowWeek = weekOf(Math.floor(Date.now() / 1000));
+    const stale = standing && standing.stale !== undefined ? !!standing.stale : (Number.isFinite(week) ? week < nowWeek : false);
+    // The week the numbers below actually describe: the API's own allowancesWeek when it told us
+    // (the exact week the file it read was written for), falling back to this page's own
+    // independent read of that file, and finally to "the week before this one" as the least-wrong
+    // guess when neither source said.
+    const publishedWeekRaw = standing && standing.allowancesWeek !== undefined && standing.allowancesWeek !== null ? standing.allowancesWeek
+      : (allow && allow.week !== undefined && allow.week !== null ? allow.week : (Number.isFinite(week) ? week - 1 : NaN));
+    const publishedWeek = Number(publishedWeekRaw);
+    const publishedWeekEnd = Number.isFinite(publishedWeek) ? weekEndOf(publishedWeek) : NaN;
+    // /api/redeem deliberately reports a zero allowance (and so a zero remaining) while a week is
+    // stale — it is telling us it has not indexed this week yet, not that the wallet has nothing —
+    // so the last real figure, from the indexer's own file, is shown instead of a zero that would
+    // read as a verdict. Used/left are then recomputed from that same figure, so a stale week's
+    // "left to spend" tile never disagrees with the "Data this week" headline sitting above it.
+    const allowUsdRaw = (!stale && standing && standing.allowanceUsd !== undefined && standing.allowanceUsd !== null) ? standing.allowanceUsd
+      : (fileRow && fileRow.allowanceUsd !== undefined && fileRow.allowanceUsd !== null ? fileRow.allowanceUsd
+        : (standing ? standing.allowanceUsd : null));
+    const allowanceUsd = Number.isFinite(Number(allowUsdRaw)) ? Number(allowUsdRaw) : 0;
+    const redeemedUsd = standing ? Number(standing.redeemedUsd) : null;
+    const remainingUsd = standing ? Math.max(0, allowanceUsd - (Number.isFinite(redeemedUsd) ? redeemedUsd : 0)) : null;
+
+    if (apiError) body.appendChild(notice('Could not reach the redeem API: ' + apiError + '. Showing what the indexer last published; redeeming needs the API back.', 'warn'));
+
+    if (stale) {
+      body.appendChild(notice('This week’s allowance has not been published yet — the numbers below are from the week that ended '
+        + (fmtDate(publishedWeekEnd) || 'last week') + '. A fresh file is written every half hour.', 'plain'));
+    }
+
+    if (!(tokens > 0)) {
+      body.appendChild(notice('This wallet holds no OTT, so it has no data this week.', 'plain'));
+      body.appendChild(h('div', { class: 'data-actions' },
+        h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Get OTT on whatever.fun')));
+      if (standing && (((standing.orders || []).length) || ((standing.history || []).length))) {
+        body.appendChild(pastEsims(ctx, cfg, addr, standing, freshOrder));
+      }
+      return;
+    }
+
+    body.appendChild(dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd, weekEnd }));
+    if (freshOrder) body.appendChild(orderCard(ctx, cfg, freshOrder, true));
+
+    if (!standing) {
+      body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
+      return;
+    }
+
+    body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel));
+    body.appendChild(pastEsims(ctx, cfg, addr, standing, freshOrder));
+  }
+
+  // A live countdown reads at most one at a time on this single-page app, so one module-level timer
+  // is all it takes; every repaint stops the previous one before it might start a new one, and the
+  // interval itself gives up the moment its own tile is no longer on the page (a route change, or a
+  // panel rebuilt for some other reason), so nothing here can outlive what it is updating.
+  let countdownTimer = null;
+  function stopCountdown() { if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; } }
+
+  /**
+   * The two numbers the founder asked for, first and biggest — what this wallet holds, and what
+   * that buys this week, in gigabytes, because that is what a carrier shows and a dollar figure is
+   * not. Then four supporting tiles: used and left in the same units as the headline, the wallet's
+   * share of supply, and a live countdown to the reset. Nothing here implies a single guaranteed GB
+   * figure — inGb() says what the balance is worth at the cheapest place and the dearest, the same
+   * honest spread the rest of the page already shows, because a gigabyte's price depends on where
+   * it is spent.
+   */
+  function dashboardTiles(ctx, cfg, d) {
+    const { h } = ctx;
+    const lo = cheapest(cfg);
+    // The three figures have to reconcile on screen. Flooring each of the three dollar amounts
+    // independently does not: $18.62 of allowance, $1.99 used and $16.63 left floor to 26, 2 and 23
+    // at the cheapest rate, and a reader who can add up sees 26 that turns into 25 and reads it as
+    // a bug. So the total and the used figure are floored, and the remainder is what is left of the
+    // total after it — the one of the three nobody checks independently.
+    const headlineGb = lo && Number.isFinite(d.allowanceUsd) ? Math.floor(d.allowanceUsd / perGb(lo)) : null;
+    const usedGb = lo && Number.isFinite(d.redeemedUsd) ? Math.floor(d.redeemedUsd / perGb(lo)) : null;
+    const leftGb = headlineGb !== null && usedGb !== null ? Math.max(0, headlineGb - usedGb)
+      : (lo && Number.isFinite(d.remainingUsd) ? Math.floor(d.remainingUsd / perGb(lo)) : null);
+
+    const headline = h('div', { class: 'data-headline' },
+      h('div', { class: 'dh-tile' },
+        h('div', { class: 'dh-label' }, 'OTT held'),
+        h('div', { class: 'dh-value' }, fmtTokens(d.tokens) + ' OTT'),
+        h('div', { class: 'dh-sub' }, fmtSharePct(d.share) + ' of the circulating supply')),
+      h('div', { class: 'dh-tile' },
+        h('div', { class: 'dh-label' }, 'Data this week'),
+        h('div', { class: 'dh-value' }, headlineGb === null ? '—' : fmtGb(headlineGb)),
+        h('div', { class: 'dh-sub' }, inGb(cfg, d.allowanceUsd) || (Number.isFinite(d.allowanceUsd) ? fmtMoney(d.allowanceUsd) + ' of credit' : 'no packages configured yet'))));
+
+    const supporting = h('div', { class: 'stat-grid data-tiles' },
+      ctx.tile('Used this week', usedGb === null ? '—' : fmtGb(usedGb),
+        Number.isFinite(d.redeemedUsd) ? fmtMoney(d.redeemedUsd) + ' redeemed' : 'not known — the redeem API could not be reached', 'coins'),
+      ctx.tile('Left this week', leftGb === null ? '—' : fmtGb(leftGb),
+        Number.isFinite(d.remainingUsd) ? fmtMoney(d.remainingUsd) + ' left to spend' : 'not known — the redeem API could not be reached', 'arrows'),
+      ctx.tile('Your share', fmtSharePct(d.share), 'of OTT’s circulating supply', 'shield'),
+      liveCountdownTile(ctx, d.weekEnd));
+
+    return h('div', {}, headline, supporting);
+  }
+
+  // The "Resets in" tile updates itself every 30 seconds without a full repaint — days-and-hours
+  // granularity does not need anything finer, and this way the countdown is actually live rather
+  // than frozen at whatever it read when the wallet connected.
+  function liveCountdownTile(ctx, weekEndSec) {
+    stopCountdown();
+    const tile = ctx.tile('Resets in', fmtCountdown(weekEndSec), 'Unused data does not carry over to next week.', 'clock');
+    const valueEl = tile.querySelector('.st-value, .u-tile-value');
+    if (valueEl && Number.isFinite(Number(weekEndSec))) {
+      countdownTimer = setInterval(() => {
+        if (!document.body.contains(tile)) { stopCountdown(); return; }
+        valueEl.textContent = fmtCountdown(weekEndSec);
+      }, 30000);
+    }
+    return tile;
   }
 
   // A picker for which package: first the place, then the size sold at that place, then the one
   // button. The button says what the pick costs, and is disabled with a reason rather than hidden
-  // when the balance is short, so a trader can see how far off they are.
-  function redeemForm(ctx, cfg, addr, standing, panel) {
+  // when the balance is short, so a wallet can see how far off it is.
+  function redeemForm(ctx, cfg, addr, standing, allow, panel) {
     const { h, notice } = ctx;
     const plist = places(cfg);
     const regions = plist.filter((p) => p.kind === 'region');
@@ -569,7 +768,7 @@
       btn.textContent = 'Redeem ' + p.name + ' · ' + (Number(p.gb) || 1) + ' GB — ' + fmtPrice(p.priceUsd);
       const short = remaining + 1e-9 < p.priceUsd;
       btn.disabled = short;
-      hint.textContent = short ? 'You have ' + fmtMoney(remaining) + ' of credit; this package costs ' + fmtPrice(p.priceUsd) + '.' : '';
+      hint.textContent = short ? 'You have ' + fmtMoney(remaining) + ' left this week; this package costs ' + fmtPrice(p.priceUsd) + '.' : '';
       hint.classList.toggle('err', false);
     }
     function selectSize(code) {
@@ -622,7 +821,7 @@
         try { freshStanding = await api('POST', './api/redeem', { address: addr, message, signature }); }
         catch (e) { freshStanding = null; }
         if (freshStanding) {
-          repaintFrom(ctx, cfg, addr, freshStanding, panel, out.order);
+          repaintFrom(ctx, cfg, addr, allow, freshStanding, panel, out.order);
         } else {
           const spent = Number(out.order && out.order.priceUsd) || pkg.priceUsd;
           const fallback = Object.assign({}, standing, {
@@ -630,7 +829,7 @@
             redeemedUsd: Math.round((Number(standing.redeemedUsd || 0) + spent) * 100) / 100,
             orders: (standing.orders || []).concat([out.order]),
           });
-          repaintFrom(ctx, cfg, addr, fallback, panel, out.order);
+          repaintFrom(ctx, cfg, addr, allow, fallback, panel, out.order);
         }
       } catch (e) {
         const msg = errText(e);
@@ -640,7 +839,7 @@
         // is about to clear out from under it.
         if (/reload/i.test(msg)) {
           if (typeof ctx.toast === 'function') ctx.toast('Could not redeem', msg, 'error');
-          paintMine(ctx, cfg, panel);
+          paintMine(ctx, cfg, allow, panel);
           return;
         }
         clear(result);
@@ -651,43 +850,54 @@
     return wrap;
   }
 
-  // After a successful order, the whole wallet panel is rebuilt from the answer the API just
-  // gave, with the new order pinned at the top. The GET is not repeated: the API told us the
-  // remaining balance, and asking again only costs the provider a walk it has just done.
-  function repaintFrom(ctx, cfg, addr, standing, panel, fresh) {
+  // After a successful order, the whole wallet panel is rebuilt from the answer the API just gave
+  // (`standing`, with the new order pinned at the top as `freshOrder`) — delegating straight to
+  // paintWallet rather than keeping a second copy of the tile-building it already does. The GET is
+  // not repeated: the API told us the remaining balance, and asking again only costs the provider a
+  // walk it has just done.
+  function repaintFrom(ctx, cfg, addr, allow, standing, panel, freshOrder) {
     const { h } = ctx;
     clear(panel);
+    stopCountdown();
     panel.appendChild(h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Your data')));
     panel.appendChild(h('p', { class: 'mono data-addr' }, addr));
-    const tiles = h('div', { class: 'stat-grid data-tiles' },
-      ctx.tile('Earned', fmtMoney(Number(standing.earnedUsd)), 'of data credit from your trades', 'coins'),
-      ctx.tile('Redeemed', fmtMoney(Number(standing.redeemedUsd)), 'spent on eSIM packages', 'clock'),
-      ctx.tile('Available', fmtMoney(Number(standing.remainingUsd)), inGb(cfg, Number(standing.remainingUsd)) || 'ready to spend', 'arrows'));
-    panel.appendChild(tiles);
-    panel.appendChild(orderCard(ctx, cfg, fresh, true));
-    panel.appendChild(redeemForm(ctx, cfg, addr, standing, panel));
-    panel.appendChild(orders(ctx, cfg, addr, standing.orders || [], fresh.transactionId));
+    const body = h('div', {});
+    panel.appendChild(body);
+    const fileRow = allow && allow.wallets ? allow.wallets[addr] : null;
+    paintWallet(ctx, cfg, addr, panel, body, { standing, apiError: null, allow, fileRow }, freshOrder);
   }
 
   /**
-   * The past-orders list. A GET, or any unsigned load, never carries a code — an activation code
-   * is a one-time thing, and only the wallet that signs for it gets to see one — so every card
-   * here starts redacted (orderCard already renders that correctly: it just has nothing to show).
-   * "Show my eSIM codes" is the signed read that fills them back in, in place. `excludeId` drops
-   * whichever order is already pinned above this list as "fresh", so a just-redeemed order is
-   * never shown twice — once with codes, once without.
+   * Everything this wallet has ever been issued a code for: this week's orders, which is what the
+   * balance above is spent against, and — separately — the eSIMs from the three weeks before it,
+   * kept for display because an eSIM that has already been issued does not expire just because the
+   * week that paid for it did. One sign-in and one button reveal every code in both lists at once,
+   * since the API already answers both lists in the same signed call.
+   *
+   * A GET, or any unsigned load, never carries a code — an activation code is a one-time thing, and
+   * only the wallet that signs for it gets to see one — so every card here starts redacted
+   * (orderCard already renders that correctly: it just has nothing to show). `freshOrder` is the
+   * order just pinned above this section as "new", so it is never shown twice.
    */
-  function orders(ctx, cfg, addr, list, excludeId) {
+  function pastEsims(ctx, cfg, addr, standing, freshOrder) {
     const { h } = ctx;
-    const wrap = h('div', { class: 'data-orders' }, h('div', { class: 'divider' }), h('div', { class: 'label' }, 'PAST ESIMS'));
-    const without = (items) => (excludeId ? items.filter((o) => o.transactionId !== excludeId) : items);
-    const shown = without(list);
-    if (!shown.length) { wrap.appendChild(h('p', { class: 'small' }, 'Nothing redeemed yet.')); return wrap; }
+    const thisWeek = h('div', {});
+    const history = h('div', {});
+    const without = (items, id) => (id ? items.filter((o) => o.transactionId !== id) : items);
 
-    const cards = h('div', {});
-    // Newest first: the one you need at the gate is the one you just ordered.
-    const paintCards = (items) => { clear(cards); for (const o of items.slice().reverse()) cards.appendChild(orderCard(ctx, cfg, o, false)); };
-    paintCards(shown);
+    function paint(list) {
+      const shown = without(list.orders || [], freshOrder && freshOrder.transactionId);
+      clear(thisWeek);
+      if (!shown.length) thisWeek.appendChild(h('p', { class: 'small' }, 'Nothing redeemed yet this week.'));
+      // Newest first: the one you need at the gate is the one you just ordered.
+      else for (const o of shown.slice().reverse()) thisWeek.appendChild(orderCard(ctx, cfg, o, false));
+
+      clear(history);
+      const past = list.history || [];
+      if (!past.length) history.appendChild(h('p', { class: 'small' }, 'Nothing from previous weeks.'));
+      else for (const o of past.slice().reverse()) history.appendChild(orderCard(ctx, cfg, o, false, weekLabel(o.week)));
+    }
+    paint(standing);
 
     const hint = h('p', { class: 'hint' }, '');
     const btn = h('button', { class: 'btn btn-sm', onclick: async () => {
@@ -697,23 +907,40 @@
       try {
         const { message, signature } = await signIn(addr);
         const out = await api('POST', './api/redeem', { address: addr, message, signature });
-        paintCards(without(out.orders || []));
+        paint(out);
       } catch (e) {
         hint.textContent = 'Could not read your codes: ' + errText(e);
         hint.classList.add('err');
       } finally { btn.disabled = false; }
     } }, 'Show my eSIM codes');
-    wrap.appendChild(h('div', { class: 'data-actions' }, btn, hint));
-    wrap.appendChild(cards);
-    return wrap;
+
+    // The reveal button, and the previous-weeks band, only appear when there is something to
+    // reveal. Offering to show codes to a wallet that has redeemed nothing is an invitation to
+    // sign a message for an empty answer.
+    const hasAny = ((standing.orders || []).length + (standing.history || []).length) > 0;
+    const hasPast = (standing.history || []).length > 0;
+    return h('div', {},
+      h('div', { class: 'data-orders' }, h('div', { class: 'divider' }), h('div', { class: 'label' }, 'THIS WEEK’S ESIMS'), thisWeek),
+      hasAny ? h('div', { class: 'data-actions' }, btn, hint) : null,
+      hasPast ? h('div', { class: 'data-orders' }, h('div', { class: 'divider' }),
+        h('div', { class: 'label' }, 'PREVIOUS WEEKS'),
+        h('p', { class: 'small' }, 'Already issued — these do not expire when the week does.'),
+        history) : null);
+  }
+
+  // "Week of Sep 8, 2026" — for a history card, so it is clear which week paid for an eSIM that is
+  // no longer this week's.
+  function weekLabel(w) {
+    return Number.isFinite(Number(w)) ? 'Week of ' + fmtDate(weekStartOf(Number(w))) : null;
   }
 
   /**
    * One eSIM: the QR the phone scans, the same activation code as text for the phones that would
    * rather be told than shown, and — when nadanada included them — the one-tap install links and
-   * the manual SM-DP+/matching-id pair for a phone that can use neither of the above.
+   * the manual SM-DP+/matching-id pair for a phone that can use neither of the above. `weekTag`,
+   * when given, is a past week's label ("Week of Sep 8, 2026") shown for a history card.
    */
-  function orderCard(ctx, cfg, o, fresh) {
+  function orderCard(ctx, cfg, o, fresh, weekTag) {
     const { h, notice } = ctx;
     o = o || {};
     const pkg = packageByCode(cfg, o.packageCode);
@@ -752,7 +979,8 @@
         h('span', { class: 'badge badge-hold' }, fresh ? 'NEW' : '#' + (Number.isFinite(Number(o.n)) ? Number(o.n) + 1 : '?')),
         h('span', { class: 'cc-sym' }, pkg ? packageLabel(pkg) : (o.packageCode || 'eSIM')),
         Number.isFinite(Number(o.priceUsd)) ? h('span', { class: 'small' }, fmtPrice(Number(o.priceUsd))) : null,
-        when && !Number.isNaN(when.getTime()) ? h('span', { class: 'small' }, when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) : null),
+        when && !Number.isNaN(when.getTime()) ? h('span', { class: 'small' }, when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) : null,
+        weekTag ? h('span', { class: 'small' }, weekTag) : null),
       pendingText ? notice(pendingText, 'plain') : null,
       qrSrc ? h('img', { class: 'data-qr', src: qrSrc, alt: 'eSIM QR code for ' + (pkg ? pkg.name : o.packageCode || 'this package'), width: '180', height: '180' }) : null,
       install.length ? h('div', { class: 'data-install' }, install) : null,
@@ -816,42 +1044,42 @@
         h('h3', { class: 'card-title' }, 'Curve progress'),
         h('span', { class: 'num' }, Number.isFinite(c.raisedUsd) && Number.isFinite(c.thresholdUsd) ? fmtMoney(c.raisedUsd) + ' of ' + fmtMoney(c.thresholdUsd) : '—')),
       h('div', { class: 'sp-bar dp-bar' }, fill),
-      h('p', { class: 'small', style: 'margin-top:10px' }, Math.round(frac * 100) + '% of the way to graduation. Rebates accrue until then.'));
+      h('p', { class: 'small', style: 'margin-top:10px' }, Math.round(frac * 100) + '% of the way to graduation. Creator tax accrues toward a future week’s budget until then.'));
   }
 
   // ============================================================================ 7. the programme's numbers
   /**
    * The treasury and curve figures, painted after the wallet panel rather than beside it — this is
-   * supporting detail for a trader who wants to check the mechanism, not the first thing the page
+   * supporting detail for a holder who wants to check the mechanism, not the first thing the page
    * shows. Kept as its own async function (rather than inlined in render()) only so render() stays
    * a plain list of the seven bands in order.
    */
-  async function paintNumbers(ctx, cfg, rebateBps, numbers) {
+  async function paintNumbers(ctx, cfg, numbers) {
     const { h, notice } = ctx;
     const usdgPaired = String(cfg.pair || '').toLowerCase() === String((ctx.cfg && ctx.cfg.usdg) || '').toLowerCase();
     try {
       const c = await readChain(ctx, cfg);
       clear(numbers);
       if (!usdgPaired) {
-        // No fake accounting: the indexer counts USDG Transfer events, and a native-ETH pair
-        // (pair == 0x0) or any other pair does not produce them. Say so where the numbers would be.
+        // No fake accounting: the budget is priced from the curve's USDG-denominated fee escrow,
+        // and a native-ETH pair (pair == 0x0) or any other pair collects its tax in that asset
+        // instead. Say so where the numbers would be.
         numbers.appendChild(notice('This coin is paired to ' + (cfg.pair === ZERO || !cfg.pair ? 'native ETH' : shortAddr(cfg.pair))
-          + ', and v1 only counts USDG-paired trades — a native-ETH pair has no Transfer events to count, so no rebates accrue here yet.', 'warn'));
+          + ', and v1 only prices the weekly data budget in USDG — a native-ETH pair collects its creator tax in ETH instead, so no dollar budget can be read here yet.', 'warn'));
       }
       const lo = cheapest(cfg), hi = dearest(cfg);
       const poolGb = usdgPaired && Number.isFinite(c.treasuryUsd) && lo ? Math.floor(c.treasuryUsd / perGb(lo)) : null;
       numbers.appendChild(h('div', { class: 'stat-grid page-tiles data-tiles' },
-        ctx.tile('Treasury claimable', usdgPaired ? fmtMoney(c.treasuryUsd) : '—', 'USDG sitting in the fee escrow for the treasury', 'wallet'),
-        ctx.tile('Data pool', poolGb === null ? '—' : poolGb.toLocaleString('en-US') + ' GB',
-          lo ? 'at ' + fmtPrice(perGb(lo)) + '/GB (' + lo.name + ' · ' + (Number(lo.gb) || 1) + ' GB)' + (hi && hi !== lo ? ' · ' + Math.floor(c.treasuryUsd / perGb(hi)).toLocaleString('en-US') + ' GB ' + hi.name.toLowerCase() : '') : 'no packages configured', 'coins'),
-        ctx.tile('Creator tax', fmtPct(c.taxBps), c.taxHeldUsd !== null ? fmtMoney(c.taxHeldUsd) + ' still held in the curve' : 'read from the curve', 'flame'),
-        ctx.tile('Rebate', fmtPct(rebateBps), 'of what you trade, back as data', 'arrows')));
+        ctx.tile('Treasury claimable', usdgPaired ? fmtMoney(c.treasuryUsd) : '—', 'USDG sitting in the fee escrow, waiting to become a future week’s budget', 'wallet'),
+        ctx.tile('Unclaimed, as data', poolGb === null ? '—' : fmtGb(poolGb),
+          lo ? 'at ' + fmtPrice(perGb(lo)) + '/GB (' + lo.name + ' · ' + (Number(lo.gb) || 1) + ' GB)' + (hi && hi !== lo ? ' · ' + fmtGb(Math.floor(c.treasuryUsd / perGb(hi))) + ' ' + hi.name.toLowerCase() : '') : 'no packages configured', 'coins'),
+        ctx.tile('Creator tax', fmtPct(c.taxBps), c.taxHeldUsd !== null ? fmtMoney(c.taxHeldUsd) + ' still held in the curve' : 'read from the curve', 'flame')));
       numbers.appendChild(progress(ctx, c));
       // The pool card is the one thing on this page the chain cannot vouch for, so it comes from a
       // file scripts/treasury.js writes every half hour. Missing (a fresh fork, the first run not
       // yet made) means no card, not an error: the chain numbers above are still true.
       try { numbers.appendChild(poolCard(ctx, await loadJson('./data/treasury.json'), cfg)); } catch (e) { /* no reading yet */ }
-      if (c.graduated) numbers.appendChild(notice('This coin has graduated. v1 counts trades against the bonding curve only, so volume from here on does not earn data.', 'warn'));
+      if (c.graduated) numbers.appendChild(notice('This coin has graduated. v1 only prices next week’s budget from tax collected on the bonding curve, so trading from here on does not fund a future allowance.', 'warn'));
       numbers.appendChild(h('p', { class: 'small', style: 'margin-top:12px' },
         'Coin ', addrLink(ctx, cfg.coin), ' · curve ', addrLink(ctx, cfg.curve), ' · treasury ', addrLink(ctx, cfg.treasury), '.'));
     } catch (e) {
@@ -869,5 +1097,10 @@
     return live || lastAccount || ctx.account || null;
   }
 
-  window.WhateverData = { render, SEL, signInMessage, hexOfUtf8 };
+  window.WhateverData = {
+    render, SEL, signInMessage, hexOfUtf8,
+    // Shared with site/status.js, the same way SEL already is, so the two files cannot silently
+    // disagree about how a token amount, a share or a week is read.
+    unitsFromDecimalStr, fmtTokens, fmtSharePct, weekOf, weekStartOf, weekEndOf,
+  };
 })();

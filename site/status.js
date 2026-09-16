@@ -4,12 +4,12 @@
  * dashboard, in one screen.
  *
  * OT+T is a phone carrier built out of several moving parts that either work or do not: a coin
- * with a creator tax, an indexer that turns trades into data credit, a Lightning wallet that pays
- * nadanada for eSIMs, a store that remembers what was ordered, and two keepers — one that sweeps
- * the tax out of Pons's escrow, one that tops the Lightning wallet up from it. Nothing here is
- * marketing copy; it is the same six files and one HTTP call every other route reads, laid out so
- * an operator (or a trader wondering why a redeem failed) can see which of those parts is actually
- * running without opening a terminal.
+ * with a creator tax, an indexer that turns last week's tax and this week's holders into a data
+ * budget, a Lightning wallet that pays nadanada for eSIMs, a store that remembers what was ordered,
+ * and two keepers — one that sweeps the tax out of Pons's escrow, one that tops the Lightning
+ * wallet up from it. Nothing here is marketing copy; it is the same six files and one HTTP call
+ * every other route reads, laid out so an operator (or a holder wondering why a redeem failed) can
+ * see which of those parts is actually running without opening a terminal.
  *
  * Six independent reads, each allowed to fail on its own:
  *   - ./api/status         — site/api/status.js (owned by another change; this file only consumes
@@ -43,6 +43,24 @@
     graduated: '0xe7c2b772',              // graduated()           — curve
     creatorTaxBps: '0xc1bb8901',          // creatorTaxBps()       — curve
     creatorTaxBalance: '0xdb2bd533',      // creatorTaxBalance()   — curve
+  };
+  // esim.js exports these too, for the same reason it exports SEL: the wallets table below reads a
+  // token balance and a share the same way esim.js's own dashboard does, and the two files cannot
+  // silently disagree about how one is formatted. The fallbacks are only for the (untested) case
+  // this script loads before esim.js.
+  const WD = window.WhateverData || {};
+  const unitsFromDecimalStr = WD.unitsFromDecimalStr || function (s, decimals) {
+    try { return Number(BigInt(String(s === null || s === undefined ? '0' : s))) / Math.pow(10, Number(decimals) || 0); }
+    catch (e) { return NaN; }
+  };
+  const fmtTokens = WD.fmtTokens || ((n) => (Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—'));
+  const fmtSharePct = WD.fmtSharePct || function (share) {
+    const s = Number(share);
+    if (!Number.isFinite(s) || s < 0) return '—';
+    if (s === 0) return '0%';
+    const pct = s * 100;
+    const digits = pct >= 100 ? 0 : Math.min(6, Math.max(0, 2 - Math.floor(Math.log10(pct))));
+    return pct.toFixed(digits) + '%';
   };
   const USDG_DECIMALS = 6;
 
@@ -366,6 +384,13 @@
   }
 
   // ============================================================================ 5. the programme
+  /**
+   * The week itself: the budget last week's tax funded, how many wallets hold a share of it, and
+   * the week the numbers on this page are for — read straight from allowances.json, which the
+   * indexer writes with all three. Holding is the whole mechanism now, so "wallets earning" (a
+   * trading concept) is gone; the table below is the current top holders by allowance instead of
+   * the old top earners by traded volume.
+   */
   function programmeSection(ctx, d) {
     const { h, notice } = ctx;
     const card = h('div', { class: 'card' });
@@ -373,30 +398,31 @@
       card.appendChild(notice('The indexer has not run yet (data/allowances.json: ' + d.allowErr + '). Run node scripts/allowances.js.', 'warn'));
       return card;
     }
-    const wallets = (d.allow && d.allow.wallets) || {};
+    const allow = d.allow || {};
+    const wallets = allow.wallets || {};
     const entries = Object.entries(wallets);
-    let traded = 0, earned = 0, earners = 0;
-    for (const [, w] of entries) {
-      const tw = numOr(w && w.tradedUsd), ew = numOr(w && w.earnedUsd);
-      if (Number.isFinite(tw)) traded += tw;
-      if (Number.isFinite(ew)) { earned += ew; if (ew > 0) earners++; }
-    }
-    card.appendChild(h('div', { class: 'stat-grid' },
-      ctx.tile('Traded', fmtMoney(traded), 'total volume against the curve', 'chart'),
-      ctx.tile('Earned', fmtMoney(earned), 'total data credit banked', 'coins'),
-      ctx.tile('Wallets earning', String(earners), entries.length ? 'of ' + entries.length + ' that have traded' : 'nobody has traded yet', 'shield')));
-    if (!entries.length) { card.appendChild(h('p', { class: 'small' }, 'Nobody has traded against the curve yet.')); return card; }
+    const budgetUsd = numOr(allow.budgetUsd);
+    const holders = Number.isFinite(Number(allow.holders)) ? Number(allow.holders) : entries.length;
+    const weekLabel = fmtDate(allow.weekStart);
 
-    const top = entries.slice().sort((a, b) => numOr(b[1] && b[1].earnedUsd) - numOr(a[1] && a[1].earnedUsd)).slice(0, 5);
+    card.appendChild(h('div', { class: 'stat-grid' },
+      ctx.tile('This week’s budget', fmtMoney(budgetUsd), allow.budgetSource ? String(allow.budgetSource) : 'last week’s creator tax', 'coins'),
+      ctx.tile('Holders', String(holders), holders === 1 ? 'wallet with a share of the supply' : 'wallets with a share of the supply', 'shield'),
+      ctx.tile('Week', weekLabel || '—', weekLabel ? 'the week this allowance is for' : 'not recorded in allowances.json', 'clock')));
+    if (!entries.length) { card.appendChild(h('p', { class: 'small' }, 'No wallet holds OTT yet.')); return card; }
+
+    const top = entries.slice().sort((a, b) => numOr(b[1] && b[1].allowanceUsd) - numOr(a[1] && a[1].allowanceUsd)).slice(0, 5);
     const tbody = h('tbody', {});
     for (const [addr, w] of top) {
+      const tokens = unitsFromDecimalStr(w && w.tokens, allow.decimals);
       tbody.appendChild(h('tr', {},
         h('td', { class: 'mono' }, shortAddr(addr)),
-        h('td', { class: 'num' }, fmtMoney(numOr(w && w.tradedUsd) || 0)),
-        h('td', { class: 'num' }, fmtMoney(numOr(w && w.earnedUsd) || 0))));
+        h('td', { class: 'num' }, Number.isFinite(tokens) ? fmtTokens(tokens) + ' OTT' : '—'),
+        h('td', { class: 'num' }, fmtSharePct(w && w.share)),
+        h('td', { class: 'num' }, fmtMoney(numOr(w && w.allowanceUsd) || 0))));
     }
     card.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'status-table' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Wallet'), h('th', { class: 'num' }, 'Traded'), h('th', { class: 'num' }, 'Earned'))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'Wallet'), h('th', { class: 'num' }, 'Holds'), h('th', { class: 'num' }, 'Share'), h('th', { class: 'num' }, 'Allowance'))),
       tbody)));
     return card;
   }

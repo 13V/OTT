@@ -7,11 +7,12 @@
  * deployment's own config and allowances and lib/secp256k1 + lib/eip191 standing in for a
  * wallet's personal_sign.
  *
- * test/redeem.test.js checks the endpoint's own logic (who may redeem, how much, idempotence)
- * against the mock provider, which never fails and never waits. test/nadanada.test.js checks the
- * nadanada provider's own money-handling in isolation. This file is the seam between them: does
- * redeem.js still get the accounting right — banked credit spent once per package, nothing lost,
- * nothing doubled — when the provider underneath is the one that can be slow, broke, or stale?
+ * test/redeem.test.js checks the endpoint's own logic (who may redeem, how much, idempotence, the
+ * week boundary, a stale allowances file) against the mock provider, which never fails and never
+ * waits. test/nadanada.test.js checks the nadanada provider's own money-handling in isolation.
+ * This file is the seam between them: does redeem.js still get the accounting right — this week's
+ * allowance spent once per package, nothing lost, nothing doubled — when the provider underneath
+ * is the one that can be slow, broke, or stale?
  *
  *   node test/redeem-nadanada.test.js
  */
@@ -22,6 +23,7 @@ const API = path.join(__dirname, '..', 'site', 'api');
 const secp = require(path.join(API, 'lib', 'secp256k1.js'));
 const eip191 = require(path.join(API, 'lib', 'eip191.js'));
 const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
+const week = require(path.join(API, 'lib', 'week.js'));
 const fakeNadanada = require(path.join(__dirname, 'support', 'fake-nadanada.js'));
 
 let failures = 0, checks = 0;
@@ -37,12 +39,16 @@ const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  o
 // caches its response for a minute (redeem.js's CACHE_TTL_MS), so a wallet added to the map after
 // the first fetch would not be seen until the cache expired. One wallet per scenario that needs a
 // clean ledger, per the mock-provider suite's own convention.
-const RICH = secp.newPrivateKey();   // $9.00 banked: Europe, then Germany, then out of credit
-const BROKE = secp.newPrivateKey();  // $2.99 banked, for a wallet whose wallet-of-record cannot pay
-const SLOW = secp.newPrivateKey();   // $2.99 banked, for a profile slower than the function waits
-const STALE = secp.newPrivateKey();  // $2.00 banked, for a config whose price nadanada disagrees with
-const MOCKW = secp.newPrivateKey();  // $9.00 banked, to prove the mock provider still works untouched
+const RICH = secp.newPrivateKey();   // $9.00 allowance this week: Europe, then Germany, then out of credit
+const BROKE = secp.newPrivateKey();  // $2.99 allowance, for a wallet whose wallet-of-record cannot pay
+const SLOW = secp.newPrivateKey();   // $2.99 allowance, for a profile slower than the function waits
+const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price nadanada disagrees with
+const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provider still works untouched
 const addr = (k) => secp.addressOf(k).toLowerCase();
+
+// The current week, computed the same way redeem.js computes it (site/api/lib/week.js), so the
+// allowances fixture below is unconditionally "this week" whenever this file happens to run.
+const CUR = week.weekOf(Math.floor(Date.now() / 1000));
 
 const now = () => Math.floor(Date.now() / 1000);
 const message = (address, ts) => 'OT+T data\n' + address + '\n' + (ts === undefined ? now() : ts);
@@ -68,17 +74,22 @@ const PACKAGES = [
 // for it — the "our config is out of date" case a real deployment could hit between catalogue
 // refreshes.
 const STALE_PACKAGES = [Object.assign({}, PACKAGES[0], { priceUsd: 1.50 }), PACKAGES[1]];
-const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, rebateBps: 800, provider: 'nadanada' };
+const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'nadanada' };
 const NORMAL_CONFIG = Object.assign({}, BASE_CONFIG, { packages: PACKAGES });
 const STALE_CONFIG = Object.assign({}, BASE_CONFIG, { packages: STALE_PACKAGES });
+// The contract shape: written by the indexer, for one specific week, each wallet's standing FOR
+// THAT WEEK ONLY — tokens (base units), its share of the circulating supply, and the dollars that
+// share is worth of this week's budget.
 const allowances = {
-  asOf: 1700000000, block: 1, coin: COIN, curve: CURVE, rebateBps: 800,
+  asOf: 1789600000, block: 64200000, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  snapshotBlock: 64100000, coin: COIN, curve: CURVE, budgetUsd: 1000, budgetSource: 'test fixture',
+  circulating: '1000000000000000000000000', decimals: 18, holders: 5,
   wallets: {
-    [addr(RICH)]: { tradedUsd: 90, earnedUsd: 9.0 },
-    [addr(BROKE)]: { tradedUsd: 29.9, earnedUsd: 2.99 },
-    [addr(SLOW)]: { tradedUsd: 29.9, earnedUsd: 2.99 },
-    [addr(STALE)]: { tradedUsd: 20, earnedUsd: 2.0 },
-    [addr(MOCKW)]: { tradedUsd: 90, earnedUsd: 9.0 },
+    [addr(RICH)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(BROKE)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
+    [addr(SLOW)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
+    [addr(STALE)]: { tokens: '200000000000000000000', share: 0.02, allowanceUsd: 2.0 },
+    [addr(MOCKW)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
   },
 };
 const FILES = {
@@ -130,7 +141,7 @@ async function main() {
 
   console.log('before anything');
   let r = await GET(addr(RICH));
-  check('$9 earned, $0 redeemed, $9 remaining, no orders', [r.status, r.body.earnedUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders], [200, 9, 0, 9, []]);
+  check('$9 allowance this week, $0 redeemed, $9 remaining, no orders, not stale', [r.status, r.body.allowanceUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders, r.body.stale], [200, 9, 0, 9, [], false]);
 
   console.log('\nPOST Europe, sent twice at once — the deterministic id must resolve the race to one eSIM');
   // A client that never saw the first response (a dropped connection, a timeout) retries with the
@@ -148,7 +159,7 @@ async function main() {
   const [respA, respB] = await Promise.all([POST(bodyEurope), POST(bodyEurope)]);
   check('both racing POSTs succeed', [respA.status, respB.status], [200, 200]);
   const europeOrder = respA.body.order;
-  check('the order is Europe, n=0, done, at the catalogue price', [europeOrder.n, europeOrder.packageCode, europeOrder.stage, europeOrder.pending, europeOrder.priceUsd], [0, 'fixed_5GB_30D_EUROPE', 'done', false, 5.99]);
+  check('the order is Europe, n=0, this week, done, at the catalogue price', [europeOrder.n, europeOrder.week, europeOrder.packageCode, europeOrder.stage, europeOrder.pending, europeOrder.priceUsd], [0, CUR, 'fixed_5GB_30D_EUROPE', 'done', false, 5.99]);
   check('remainingUsd on both responses reflects one deduction, not two', [respA.body.remainingUsd, respB.body.remainingUsd], [3.01, 3.01]);
   checkThat('it carries a QR (https), an LPA activation code and a 19-digit ICCID',
     /^https/.test(europeOrder.qrCodeUrl) && europeOrder.ac.startsWith('LPA:1$') && /^\d{19}$/.test(europeOrder.iccid), JSON.stringify(europeOrder));

@@ -430,9 +430,21 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .data-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 24px; align-items: start; }
 .data-tiles { margin-bottom: 20px; }
 .data-page .col > .data-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.data-mine .data-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+/* Four supporting figures (used, left, share, resets) rather than the three this used to hold — an
+   auto-fit track, not a hard count, so it settles at 2 across on a phone and one row above that. */
+.data-mine .data-tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 .data-mine .stat-tile, .data-mine .u-tile { padding: 12px; }
 .data-mine .st-value, .data-mine .u-tile-value { font-size: 17px; }
+/* The two headline figures — what a wallet holds, and what that buys this week — are what the
+   founder asked this screen show first, so they get the plan-card's own big-number treatment
+   rather than the compact stat-tile one every other figure on this page uses. No icon, same as
+   .plan-price: the number is the whole point. */
+.data-headline { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 20px; }
+@media (min-width: 560px) { .data-headline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dh-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 20px; }
+.dh-label { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); }
+.dh-value { margin-top: 10px; font: 700 clamp(30px, 4vw, 38px)/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
+.dh-sub { margin-top: 8px; font: 500 13px/1.45 var(--font-sans); color: var(--text-secondary); }
 .data-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .data-notlaunched .rows { margin-top: 14px; }
 .data-addr { color: var(--text-secondary); margin: -6px 0 14px; overflow-wrap: anywhere; }

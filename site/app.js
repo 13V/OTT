@@ -3,9 +3,10 @@
  * OT+T — the front end's shell.
  *
  * OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin: a
- * 10% creator tax on every trade against the coin's bonding curve funds a treasury, and every
- * trade pays the TRADER — not the holder — a rebate of what they traded, banked as dollars of data
- * credit and spent on eSIMs from nadanada, paid for over a Blink Lightning wallet. This programme
+ * creator tax on every trade against the coin's bonding curve funds a treasury, and every week
+ * last week's tax becomes that week's data budget — split among HOLDERS by their share of the
+ * circulating supply, banked as dollars of credit, and spent on eSIMs from nadanada, paid for over
+ * a Blink Lightning wallet. This programme
  * used to be two routes (#/data, #/status) inside a bigger launchpad, whatever.fun; this file is
  * what makes it a site of its own. site/esim.js and site/status.js are the same files that lived
  * there — this shell only hands them the `ctx` they already expected: the DOM helper, the RPC
@@ -154,7 +155,7 @@
   // hash falls back to 'home', so TITLES.home also stands in whenever STATE.route somehow lands on
   // something this map does not name.
   const TITLES = {
-    home: 'OT+T — trade the coin, fly with data',
+    home: 'OT+T — hold the coin, fly with data',
     status: 'Status — OT+T',
     about: 'How this works — OT+T',
   };
@@ -192,8 +193,8 @@
    * The About route (#/about) — the one page this shell draws itself, because it is short and it
    * is not a route module the way esim.js and status.js are: it keeps no state and reads the chain
    * never. The only thing it reads is config/esim.json, and only for the handful of numbers that
-   * would otherwise be typed here a second time and could drift from it — the tax, the rebate, and
-   * the catalogue's own shape. A missing config is not an error here: the mechanism described below
+   * would otherwise be typed here a second time and could drift from it — the tax and the
+   * catalogue's own shape. A missing config is not an error here: the mechanism described below
    * is still true without a number attached to it, so a figure that cannot be read is named as
    * unconfigured rather than guessed at.
    */
@@ -201,7 +202,7 @@
     view.appendChild(h('div', { class: 'page-head' },
       h('div', { class: 'label' }, 'HOW THIS WORKS'),
       h('h1', {}, 'How this works'),
-      h('p', { class: 'page-lede' }, 'What OT+T actually is, how a trade turns into a gigabyte, and what this first version deliberately leaves out.')));
+      h('p', { class: 'page-lede' }, 'What OT+T actually is, how holding turns into a gigabyte, and what this first version deliberately leaves out.')));
     const body = h('div', {}, notice('Reading the numbers…', 'plain'));
     view.appendChild(body);
 
@@ -216,7 +217,6 @@
     // that use these read naturally either way.
     const pct = (bps) => (Number.isFinite(Number(bps)) && Number(bps) > 0 ? (Number(bps) / 100) + '%' : null);
     const taxPhrase = pct(cfg.taxBps) ? 'a ' + pct(cfg.taxBps) + ' creator tax' : 'a creator tax (the exact rate is not configured yet)';
-    const rebatePhrase = pct(cfg.rebateBps) ? 'a rebate of ' + pct(cfg.rebateBps) : 'a rebate (the exact rate is not configured yet)';
 
     // The same rule esim.js uses for what counts as a real package, so this page's catalogue line
     // can never disagree with the one the programme page itself shows.
@@ -239,14 +239,14 @@
     body.appendChild(h('div', { class: 'prose' },
       entry('What OT+T is',
         'OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin. The coin trades on Robinhood Chain against a bonding curve, and its contract carries ' + taxPhrase + ' on every trade. That tax is the whole of the carrier’s revenue: it funds a treasury, and the treasury’s only job is buying mobile data.'),
-      entry('How a trade becomes a gigabyte',
-        'Every buy or sell against the curve, in USDG, pays the trader — not the holder — ' + rebatePhrase + ' of what they traded, banked as dollars of data credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js watches the curve’s USDG transfers and keeps a running balance per wallet in site/data/allowances.json; /api/redeem is what turns that balance into an eSIM from nadanada. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet is what actually pays nadanada for every eSIM ordered. No person sits in either loop.'),
-      entry('Why the trader, and not the holder',
-        'The tax is paid by trading, in either direction, so the rebate goes to whoever paid it. Buy and hold, and you earn once, on the way in; buy and sell repeatedly, and you earn again on every pass, because every trade paid tax. Nothing here rewards sitting still — it rewards using the market the tax is funded by.'),
+      entry('How holding becomes a gigabyte',
+        'Every Monday, last week’s creator tax becomes that week’s data budget — scaled down first if a reserve is held back — and a wallet’s allowance is simply its share of OTT’s circulating supply times that budget: banked as dollars of credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js reads the coin’s balances once a week and writes every wallet’s standing to site/data/allowances.json; /api/redeem is what turns that standing into an eSIM from nadanada. The allowance expires at the end of the week it was published for — use it or lose it, which is what keeps the promise affordable, since the pool never owes more than one week of tax it has already collected. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet is what actually pays nadanada for every eSIM ordered. No person sits in either loop.'),
+      entry('Why holding, and not trading',
+        'The tax is paid by trading, but the budget it funds is split by holding: a wallet’s allowance is simply its share of the circulating supply, counted fresh once a week, with nothing to claim and nothing to stake. Trade as much as you like — it changes your balance, and next week’s count reads whatever that balance is then — but the trade itself earns nothing. Buy and hold, and every week you are owed the same share of that week’s budget for as long as you keep holding; sell, and next week simply owes you less.'),
       entry('What v1 deliberately leaves out',
-        'Two limits are fixed for now, and both are named on the programme page itself rather than hidden. Only pre-graduation trades count: the indexer watches the bonding curve’s own escrow, and once a coin graduates to a public pool, its volume stops being counted here. And only a USDG-paired coin counts at all — rebates are computed from USDG Transfer events between a wallet and the curve, and a coin paired to native ETH produces none of those, so it would earn nothing under v1.'),
+        'Two limits are fixed for now, and both are named on the programme page itself rather than hidden. Balances are only snapshotted pre-graduation: the indexer reads the bonding curve’s own state, and once a coin graduates to a public pool, trading — and the tax that would fund a future budget — moves off the curve this script watches. And only a USDG-paired coin counts at all: the creator tax is read off the curve’s fee escrow in USDG, and a coin paired to native ETH collects its tax in ETH instead, so v1 cannot price a dollar budget from it.'),
       entry('The coin is the receipt',
-        'OTT is a bonding-curve memecoin, not equity and not a claim on the treasury. What it is a receipt for is the right to trade against the curve and be paid back for it. Holding it and never trading again is just a bet on its price, the same bet holding any memecoin is — and a memecoin can go to zero. Nothing on this site is financial advice.')));
+        'OTT is a bonding-curve memecoin, not equity and not a claim on the treasury. What holding it earns is a weekly data allowance — spendable only on an eSIM, and only for the week it was published, never carried over and never paid out as anything else. That is not a dividend: a dividend is cash, and this is credit that expires. And it is not a claim on the treasury either: the treasury owes nothing beyond the one week already funded by tax it has already collected. Holding OTT and never redeeming anything is just a bet on its price, the same bet holding any memecoin is — and a memecoin can go to zero. Nothing on this site is financial advice.')));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 

@@ -7,8 +7,15 @@
  * static files (config + allowances), a wallet's signature, and an eSIM provider. All three are
  * stood in for here — a node:http server for the files, lib/secp256k1 + lib/eip191 for the
  * wallet (the same code path a browser's personal_sign produces bytes for), and the mock
- * provider — so what is checked is the function's own logic: who may redeem, how much, and that
- * asking twice never mints twice.
+ * provider — so what is checked is the function's own logic: who may redeem, how much, that
+ * asking twice never mints twice, and — the new part — that a wallet's allowance is this week's
+ * share of the file's budget and nothing more: it does not carry over, its ids do not collide
+ * with last week's, and a file that is not for the current week spends nothing at all.
+ *
+ * There is no injectable clock: a week is coarse enough (Monday to Monday) that computing it once
+ * from Date.now(), the same way site/api/lib/week.js does, is stable for the life of a test run.
+ * Every fixture below is built from that real, current week rather than a hard-coded number, so
+ * this suite does not start failing the next time it is run in a different week.
  *
  *   node test/redeem.test.js
  */
@@ -19,6 +26,7 @@ const API = path.join(__dirname, '..', 'site', 'api');
 const secp = require(path.join(API, 'lib', 'secp256k1.js'));
 const eip191 = require(path.join(API, 'lib', 'eip191.js'));
 const mock = require(path.join(API, 'lib', 'providers', 'mock.js'));
+const week = require(path.join(API, 'lib', 'week.js'));
 
 let failures = 0;
 function check(what, got, want) {
@@ -31,10 +39,16 @@ function checkThat(what, cond, detail) {
   else console.log(`  ok   ${what}`);
 }
 
-// Three wallets, so each scenario starts from a clean ledger without reaching into the mock.
-const RICH = secp.newPrivateKey();   // $5.30 of data credit banked
-const POOR = secp.newPrivateKey();   // nothing banked
-const OTHER = secp.newPrivateKey();  // signs for RICH's address
+// The current week, computed the same way redeem.js computes it, so every fixture below is
+// unconditionally "the current week" no matter when this file is run.
+const CUR = week.weekOf(Math.floor(Date.now() / 1000));
+const STALE_WEEK = CUR - 1;
+
+// Four wallets, so each scenario starts from a clean ledger without reaching into the mock.
+const RICH = secp.newPrivateKey();       // $5.30 allowance this week
+const POOR = secp.newPrivateKey();       // holds no OTT: not in the wallets map at all
+const OTHER = secp.newPrivateKey();      // signs for RICH's address
+const HISTORIAN = secp.newPrivateKey();  // $2.00 this week, plus orders in each of the last 4 weeks
 const addr = (k) => secp.addressOf(k).toLowerCase();
 
 const COIN = '0x1111111111111111111111111111111111111111';
@@ -47,14 +61,27 @@ const PACKAGES = [
 ];
 const config = (coin) => ({
   coin, curve: coin ? CURVE : '', treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
-  taxBps: 1000, rebateBps: 800, provider: 'mock', packages: PACKAGES,
+  taxBps: 1000, budgetBps: 10000, provider: 'mock', packages: PACKAGES,
 });
+// site/data/allowances.json's contract shape: written by the indexer, for one specific week, with
+// each wallet's standing FOR THAT WEEK ONLY. RICH and HISTORIAN hold tokens; POOR is simply absent
+// from `wallets`, exactly as a wallet holding zero OTT would be.
 const allowances = {
-  asOf: 1700000000, block: 1, coin: COIN, curve: CURVE, rebateBps: 800,
-  wallets: { [addr(RICH)]: { tradedUsd: 66.25, earnedUsd: 5.3 } },
+  asOf: 1789600000, block: 64200000, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  snapshotBlock: 64100000, coin: COIN, curve: CURVE, budgetUsd: 1000, budgetSource: 'test fixture',
+  circulating: '1000000000000000000000000', decimals: 18, holders: 2,
+  wallets: {
+    [addr(RICH)]: { tokens: '1000000000000000000000', share: 0.1, allowanceUsd: 5.3 },
+    [addr(HISTORIAN)]: { tokens: '500000000000000000000', share: 0.05, allowanceUsd: 2.0 },
+  },
 };
+// The same file, but stamped for last week — what the site sees the instant the clock rolls past
+// Monday 00:00 UTC and the indexer has not run yet. RICH's numbers are otherwise identical, so any
+// test against this fixture proves the staleness, not a coincidentally-empty wallet.
+const staleAllowances = Object.assign({}, allowances, { week: STALE_WEEK, weekStart: week.weekStart(STALE_WEEK), weekEnd: week.weekEnd(STALE_WEEK) });
 const FILES = {
   '/data/allowances.json': allowances,
+  '/data/allowances-stale.json': staleAllowances,
   '/config/esim.json': config(COIN),
   '/config/esim-unlaunched.json': config(''),
 };
@@ -142,14 +169,17 @@ async function main() {
   r = await POST(Object.assign({}, good, { address: addr(RICH).toUpperCase().replace('0X', '0x') }));
   check('a checksummed / upper-case address is the same wallet', r.status, 200);
 
-  console.log('\nhow much: $5.30 banked buys Worldwide ($4.60) then Europe ($0.62), then nothing');
+  console.log('\nhow much: $5.30 this week buys Worldwide ($4.60) then Europe ($0.62), then nothing');
   mock._reset();
   r = await GET(addr(RICH));
-  check('before anything: $5.30 earned, $0 redeemed, $5.30 remaining, no orders',
-    [r.status, r.body.earnedUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders], [200, 5.3, 0, 5.3, []]);
+  check('before anything: $5.30 allowance, $0 redeemed, $5.30 remaining, no orders, not stale',
+    [r.status, r.body.week, r.body.allowanceUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders, r.body.stale, r.body.allowancesWeek],
+    [200, CUR, 5.3, 0, 5.3, [], false, CUR]);
+  check('weekEnd is the contract\'s own arithmetic', r.body.weekEnd, week.weekEnd(CUR));
   const first = await POST(signed(RICH, 'GL-120_1_7'));
-  check('first redemption succeeds and leaves $0.70', [first.status, first.body.order.n, first.body.remainingUsd, first.body.order.priceUsd], [200, 0, 0.7, 4.6]);
-  check('its id is the deterministic one for n=0', first.body.order.transactionId, redeem.transactionIdFor(addr(RICH), 0));
+  check('first redemption succeeds and leaves $0.70', [first.status, first.body.order.n, first.body.order.week, first.body.remainingUsd, first.body.order.priceUsd], [200, 0, CUR, 0.7, 4.6]);
+  check('its id is the deterministic, week-scoped one for n=0', first.body.order.transactionId, redeem.transactionIdFor(addr(RICH), CUR, 0));
+  checkThat('ids carry the new "ott-" prefix — trading no longer earns a "wf-" rebate', first.body.order.transactionId.startsWith('ott-'));
   checkThat('it carries a QR, an activation code and an ICCID',
     first.body.order.qrCodeUrl && first.body.order.ac && /^\d{19}$/.test(first.body.order.iccid), JSON.stringify(first.body.order));
   const second = await POST(signed(RICH, 'EU-35_1_7', { n: 1 }));
@@ -161,8 +191,8 @@ async function main() {
   r = await GET(addr(RICH));
   check('GET agrees: $5.22 redeemed, $0.08 remaining', [r.body.redeemedUsd, r.body.remainingUsd, r.body.orders.length], [5.22, 0.08, 2]);
   check('each order says what it cost', r.body.orders.map((o) => o.priceUsd), [4.6, 0.62]);
-  check('GET lists the orders in the order they were made', r.body.orders.map((o) => [o.n, o.transactionId, o.packageCode]),
-    [[0, first.body.order.transactionId, 'GL-120_1_7'], [1, second.body.order.transactionId, 'EU-35_1_7']]);
+  check('GET lists the orders in the order they were made, each tagged with this week', r.body.orders.map((o) => [o.n, o.week, o.transactionId, o.packageCode]),
+    [[0, CUR, first.body.order.transactionId, 'GL-120_1_7'], [1, CUR, second.body.order.transactionId, 'EU-35_1_7']]);
   check('but GET, being public, carries no codes', [r.body.orders[0].ac, r.body.orders[0].qrCodeUrl, r.body.orders[0].codes, r.body.orders[0].iccid === first.body.order.iccid], ['', '', false, true]);
   r = await POST(signed(RICH, null));
   check('a signed read is the same standing, with the codes', [r.status, r.body.remainingUsd, r.body.orders.length, r.body.orders[0].ac === first.body.order.ac, r.body.orders[0].codes], [200, 0.08, 2, true, true]);
@@ -183,18 +213,55 @@ async function main() {
   console.log('\nidempotence: the same n asked for again is the same order');
   // Simulate a retry that lands after the provider recorded the order but before the client saw
   // it: the provider already holds n=1, so a fresh POST for the "next" id must return it unchanged.
-  const again = await mock.find(redeem.transactionIdFor(addr(RICH), 1));
+  const again = await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 1));
   check('the provider holds exactly what the second POST returned', [again.transactionId, again.iccid], [second.body.order.transactionId, second.body.order.iccid]);
   const mintedBefore = (await GET(addr(RICH))).body.orders.length;
-  await mock.order({ transactionId: redeem.transactionIdFor(addr(RICH), 1), packageCode: 'GL-120_1_7' });
+  await mock.order({ transactionId: redeem.transactionIdFor(addr(RICH), CUR, 1), packageCode: 'GL-120_1_7' });
   check('order() on an existing id does not mint a second profile', (await GET(addr(RICH))).body.orders.length, mintedBefore);
-  check('and the existing package code is kept', (await mock.find(redeem.transactionIdFor(addr(RICH), 1))).packageCode, 'EU-35_1_7');
+  check('and the existing package code is kept', (await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 1))).packageCode, 'EU-35_1_7');
 
-  console.log('\na wallet that never traded');
+  console.log('\na wallet that holds no OTT');
   r = await GET(addr(POOR));
-  check('GET is a clean zero', [r.status, r.body.earnedUsd, r.body.remainingUsd, r.body.orders], [200, 0, 0, []]);
+  check('GET is a clean zero, and says the wallet holds nothing', [r.status, r.body.tokens, r.body.allowanceUsd, r.body.remainingUsd, r.body.orders], [200, '0', 0, 0, []]);
   r = await POST(signed(POOR, 'EU-35_1_7'));
   check('POST is refused', r.status, 409);
+  checkThat('and says plainly that the wallet holds nothing, not just "not enough"', /holds no ott/i.test(r.body.error), r.body.error);
+
+  console.log('\nthe week boundary: last week\'s orders do not spend this week\'s allowance, and ids do not collide');
+  mock._reset();
+  // Four weeks of history, seeded directly at the provider the way a real wallet's past
+  // redemptions would sit there — bypassing the API entirely, exactly as the idempotence check
+  // above does, because there is no other way to have "already redeemed last week" in a fixture.
+  for (let i = 1; i <= 4; i++) {
+    await mock.order({ transactionId: redeem.transactionIdFor(addr(HISTORIAN), CUR - i, 0), packageCode: 'EU-35_1_7' });
+  }
+  r = await GET(addr(HISTORIAN));
+  check('no orders yet this week, despite four weeks of history', [r.body.orders, r.body.redeemedUsd, r.body.remainingUsd], [[], 0, 2.0]);
+  check('history holds exactly the three most recent past weeks, most recent first', r.body.history.map((o) => o.week), [CUR - 1, CUR - 2, CUR - 3]);
+  checkThat('history does not reach back a fourth week', !r.body.history.some((o) => o.week === CUR - 4));
+  check('every history order still prices correctly', r.body.history.map((o) => o.priceUsd), [0.62, 0.62, 0.62]);
+  checkThat('history is redacted on a public GET, exactly like this week\'s orders', r.body.history.every((o) => o.ac === '' && o.qrCodeUrl === '' && o.codes === false));
+  const thisWeek = await POST(signed(HISTORIAN, 'EU-35_1_7', { n: 0 }));
+  check('this week starts a fresh sequence at n=0 regardless of four weeks of history', [thisWeek.status, thisWeek.body.order.n, thisWeek.body.order.week, thisWeek.body.remainingUsd], [200, 0, CUR, 1.38]);
+  checkThat('its id is not any of the past four weeks\' ids — last week\'s ids are never reused',
+    ![1, 2, 3, 4].map((i) => redeem.transactionIdFor(addr(HISTORIAN), CUR - i, 0)).includes(thisWeek.body.order.transactionId));
+  r = await GET(addr(HISTORIAN));
+  check('GET now shows one order this week, redeemedUsd only for it, and the same three-week history', [r.body.orders.length, r.body.redeemedUsd, r.body.history.length], [1, 0.62, 3]);
+  r = await POST(signed(HISTORIAN, null));
+  checkThat('a signed read reveals codes on this week\'s orders', r.body.orders[0].codes === true && !!r.body.orders[0].ac);
+  checkThat('and on every history order too', r.body.history.length === 3 && r.body.history.every((o) => o.codes === true && !!o.ac));
+
+  console.log('\na stale allowances file: last week\'s numbers do not carry over, and nothing can be spent');
+  mock._reset();
+  process.env.ALLOWANCES_URL = base + '/data/allowances-stale.json';
+  r = await GET(addr(RICH));
+  check('GET still succeeds and says plainly that the file is stale', [r.status, r.body.ok, r.body.stale, r.body.allowancesWeek, r.body.week], [200, true, true, STALE_WEEK, CUR]);
+  check('allowanceUsd and remainingUsd are forced to zero, not last week\'s $5.30', [r.body.allowanceUsd, r.body.remainingUsd], [0, 0]);
+  r = await POST(signed(RICH, 'EU-35_1_7', { n: 0 }));
+  check('every redemption is refused while the file is stale', [r.status, r.body.ok], [409, false]);
+  checkThat('and says the week\'s allowance has not been published yet, not "not enough credit"', /allowance.*not.*published/i.test(r.body.error), r.body.error);
+  check('nothing was minted', (await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0))), null);
+  process.env.ALLOWANCES_URL = base + '/data/allowances.json';
 
   console.log('\nVercel hands the function a pre-parsed body');
   mock._reset();

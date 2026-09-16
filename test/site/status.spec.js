@@ -22,6 +22,18 @@ const TREASURY = '0x3333333333333333333333333333333333333333';
 const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' };
 
+// Week arithmetic — identical to plan-contract.md, scripts/allowances.js and site/esim.js's own
+// copy. Computed from the real clock at load time so "this week" fixtures are genuinely current
+// whenever the suite actually runs.
+const WEEK_S = 604800;
+const ANCHOR = 345600;
+const weekOf = (s) => Math.floor((s - ANCHOR) / WEEK_S);
+const weekStartOf = (w) => ANCHOR + w * WEEK_S;
+const weekEndOf = (w) => weekStartOf(w) + WEEK_S;
+const CUR_WEEK = weekOf(Math.floor(Date.now() / 1000));
+const CUR_WEEK_START = weekStartOf(CUR_WEEK);
+const fmtDate = (s) => new Date(s * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
 // Three places across five nadanada packages — the same catalogue shape test/site/data.spec.js
 // uses, so the arithmetic below is the same arithmetic that file already proves correct: Germany's
 // 10 GB for $7.99 is 80c/GB (cheapest per gigabyte), Global's 1 GB for $8.99 is $8.99/GB (dearest
@@ -33,7 +45,7 @@ const PACKAGES = [
   { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 5, days: 30, priceUsd: 4.99, regions: 'DE' },
   { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE' },
 ];
-const base = { pair: USDG, taxBps: 1000, rebateBps: 800, provider: 'nadanada', catalogueAt: '2026-09-01', packages: PACKAGES, brand: BRAND };
+const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'nadanada', catalogueAt: '2026-09-01', packages: PACKAGES, brand: BRAND };
 const NOT_LAUNCHED = Object.assign({ coin: '', curve: '', treasury: '' }, base);
 const LAUNCHED = Object.assign({ coin: COIN, curve: CURVE, treasury: TREASURY }, base);
 
@@ -54,7 +66,7 @@ const TXHASH = '0x' + 'ab'.repeat(32);
 // A fully healthy /api/status: every check ok, the pool reading present, the coin launched.
 const API_OK = {
   ok: true, asOf: NOW, brand: BRAND,
-  config: { launched: true, coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'nadanada', packages: 5, places: 3, catalogueAt: '2026-09-01', rebateBps: 800, taxBps: 1000 },
+  config: { launched: true, coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'nadanada', packages: 5, places: 3, catalogueAt: '2026-09-01', budgetBps: 10000, taxBps: 1000 },
   wiring: { provider: 'nadanada', payer: 'blink', store: 'vercel-kv' },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
   checks: {
@@ -66,19 +78,22 @@ const API_OK = {
   pool: { usd: 812.34, sats: 1500000 },
 };
 
-// Three wallets: A and B have earned real credit, C traded a trickle and earned nothing — so
-// "wallets earning" (2) is a smaller number than "wallets that have traded" (3), and the two
-// numbers being different is itself the thing worth checking. Traded 500+250+10 = $760.00 total;
-// earned 40+20+0 = $60.00 total.
+// Three wallets holding a 1,000,000 OTT circulating supply between them: A holds half, B a
+// quarter, C a hundredth — so the top-holders table has a real spread, in share and in the
+// allowance that share buys against this week's $400.00 budget ($200.00 / $100.00 / $4.00).
 const WALLET_A = '0x' + 'a'.repeat(40);
 const WALLET_B = '0x' + 'b'.repeat(40);
 const WALLET_C = '0x' + 'c'.repeat(40);
+const oneOtt = 10n ** 18n;
 const ALLOWANCES_FRESH = {
-  asOf: NOW - 60, block: 1, coin: COIN, curve: CURVE, rebateBps: 800,
+  asOf: NOW - 60, block: 1, week: CUR_WEEK, weekStart: CUR_WEEK_START, weekEnd: weekEndOf(CUR_WEEK),
+  snapshotBlock: 1, coin: COIN, curve: CURVE,
+  budgetUsd: 400, budgetSource: 'tax collected in week ' + (CUR_WEEK - 1),
+  circulating: (1000000n * oneOtt).toString(), decimals: 18, holders: 3,
   wallets: {
-    [WALLET_A]: { tradedUsd: 500, earnedUsd: 40 },
-    [WALLET_B]: { tradedUsd: 250, earnedUsd: 20 },
-    [WALLET_C]: { tradedUsd: 10, earnedUsd: 0 },
+    [WALLET_A]: { tokens: (500000n * oneOtt).toString(), share: 0.5, allowanceUsd: 200 },
+    [WALLET_B]: { tokens: (250000n * oneOtt).toString(), share: 0.25, allowanceUsd: 100 },
+    [WALLET_C]: { tokens: (10000n * oneOtt).toString(), share: 0.01, allowanceUsd: 4 },
   },
 };
 
@@ -178,18 +193,25 @@ test('fully wired and launched: every health row is ok, and every section shows 
   await expect(treasury).toContainText('$50.00 → 123,456 sats');
   await expect(treasury).toContainText('order FF-TEST-1');
 
-  // The programme: $760.00 traded, $60.00 earned, 2 of 3 wallets earning, and the top-wallets
-  // table sorted by earned credit (A $40, B $20, C $0).
+  // The programme: this week's $400.00 budget, 3 holders, the week it is for, and the
+  // top-holders table sorted by allowance (A $200, B $100, C $4).
   const programme = cardByTitle(page, 'The programme');
-  await expect(programme).toContainText('$760.00');
-  await expect(programme).toContainText('$60.00');
-  await expect(programme).toContainText('of 3 that have traded');
+  await expect(programme).toContainText('$400.00');
+  await expect(programme).toContainText('tax collected in week ' + (CUR_WEEK - 1));
+  await expect(programme).toContainText('3');
+  await expect(programme).toContainText('wallets with a share of the supply');
+  await expect(programme).toContainText(fmtDate(CUR_WEEK_START));
   const rows = programme.locator('.status-table tbody tr');
   await expect(rows).toHaveCount(3);
-  await expect(rows.nth(0)).toContainText('$500.00');
-  await expect(rows.nth(0)).toContainText('$40.00');
-  await expect(rows.nth(1)).toContainText('$20.00');
-  await expect(rows.nth(2)).toContainText('$0.00');
+  await expect(rows.nth(0)).toContainText('500,000 OTT');
+  await expect(rows.nth(0)).toContainText('50.0%');
+  await expect(rows.nth(0)).toContainText('$200.00');
+  await expect(rows.nth(1)).toContainText('250,000 OTT');
+  await expect(rows.nth(1)).toContainText('25.0%');
+  await expect(rows.nth(1)).toContainText('$100.00');
+  await expect(rows.nth(2)).toContainText('10,000 OTT');
+  await expect(rows.nth(2)).toContainText('1.00%');
+  await expect(rows.nth(2)).toContainText('$4.00');
 
   // The catalogue: from config/esim.json — 3 places, 5 packages, cheapest $1.19 (Europe), per
   // gigabyte $0.80 (Germany) to $8.99 (Global), catalogue dated Sep 1, 2026.
@@ -257,7 +279,7 @@ test('the health endpoint is absent (404): the page still renders every section,
   // endpoint's own pool reading) degrades, and it says why.
   await expect(cardByTitle(page, 'The coin')).toContainText('$6,500.00');
   await expect(cardByTitle(page, 'The treasury')).toContainText('$88.10');
-  await expect(cardByTitle(page, 'The programme')).toContainText('$760.00');
+  await expect(cardByTitle(page, 'The programme')).toContainText('$400.00');
   await expect(cardByTitle(page, 'The catalogue')).toContainText('nadanada');
   const pool = cardByTitle(page, 'The pool');
   await expect(pool).toContainText('the health check could not be reached');
@@ -277,7 +299,10 @@ test('not launched: the coin section is the honest line plus a link out to the l
   const api = JSON.parse(JSON.stringify(API_OK));
   api.config.launched = false;
   await stubConfig(page, NOT_LAUNCHED);
-  await stubAllowances(page, { asOf: NOW - 60, block: 1, coin: '', curve: '', rebateBps: 800, wallets: {} });
+  await stubAllowances(page, {
+    asOf: NOW - 60, block: 1, week: CUR_WEEK, weekStart: CUR_WEEK_START, weekEnd: weekEndOf(CUR_WEEK),
+    snapshotBlock: 0, coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', decimals: 18, holders: 0, wallets: {},
+  });
   await stubTreasury(page, { asOf: NOW - 60, treasury: '', escrowClaimableUsd: null, walletUsd: null, reseller: null, spend30dUsd: 0, redemptions30d: 0, perDayUsd: 0, runwayDays: null, lastClaim: null, status: 'unknown' });
   await stubClaims(page, []);
   await stubFunding(page, []);

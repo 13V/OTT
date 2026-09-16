@@ -40,6 +40,7 @@ const path = require('path');
 const { provider: chooseProvider } = require('./lib/providers');
 const { payer: choosePayer } = require('./lib/payers');
 const { store: chooseStore } = require('./lib/store');
+const { weekOf } = require('./lib/week');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -132,7 +133,11 @@ function summariseConfig(config) {
     packages: packages.length,
     places,
     catalogueAt: String(config.catalogueAt || ''),
-    rebateBps: Number.isFinite(Number(config.rebateBps)) ? Number(config.rebateBps) : 0,
+    // Trading's rebate (rebateBps) is retired; budgetBps is its replacement, the share of last
+    // week's tax that becomes this week's data budget. It defaults to 10000 (all of it) when the
+    // config is silent on it, exactly as the indexer treats a missing value, so this reports what
+    // is actually in effect rather than a bare zero that would read as "no budget at all".
+    budgetBps: Number.isFinite(Number(config.budgetBps)) ? Number(config.budgetBps) : 10000,
     taxBps: Number.isFinite(Number(config.taxBps)) ? Number(config.taxBps) : 0,
   };
 }
@@ -205,13 +210,28 @@ async function checkProvider() {
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
 }
 
-async function checkAllowances() {
+/**
+ * Is the published allowance actually this week's? Holding is the whole promise now, so the one
+ * failure this check exists to catch is the indexer falling behind the clock: a file still naming
+ * last week is not a lesser version of the truth, it is wrong, and every redemption against it is
+ * refused (see redeem.js). `week` is the current week, computed here once and shared with the rest
+ * of computeStatus() so this check and the top-level `allowances` field never disagree.
+ */
+async function checkAllowances(week) {
   try {
     const allowances = await withTimeout(readAllowances(), CHECK_TIMEOUT_MS, 'allowances');
+    const fileWeek = Number(allowances && allowances.week);
     const wallets = allowances && allowances.wallets && typeof allowances.wallets === 'object' ? Object.keys(allowances.wallets).length : 0;
-    const block = Number(allowances && allowances.block) || 0;
-    return { ok: true, detail: wallets + ' wallet' + (wallets === 1 ? '' : 's') + ', block ' + block };
-  } catch (e) { return { ok: false, detail: messageOf(e) }; }
+    const holders = Number.isFinite(Number(allowances && allowances.holders)) ? Number(allowances.holders) : wallets;
+    const budgetUsd = Number(allowances && allowances.budgetUsd) || 0;
+    const stale = !Number.isFinite(fileWeek) || fileWeek !== week;
+    const info = { week: Number.isFinite(fileWeek) ? fileWeek : null, currentWeek: week, stale, budgetUsd, holders };
+    if (stale) {
+      const detail = 'allowance file is for week ' + (Number.isFinite(fileWeek) ? fileWeek : 'unknown') + ', not the current week ' + week + ' — not published yet';
+      return { ok: false, detail, info };
+    }
+    return { ok: true, detail: holders + ' holder' + (holders === 1 ? '' : 's') + ', $' + budgetUsd.toFixed(2) + ' budget, week ' + week, info };
+  } catch (e) { return { ok: false, detail: messageOf(e), info: null }; }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -219,6 +239,7 @@ async function checkAllowances() {
 // ---------------------------------------------------------------------------------------------
 async function computeStatus() {
   const asOf = Math.floor(Date.now() / 1000);
+  const week = weekOf(asOf);
   const providerName = wiredName(chooseProvider, 'ESIM_PROVIDER', 'mock');
   const payerName = wiredName(choosePayer, 'LN_PAYER', 'blink');
   const storeName = storeWiredName();
@@ -228,7 +249,7 @@ async function computeStatus() {
     checkStore(),
     checkPayer(),
     checkProvider(),
-    checkAllowances(),
+    checkAllowances(week),
   ]);
 
   // config is not one of the four checks the dashboard shows a line for — the top-level `config`
@@ -240,10 +261,14 @@ async function computeStatus() {
     store: storeR.status === 'fulfilled' ? storeR.value : { ok: false, detail: messageOf(storeR.reason) },
     payer: payerR.status === 'fulfilled' ? payerR.value : { ok: false, detail: messageOf(payerR.reason), pool: null },
     provider: providerR.status === 'fulfilled' ? providerR.value : { ok: false, detail: messageOf(providerR.reason) },
-    allowances: allowancesR.status === 'fulfilled' ? allowancesR.value : { ok: false, detail: messageOf(allowancesR.reason) },
+    allowances: allowancesR.status === 'fulfilled' ? allowancesR.value : { ok: false, detail: messageOf(allowancesR.reason), info: null },
   };
 
   const pool = checks.payer.ok && checks.payer.pool ? checks.payer.pool : null;
+  // The structured numbers behind the allowances check — week, whether it is stale, the budget,
+  // the holder count — live at the top level the same way the payer's `pool` does, so a dashboard
+  // can show them without parsing the detail sentence.
+  const allowances = checks.allowances.info || null;
   const brand = config.brand || {};
 
   // Every detail string, from whatever it came from, passes through scrub() exactly once, here,
@@ -264,6 +289,7 @@ async function computeStatus() {
       allowances: { ok: checks.allowances.ok, detail: checks.allowances.detail },
     },
     pool,
+    allowances,
   };
 }
 

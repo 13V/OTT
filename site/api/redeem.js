@@ -2,43 +2,55 @@
 /**
  * whatever.fun — /api/redeem
  *
- * The one server-side piece of the Data page: turn a wallet's banked data credit into a real eSIM.
+ * The one server-side piece of the Data page: turn a wallet's standing allowance into a real eSIM.
  *
+ * Holding OTT is the subscription. Every week, last week's creator tax becomes this week's data
+ * budget, and a wallet's allowance is its share of the circulating supply times that budget —
+ * written per-week into site/data/allowances.json by the indexer (scripts/allowances.js), read
+ * here over HTTP. Trading earns nothing any more; only holding, only for the week you hold it in.
  * Credit is in dollars, not gigabytes, because the reseller's wholesale price for a gigabyte runs
  * from $0.62 in Europe to $4.60 worldwide and a ledger in gigabytes would let every wallet spend a
  * cheap one on a dear one. A package costs its priceUsd from site/config/esim.json; what a wallet
- * has redeemed is the sum of the prices of the packages it holds.
+ * has redeemed is the sum of the prices of the packages it holds this week.
  * Everything else about the product is static (allowances.json is written by the indexer, the
  * page reads it) — this exists only because handing out a profile costs money and so needs a
  * signature check and a provider secret, neither of which can live in a browser.
  *
- *   GET  /api/redeem?address=0x…   what this wallet has earned, redeemed, and can still redeem,
- *                                  and every past order — without its codes. Balances are public
- *                                  (they are derived from public chain data); an activation code
- *                                  is a one-time thing, and whoever installs it first has the data.
+ *   GET  /api/redeem?address=0x…   this wallet's standing for the current week — what it holds,
+ *                                  its allowance, what it has redeemed and can still redeem, this
+ *                                  week's orders and the last three weeks' — without codes.
+ *                                  Balances are public (they are derived from public chain data);
+ *                                  an activation code is a one-time thing, and whoever installs it
+ *                                  first has the data.
  *   POST /api/redeem               { address, message, signature }              -> the same, with codes
  *   POST /api/redeem               { address, message, signature, packageCode, n } -> a new order,
- *                                  where n is how many orders the caller has seen: its own idea of
- *                                  which slot it is filling. See "idempotence" below.
+ *                                  where n is how many orders the caller has seen THIS WEEK: its
+ *                                  own idea of which slot it is filling. See "idempotence" below.
  *
- * There is no database of wallets. The provider is the ledger: a wallet's Nth redemption always
- * carries transactionId "wf-" + keccak(address:n)[0..32], so "how many has this wallet redeemed"
- * is answered by asking the provider find(id) for n = 0, 1, 2… until one is missing, and "redeem
- * one more" is an order under the next id. (The eSIM Access provider answers find() from the
- * reseller's own order history; the nadanada one from a record it keeps per id, because nadanada
- * keeps none — see lib/providers/nadanada.js and lib/store.js.) Two requests racing for the same n resolve at the
- * provider, which refuses a duplicate transactionId — so the worst case is one of them being told
- * to try again, never a second eSIM. The loop is capped at 200 so a whale cannot turn a GET into
- * 200 upstream calls indefinitely; 200 GB of rebates is far beyond anything v1 will bank.
+ * There is no database of wallets. The provider is the ledger: a wallet's Nth redemption in week W
+ * always carries transactionId "ott-" + keccak(address:W:n)[0..32], so "how many has this wallet
+ * redeemed this week" is answered by asking the provider find(id) for n = 0, 1, 2… until one is
+ * missing, and "redeem one more" is an order under the next id. Scoping the id by week is what
+ * makes an expiring allowance work at all: every Monday the sequence starts over at n=0 for every
+ * wallet, with nothing to reset, because last week's ids simply stop being the ones this week's
+ * redemptions look under. Past orders are not deleted or affected in any way — they are just found
+ * under last week's ids instead, which is what `history` is for (see below). (The eSIM Access
+ * provider answers find() from the reseller's own order history; the nadanada one from a record it
+ * keeps per id, because nadanada keeps none — see lib/providers/nadanada.js and lib/store.js.) Two
+ * requests racing for the same id resolve at the provider, which refuses a duplicate
+ * transactionId — so the worst case is one of them being told to try again, never a second eSIM.
+ * Each week's lookup loop is capped at 200 so a whale cannot turn a GET into hundreds of upstream
+ * calls indefinitely; a wallet's allowance, being a share of one week's budget, makes 200 orders in
+ * a single week implausible on its own, but the cap holds regardless.
  *
  * Sign-in is a personal_sign over "OT+T data\n<lowercase address>\n<unix seconds>", good
  * for ten minutes. It proves control of the wallet without a session, a cookie, or a nonce store.
  *
- * Idempotence: a redeem names the slot it means to fill, `n`. If that slot is already filled with
- * the same package, the existing order comes back and nothing is minted — so a retried, replayed
- * or double-clicked POST is the same POST. If the slot is ahead of the ledger, or filled with a
- * different package, the caller's picture is stale and it is told to reload (409). A replayed
- * signature therefore cannot redeem more than the request it was made for.
+ * Idempotence: a redeem names the slot it means to fill this week, `n`. If that slot is already
+ * filled with the same package, the existing order comes back and nothing is minted — so a
+ * retried, replayed or double-clicked POST is the same POST. If the slot is ahead of the ledger, or
+ * filled with a different package, the caller's picture is stale and it is told to reload (409). A
+ * replayed signature therefore cannot redeem more than the request it was made for.
  *
  * Config and allowances both come from the deployment itself rather than being imported, because
  * Vercel bundles only what its file tracer can see from this file. The tracer does follow a
@@ -46,17 +58,20 @@
  * disk (fast, no fetch); the HTTP fallback covers the case where a future edit breaks the trace,
  * since a missing config would otherwise take the whole endpoint down. allowances.json is only
  * ever fetched over HTTP: it is regenerated by the indexer far more often than the function is
- * deployed, and a bundled copy would be stale from the first commit.
+ * deployed, and a bundled copy would be stale from the first commit — and, now, it carries a
+ * `week` of its own that this file checks against the clock on every request (see "staleness").
  */
 const fs = require('fs');
 const path = require('path');
 const { keccak256Hex } = require('./lib/keccak');
 const eip191 = require('./lib/eip191');
 const { provider: chooseProvider } = require('./lib/providers');
+const { weekOf, weekEnd: weekEndOf } = require('./lib/week');
 
 const MESSAGE_HEAD = 'OT+T data';
 const SIGNIN_WINDOW_S = 10 * 60;
 const MAX_ORDERS = 200;
+const HISTORY_WEEKS = 3;
 const FETCH_TIMEOUT_MS = 5000;
 const CACHE_TTL_MS = 60 * 1000;
 const MAX_BODY_BYTES = 16 * 1024;
@@ -111,9 +126,15 @@ async function readAllowances() {
 const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
 const round6 = (x) => Math.round(x * 1e6) / 1e6;
 
-/** The wallet's Nth redemption id. Fixed forever: change this and every past order goes missing. */
-function transactionIdFor(address, n) {
-  return 'wf-' + keccak256Hex(address.toLowerCase() + ':' + n).slice(2, 34);
+/**
+ * The wallet's Nth redemption id, in week `week`. Fixed forever: change this and every past order
+ * goes missing. Scoped by week (rather than just address:n, as it was when a rebate was banked
+ * forever) so that each week's sequence starts fresh at n=0 — the mechanism that makes an
+ * allowance which expires at the end of the week actually expire: last week's ids are simply not
+ * the ids this week's redemptions are looked up or placed under.
+ */
+function transactionIdFor(address, week, n) {
+  return 'ott-' + keccak256Hex(address.toLowerCase() + ':' + week + ':' + n).slice(2, 34);
 }
 
 /**
@@ -129,15 +150,28 @@ function priceOf(order, config) {
   return config.packages.reduce((m, p) => Math.max(m, Number(p && p.priceUsd) || 0), 0);
 }
 
-/** Every order the provider holds for this wallet, in order, stopping at the first gap. */
-async function pastOrders(prov, address) {
+/** Every order the provider holds for this wallet in `week`, in order, stopping at the first gap. */
+async function pastOrders(prov, address, week) {
   const orders = [];
   for (let n = 0; n < MAX_ORDERS; n++) {
-    const o = await prov.find(transactionIdFor(address, n));
+    const o = await prov.find(transactionIdFor(address, week, n));
     if (!o) break;
-    orders.push(Object.assign({ n }, o));
+    orders.push(Object.assign({ n, week }, o));
   }
   return orders;
+}
+
+/**
+ * The previous HISTORY_WEEKS weeks' orders, most recent week first — display only. An eSIM already
+ * issued does not stop existing when the week rolls and its allowance expires, so a wallet's past
+ * redemptions stay visible even once they no longer count against anything. Each week is its own
+ * pastOrders() loop with its own MAX_ORDERS cap, so a GET costs at most (1 + HISTORY_WEEKS) capped
+ * loops to the provider, never an unbounded one.
+ */
+async function historyOrders(prov, address, week) {
+  const out = [];
+  for (let i = 1; i <= HISTORY_WEEKS; i++) out.push(...(await pastOrders(prov, address, week - i)));
+  return out;
 }
 
 /**
@@ -148,7 +182,7 @@ async function pastOrders(prov, address) {
 function publicOrder(o, config, { codes = false } = {}) {
   const c = (v) => (codes ? v || '' : '');
   return {
-    n: o.n, transactionId: o.transactionId, packageCode: o.packageCode, priceUsd: priceOf(o, config),
+    n: o.n, week: o.week, transactionId: o.transactionId, packageCode: o.packageCode, priceUsd: priceOf(o, config),
     qrCodeUrl: c(o.qrCodeUrl), ac: c(o.ac), iccid: o.iccid || '', createdAt: o.createdAt || null,
     pending: !!o.pending,
     // What a Lightning-paid provider adds: where a pending order stands (invoiced, paid, done), the
@@ -205,14 +239,44 @@ function send(res, status, body) {
 const fail = (res, status, error) => send(res, status, { ok: false, error });
 
 // ---------------------------------------------------------------------------------------------
-// Shared between GET and POST: where a wallet stands.
+// Shared between GET and POST: where a wallet stands this week.
 // ---------------------------------------------------------------------------------------------
-async function standing(prov, config, allowances, address) {
+
+/**
+ * `week` is the current week (computed from the clock, never from the file). The allowances file
+ * carries the week it was written FOR; when that does not match `week`, the file is stale — the
+ * indexer has not run yet since the boundary — and every wallet's allowanceUsd (and so its
+ * remainingUsd) is treated as 0 rather than let a wallet spend a week-old number. `tokens` and
+ * `share` are holdings, not spending power, so they are still reported from whatever the file last
+ * said even while stale — a wallet can see what it holds; it just cannot spend against it yet.
+ */
+async function standing(prov, config, allowances, address, week) {
+  const stale = Number(allowances.week) !== week;
   const row = (allowances.wallets && allowances.wallets[address]) || {};
-  const earnedUsd = round6(Number(row.earnedUsd) || 0);
-  const orders = await pastOrders(prov, address);
+  const tokens = String(row.tokens || '0');
+  const share = Number(row.share) || 0;
+  const allowanceUsd = stale ? 0 : round6(Number(row.allowanceUsd) || 0);
+  const orders = await pastOrders(prov, address, week);
   const redeemedUsd = round6(orders.reduce((s, o) => s + priceOf(o, config), 0));
-  return { earnedUsd, redeemedUsd, remainingUsd: round6(Math.max(0, earnedUsd - redeemedUsd)), orders };
+  const remainingUsd = round6(Math.max(0, allowanceUsd - redeemedUsd));
+  const history = await historyOrders(prov, address, week);
+  let holds = false;
+  try { holds = BigInt(tokens) > 0n; } catch (e) { holds = false; }
+  return { stale, week, weekEnd: weekEndOf(week), tokens, share, allowanceUsd, redeemedUsd, remainingUsd, orders, history, holds };
+}
+
+/** The standing as the wire shows it — the shape both GET and a signed read answer with. */
+function standingBody(s, address, allowances, config, codes) {
+  const fileWeek = Number(allowances && allowances.week);
+  return {
+    ok: true, address,
+    week: s.week, weekEnd: s.weekEnd,
+    tokens: s.tokens, share: s.share,
+    allowanceUsd: s.allowanceUsd, redeemedUsd: s.redeemedUsd, remainingUsd: s.remainingUsd,
+    stale: s.stale, allowancesWeek: Number.isFinite(fileWeek) ? fileWeek : null,
+    orders: s.orders.map((o) => publicOrder(o, config, { codes })),
+    history: s.history.map((o) => publicOrder(o, config, { codes })),
+  };
 }
 
 module.exports = async (req, res) => {
@@ -236,10 +300,10 @@ module.exports = async (req, res) => {
       const prov = chooseProvider();
       const allowances = await readAllowances().catch(() => null);
       if (!allowances) return fail(res, 503, 'allowances unavailable');
-      const s = await standing(prov, config, allowances, address);
-      return send(res, 200, { ok: true, address, earnedUsd: s.earnedUsd, redeemedUsd: s.redeemedUsd, remainingUsd: s.remainingUsd, orders: s.orders.map((o) => publicOrder(o, config)) });
+      const week = weekOf(Math.floor(Date.now() / 1000));
+      const s = await standing(prov, config, allowances, address, week);
+      return send(res, 200, standingBody(s, address, allowances, config, false));
     }
-    const standingReply = (s, codes) => send(res, 200, { ok: true, address: s.address, earnedUsd: s.earnedUsd, redeemedUsd: s.redeemedUsd, remainingUsd: s.remainingUsd, orders: s.orders.map((o) => publicOrder(o, config, { codes })) });
 
     let body;
     try { body = await readBody(req); } catch (e) { return fail(res, 400, 'body must be JSON'); }
@@ -261,14 +325,15 @@ module.exports = async (req, res) => {
       if (!pkg) return fail(res, 400, 'unknown package');
       priceUsd = Number(pkg.priceUsd);
       if (!(priceUsd > 0)) return fail(res, 503, 'package has no price');
-      if (body.n === undefined || body.n === null || !/^\d{1,6}$/.test(String(body.n))) return fail(res, 400, 'n required: how many orders you have seen');
+      if (body.n === undefined || body.n === null || !/^\d{1,6}$/.test(String(body.n))) return fail(res, 400, 'n required: how many orders you have seen this week');
     }
 
     const prov = chooseProvider();
     const allowances = await readAllowances().catch(() => null);
     if (!allowances) return fail(res, 503, 'allowances unavailable');
-    const s = Object.assign({ address }, await standing(prov, config, allowances, address));
-    if (reading) return standingReply(s, true);
+    const week = weekOf(nowS);
+    const s = await standing(prov, config, allowances, address, week);
+    if (reading) return send(res, 200, standingBody(s, address, allowances, config, true));
 
     // The slot. A caller that names a slot already filled with the same package is retrying,
     // replaying or double-clicking, and gets that order back; one that names a slot ahead of the
@@ -281,18 +346,22 @@ module.exports = async (req, res) => {
       return fail(res, 409, 'your orders have changed since; reload');
     }
     if (asked > n) return fail(res, 409, 'your orders have changed since; reload');
+    // Below this point a fresh order is actually being placed, so the wallet's standing has to be
+    // real: not a stale file, and not a wallet with nothing to spend.
+    if (s.stale) return fail(res, 409, "this week's allowance has not been published yet");
+    if (!s.holds) return fail(res, 409, 'this wallet holds no OTT this week');
     if (s.remainingUsd + 1e-9 < priceUsd) return fail(res, 409, 'not enough data credit: $' + s.remainingUsd.toFixed(2) + ' banked, $' + priceUsd.toFixed(2) + ' needed');
 
     // find() first, even though pastOrders() just said the slot was free: a racing request may
     // have placed it in the meantime, and returning that order is the idempotent answer.
-    const transactionId = transactionIdFor(address, n);
+    const transactionId = transactionIdFor(address, week, n);
     const existing = await prov.find(transactionId);
     // The provider is given the catalogue entry three ways: `packageCode` is what it keys the order
     // on (eSIM Access's package code, nadanada's bundle name), `slug` is the place it is priced
     // for (nadanada) or the record name (eSIM Access), and `code` is what priceOf() looks up.
     const order = existing || await prov.order({ transactionId, packageCode: pkg.packageCode || pkg.code, slug: pkg.slug || pkg.code, code: pkg.code, priceUsd, address });
     const remainingUsd = round6(Math.max(0, s.remainingUsd - priceOf(order, config)));
-    return send(res, 200, { ok: true, order: publicOrder(Object.assign({ n }, order), config, { codes: true }), remainingUsd });
+    return send(res, 200, { ok: true, order: publicOrder(Object.assign({ n, week }, order), config, { codes: true }), remainingUsd });
   } catch (e) {
     // Provider and config failures land here. The message is the provider's or ours, never a
     // stack, and never anything that came from the environment. A provider that knows its problem

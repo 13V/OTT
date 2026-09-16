@@ -8,10 +8,10 @@
  * mock Lightning payer (site/api/lib/payers/mock.js) stands in for a wallet. What is asserted is
  * the wire contract (GET only, JSON, never cached, no CORS), that a fully wired deployment reports
  * every check healthy with the numbers read from the real config, that one broken leg — a payer
- * that throws, a store that is not configured — never fails the other checks or the request
- * itself, that the response is cached for a while and ?fresh=1 breaks the cache, and — the one that
- * matters most — that a secret never reaches the response even along the one path (a Blink error
- * message) that could plausibly carry one.
+ * that throws, a store that is not configured, an allowances file stamped for the wrong week —
+ * never fails the other checks or the request itself, that the response is cached for a while and
+ * ?fresh=1 breaks the cache, and — the one that matters most — that a secret never reaches the
+ * response even along the one path (a Blink error message) that could plausibly carry one.
  *
  *   node test/status.test.js
  */
@@ -20,6 +20,7 @@ const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
 const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
+const week = require(path.join(API, 'lib', 'week.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -43,21 +44,36 @@ const PACKAGES = [
 ];
 const LAUNCHED_CONFIG = {
   coin: COIN, curve: CURVE, treasury: '', provider: 'nadanada', catalogueAt: '2026-09-15',
-  rebateBps: 800, taxBps: 1000, brand: BRAND, packages: PACKAGES,
+  budgetBps: 10000, taxBps: 1000, brand: BRAND, packages: PACKAGES,
 };
 const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
+
+// The current week, computed the same way status.js computes it (site/api/lib/week.js), so the
+// allowances fixture below is unconditionally "this week" whenever this file happens to run.
+const CUR = week.weekOf(Math.floor(Date.now() / 1000));
+const STALE_WEEK = CUR - 1;
+
+// The contract shape: written by the indexer, for one specific week, each wallet's standing FOR
+// THAT WEEK ONLY — the holding, its share of the circulating supply, and the dollars that share
+// is worth of this week's budget.
 const ALLOWANCES = {
-  asOf: 1789500000, block: 64082470, coin: COIN, curve: CURVE, rebateBps: 800,
+  asOf: 1789500000, block: 64082470, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  snapshotBlock: 64082470, coin: COIN, curve: CURVE, budgetUsd: 412.5, budgetSource: 'test fixture',
+  circulating: '1000000000000000000000000', decimals: 18, holders: 3,
   wallets: {
-    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': { tradedUsd: 10, earnedUsd: 0.8 },
-    '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb': { tradedUsd: 20, earnedUsd: 1.6 },
-    '0xcccccccccccccccccccccccccccccccccccccccc': { tradedUsd: 30, earnedUsd: 2.4 },
+    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': { tokens: '10000000000000000000', share: 0.01, allowanceUsd: 0.8 },
+    '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb': { tokens: '20000000000000000000', share: 0.02, allowanceUsd: 1.6 },
+    '0xcccccccccccccccccccccccccccccccccccccccc': { tokens: '30000000000000000000', share: 0.03, allowanceUsd: 2.4 },
   },
 };
+// The same file, but stamped for last week — what a dashboard sees the instant the clock rolls
+// past Monday 00:00 UTC and the indexer has not run yet.
+const STALE_ALLOWANCES = Object.assign({}, ALLOWANCES, { week: STALE_WEEK, weekStart: week.weekStart(STALE_WEEK), weekEnd: week.weekEnd(STALE_WEEK) });
 const FILES = {
   '/config/esim.json': LAUNCHED_CONFIG,
   '/config/esim-unlaunched.json': UNLAUNCHED_CONFIG,
   '/data/allowances.json': ALLOWANCES,
+  '/data/allowances-stale.json': STALE_ALLOWANCES,
 };
 
 // A fake req/res pair in the shape Node gives a Vercel function, the same one test/redeem.test.js uses.
@@ -130,10 +146,11 @@ async function main() {
   check('ready mirrors every check, config included', r.body.ready, { config: true, provider: true, payer: true, store: true, allowances: true });
   check('the brand comes from the config', r.body.brand, BRAND);
   check('packages counts rows, places counts distinct slugs', [r.body.config.packages, r.body.config.places, r.body.config.catalogueAt], [4, 3, '2026-09-15']);
-  check('launched, rebate and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.rebateBps, r.body.config.taxBps], [true, COIN, 800, 1000]);
+  check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
   check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'nadanada', payer: 'mock', store: 'memory' });
-  checkThat('the allowances check names the wallet count and the block', /3 wallets?, block 64082470/.test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
+  checkThat('the allowances check names the holder count and the budget for the current week', new RegExp('3 holders?, \\$412\\.50 budget, week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
+  check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances, { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3 });
   checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
   checkThat('and nadanada saw only the bundle listing, never purchase or complete', bundleHits > 0);
 
@@ -156,6 +173,18 @@ async function main() {
   checkThat('and names the env var to set', /KV_REST_API_URL/.test(r.body.checks.store.detail), r.body.checks.store.detail);
   checkThat('every other check is unaffected by the store failing', r.body.checks.payer.ok && r.body.checks.provider.ok && r.body.checks.allowances.ok);
   process.env.STORE = 'memory';
+
+  console.log('\nan allowance file stamped for the wrong week — exactly what this check exists to catch');
+  process.env.ALLOWANCES_URL = fileBase + '/data/allowances-stale.json';
+  r = await GET();
+  check('the request still succeeds', r.status, 200);
+  check('the allowances check fails, plainly, rather than reporting a clean bill of health', r.body.checks.allowances.ok, false);
+  checkThat('and says the file is for last week, not published for the current one',
+    new RegExp('week ' + STALE_WEEK + '.*not the current week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
+  check('ready.allowances mirrors the failure', r.body.ready.allowances, false);
+  check('the top-level allowances field carries both weeks and the stale flag for a dashboard to key off', r.body.allowances, { week: STALE_WEEK, currentWeek: CUR, stale: true, budgetUsd: 412.5, holders: 3 });
+  checkThat('every other check is unaffected by the allowances file being stale', r.body.checks.store.ok && r.body.checks.payer.ok && r.body.checks.provider.ok, JSON.stringify(r.body.checks));
+  process.env.ALLOWANCES_URL = fileBase + '/data/allowances.json';
 
   console.log('\nan unlaunched config');
   process.env.ESIM_CONFIG_URL = fileBase + '/config/esim-unlaunched.json';

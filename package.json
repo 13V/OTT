@@ -2,7 +2,7 @@
  "name": "ott",
  "version": "0.0.1",
  "private": true,
- "description": "A phone carrier that runs on a memecoin: every trade against OT+T's curve earns the trader dollars of mobile-data credit, spent on eSIMs paid for over Bitcoin Lightning.",
+ "description": "A phone carrier that runs on a memecoin: every week, OT+T's creator tax from the week before becomes a data budget split among holders by their share of the supply, spent on eSIMs paid for over Bitcoin Lightning.",
  "license": "MIT",
  "engines": {
   "node": ">=22"
@@ -13,6 +13,7 @@
   "serve": "node test/site/support/server.js",
   "allowances": "node scripts/allowances.js",
   "test:allowances": "node test/allowances.test.js",
+  "test:week": "node test/week.test.js",
   "test:redeem": "node test/redeem.test.js",
   "test:esimaccess": "node test/esimaccess.test.js",
   "test:bolt11": "node test/bolt11.test.js",
@@ -22,7 +23,7 @@
   "test:fund": "node test/fund.test.js",
   "test:catalogue": "node test/catalogue.test.js",
   "test:status": "node test/status.test.js",
-  "test": "node test/allowances.test.js && node test/redeem.test.js && node test/esimaccess.test.js && node test/bolt11.test.js && node test/store.test.js && node test/nadanada.test.js && node test/redeem-nadanada.test.js && node test/fund.test.js && node test/catalogue.test.js && node test/status.test.js && node test/treasury.test.js",
+  "test": "node test/week.test.js && node test/allowances.test.js && node test/redeem.test.js && node test/esimaccess.test.js && node test/bolt11.test.js && node test/store.test.js && node test/nadanada.test.js && node test/redeem-nadanada.test.js && node test/fund.test.js && node test/catalogue.test.js && node test/status.test.js && node test/treasury.test.js",
   "claim": "node scripts/claim.js",
   "fund": "node scripts/fund.js",
   "treasury": "node scripts/treasury.js",

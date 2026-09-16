@@ -1,39 +1,48 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * allowances.js — how much data credit every wallet has earned by trading the coin.
+ * allowances.js — how much data credit every wallet has this week, just for holding the coin.
  *
- * The product promise is simple: every trade against the coin's bonding curve earns the trader a
- * rebate of rebateBps of what they traded, banked as dollars of data credit and spent on eSIM
- * packages at the reseller's wholesale price — which is why the ledger is in dollars and not in
- * gigabytes: a gigabyte in Europe costs the treasury a seventh of a gigabyte worldwide, and a unit
- * that hid that would let every holder pick the dear one. "What they traded" is the
- * wallet's gross USDG volume against the curve — a buy is a USDG Transfer from the wallet to the
- * curve, a sell is one from the curve to the wallet — and the chain already records every one of
- * those, so there is no database to keep: this file re-derives the whole ledger from logs on every
- * run and writes it to site/data/allowances.json, which the site reads directly and the redeem API
- * reads over HTTP from its own deployment. Nothing downstream can drift from chain because nothing
- * downstream holds state of its own.
+ * The product promise changed: trading no longer earns anything (the old 8% USDG rebate is
+ * retired), and holding is the plan instead. Every week the creator tax the coin collected
+ * **last** week becomes **this** week's data budget, and a wallet's allowance is its share of the
+ * circulating supply times that budget — dollars of credit, spent on eSIM packages at the
+ * reseller's wholesale price, expiring at the end of the week. Like the file this replaces, there
+ * is no database: this script re-derives the whole thing from chain on every run and writes it to
+ * site/data/allowances.json, which the site reads directly and the redeem API reads over HTTP from
+ * its own deployment. Nothing downstream can drift from chain because nothing downstream holds
+ * state of its own.
  *
- * Two kinds of USDG movement touch the curve and are NOT trades: the curve sweeping creator tax to
- * the fee escrow, and anything the factory or Pons's hook moves around a graduation. Those
- * counterparties are excluded by address (site/config/addresses.json), otherwise the escrow would
- * be the best-rewarded "trader" on the ledger.
+ * Two numbers have to be pulled from chain history, both anchored to week boundaries (see
+ * weekOf/weekStart/weekEnd below, identical to every other file that needs the week contract):
  *
- *   node scripts/allowances.js                        # writes site/data/allowances.json
- *   node scripts/allowances.js --from-block 62826841  # skip the launch-block lookup
- *   node scripts/allowances.js --to-block 62900000    # a reproducible upper bound
+ *   1. Balances at the snapshot block (the last block at or before this week's start), to work out
+ *      each wallet's share of the circulating supply. These come from folding the coin's own
+ *      Transfer logs from its launch block up to the snapshot, NOT from an archive eth_call — see
+ *      foldBalances() for why that is the important design decision in this file.
+ *   2. The tax collected last week, from summing the USDG Transfer events the curve sent to the fee
+ *      escrow with block timestamps inside last week. The two boundary blocks are found by binary
+ *      search over eth_getBlockByNumber timestamps (the same search the snapshot uses), and logs are
+ *      then filtered by block *number*, which is exact and only costs two searches — fetching a
+ *      timestamp per log would be far more calls for no better an answer.
+ *
+ *   node scripts/allowances.js                        # writes site/data/allowances.json for "now"
+ *   node scripts/allowances.js --week 2959             # rebuild a specific week
+ *   node scripts/allowances.js --from-block 62826841   # skip the launch-block lookup
+ *   node scripts/allowances.js --to-block 62900000     # a reproducible chain head
  *   node scripts/allowances.js --out /tmp/a.json
  *
  * Read-only, no key, no dependency beyond scripts/chain.js. v1 is pre-graduation and USDG-paired
- * only: a native-ETH pair moves ether, not an ERC-20, so it has no Transfer events to read and this
- * script refuses it rather than write a ledger of zeros that looks like nobody traded.
+ * only: the tax sweep this script sums is only meaningful in dollars if it is paid in USDG, so a
+ * native-ETH pair (which moves ether, not an ERC-20, and so has no Transfer events for the sweep
+ * either) is refused rather than indexed as a ledger of zeros that looks like nobody was taxed.
  *
  * Until the coin is launched, site/config/esim.json carries an empty coin address; this script then
  * writes a valid, empty ledger and exits 0, so the site and the API always have a file to read.
  *
- * The pure parts (aggregate, emptyAllowances, run) are exported for test/allowances.test.js; the
- * CLI runs only under require.main === module.
+ * The pure parts (weekOf/weekStart/weekEnd, foldBalances, buildWallets, sumTaxUsd, round4,
+ * emptyAllowances, run) are exported for test/allowances.test.js; the CLI runs only under
+ * require.main === module.
  */
 const fs = require('fs');
 const path = require('path');
@@ -45,7 +54,7 @@ const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
 const DEFAULT_OUT = path.join(SITE, 'data', 'allowances.json');
 
 // Both topics are computed rather than pasted: a hand-copied topic hash is one silent typo away
-// from a scan that finds nothing and reports it as "nobody traded".
+// from a scan that finds nothing and reports it as "nobody holds anything".
 const TRANSFER = chain.topic('Transfer(address,address,uint256)');
 // TokenLaunched(address token indexed, address curve indexed, address deployer indexed,
 //               address pairToken, uint256 launchConfigId, uint256 graduationThreshold)
@@ -57,72 +66,142 @@ const LAUNCHED = chain.topic('TokenLaunched(address,address,address,address,uint
 const CHUNK = 10000;
 const PAUSE_MS = 400;
 
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lower = (a) => String(a || '').toLowerCase();
 const pad = (a) => '0x' + lower(a).replace(/^0x/, '').padStart(64, '0');
 const unpad = (word) => '0x' + String(word).slice(-40).toLowerCase();
 const hex = (n) => '0x' + Number(n).toString(16);
 const word = (data, i) => BigInt('0x' + String(data).slice(2 + i * 64, 2 + (i + 1) * 64));
+// Four decimal places — a hundredth of a cent — is finer than any package price and coarse enough
+// that two runs over the same chain state agree; used for every dollar figure in the output.
+const round4 = (n) => Math.round(n * 1e4) / 1e4;
 
 /** site/config/esim.json, or — if the route owner has not written it yet — the same shape with an
  *  empty coin, so a fresh checkout still produces a valid empty ledger instead of a stack trace. */
 function loadConfig(p = ESIM_PATH) {
   if (!fs.existsSync(p)) {
-    return { coin: '', curve: '', treasury: '', pair: '', taxBps: 0, rebateBps: 800, missing: true };
+    return { coin: '', curve: '', treasury: '', missing: true };
   }
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
+
+// ---------------------------------------------------------------------------
+// Week arithmetic, imported rather than restated. A week is Monday 00:00 UTC through the following
+// Monday 00:00 UTC, anchored to the first Monday after the Unix epoch so it needs no calendar
+// library and no timezone. This file and the redeem API must agree on the week to the second — a
+// wallet's allowance is written here and spent there — so there is exactly one definition, in
+// site/api/lib/week.js, and this script reaches across for it. The dependency only goes this way:
+// the API is deployed on its own and can never reach into scripts/.
+// ---------------------------------------------------------------------------
+const { WEEK_S, ANCHOR, weekOf, weekStart, weekEnd } = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'week.js'));
 
 // ---------------------------------------------------------------------------
 // The pure part: logs in, ledger out.
 // ---------------------------------------------------------------------------
 
 /**
- * Fold USDG Transfer logs into { wallet: { tradedUsd, earnedUsd } }.
+ * Fold Transfer(address,address,uint256) logs into { lowercase address -> BigInt balance }.
  *
- * `logs` are eth_getLogs entries as the node returns them (topics[1] = from, topics[2] = to, data =
- * amount), already filtered to the ones touching `curve` on either side. Amounts are summed as
- * integers in the token's smallest unit and only turned into a float once, at the end, so a wallet
- * that traded ten thousand times does not accumulate ten thousand rounding errors. earnedUsd is
- * rounded to four decimals — a hundredth of a cent — which is finer than any package price and
- * coarse enough that two runs agree; tradedUsd keeps the token's own precision.
+ * This is the important design decision in this file: balances come from summing every Transfer
+ * the coin ever emitted, not from an archive eth_call. Summing transfers gives an exact historical
+ * balance at any block using nothing but eth_getLogs, which every endpoint in the rotation
+ * supports; the public endpoints for this chain cannot be relied on to answer a historical
+ * balanceOf() at all — some refuse a past block tag outright, others silently answer against
+ * `latest` regardless of what was asked, and either way there is no way to tell from the response
+ * alone. A sum of logs has no such failure mode: it is exact by construction, or it visibly is not
+ * (a missing chunk shows up as a wrong total, not a wrong-but-plausible one).
  *
- * A counterparty in `exclude` (the fee escrow, the factory, the hook) is not a trader and is left
- * out entirely — the curve paying its creator tax into escrow is the one transfer that would
- * otherwise dominate the ledger. Keys come back lowercase and sorted so two runs over the same
- * chain produce byte-identical files, which is what lets the workflow commit only on change.
+ * Each log credits `to` and debits `from`. The zero address is not a counterparty — a mint's `from`
+ * and a burn's `to` are both the zero address, and it is not a wallet that can hold a data
+ * allowance — so it is never credited or debited: a mint only adds to `to`'s balance and a burn
+ * only removes from `from`'s, which is exactly "mints add to supply, burns remove". Addresses whose
+ * net balance comes out to exactly zero (received tokens and later sent all of them away) are
+ * dropped from the result entirely rather than kept as a zero entry, because "holds tokens" and
+ * "used to hold tokens" must not look alike to anything reading this map.
  */
-function aggregate(logs, { curve, exclude = [], rebateBps, decimals = 6 }) {
-  const c = lower(curve);
-  const skip = new Set(exclude.map(lower).concat([c]));
-  const units = new Map();
+function foldBalances(logs) {
+  const balances = new Map();
   for (const log of logs) {
     if (!log || !Array.isArray(log.topics) || log.topics.length < 3) continue;
     const from = unpad(log.topics[1]);
     const to = unpad(log.topics[2]);
-    // Which side is the trader? Whichever side is not the curve. A log with the curve on neither
-    // side is not ours (a filter that let one through would be a bug upstream), so it is ignored.
-    const wallet = from === c ? to : to === c ? from : null;
-    if (!wallet || skip.has(wallet)) continue;
     const amount = BigInt(log.data);
-    units.set(wallet, (units.get(wallet) || 0n) + amount);
+    if (from !== ZERO_ADDR) balances.set(from, (balances.get(from) || 0n) - amount);
+    if (to !== ZERO_ADDR) balances.set(to, (balances.get(to) || 0n) + amount);
   }
-  const scale = 10 ** decimals;
-  const wallets = {};
-  for (const wallet of Array.from(units.keys()).sort()) {
-    const u = units.get(wallet);
-    const tradedUsd = Number(u) / scale;
-    // earnedUsd = tradedUsd * rebateBps / 10000, with the bps multiplication done on the integer
-    // before the one division into floating point.
-    const earnedUsd = Number(u * BigInt(rebateBps)) / 10000 / scale;
-    wallets[wallet] = { tradedUsd, earnedUsd: Math.round(earnedUsd * 1e4) / 1e4 };
+  for (const [addr, bal] of balances) {
+    if (bal === 0n) balances.delete(addr);
   }
-  return wallets;
+  return balances;
 }
 
-/** The contract shape with nothing in it: what the site and the API read before the launch. */
-function emptyAllowances({ asOf, block = 0, rebateBps }) {
-  return { asOf, block, coin: '', curve: '', rebateBps, wallets: {} };
+/**
+ * Turn a balance map into the week's public ledger: circulating supply (everyone in `balances`
+ * except `exclude`), and each surviving wallet's tokens/share/allowanceUsd.
+ *
+ * `exclude` is not "the public" and gets no allowance at all even if the balance map shows a
+ * nonzero amount for it — each entry is excluded for a different reason:
+ *   - the curve:     holds the unsold supply pre-graduation; that is inventory, not a holding.
+ *   - the fee escrow: holds tax already collected but not yet turned into this week's budget;
+ *                     paying it an allowance out of its own collected tax would be circular.
+ *   - the factory:    can hold dust in transit during launch/graduation bookkeeping; operational,
+ *                     not a holder.
+ *   - the memeHook:   Pons's hook can hold tokens transiently around a graduation; same reason.
+ *   - the treasury:   the project's own wallet; it is the payer of the budget, not a claimant on it.
+ *
+ * share is tokens/circulating as a plain float, 0 when circulating is 0 so an all-empty week never
+ * divides by zero. allowanceUsd is share * budgetUsd rounded to four decimal places (round4, the
+ * same rounding the old rebate ledger used for earnedUsd) — computed from the already-rounded
+ * budgetUsd so the number on a wallet's row visibly reconciles against the number at the top of the
+ * file. Keys come back lowercase and sorted so two runs over the same chain state produce
+ * byte-identical files, which is what lets the workflow commit only on change.
+ */
+function buildWallets({ balances, exclude = [], budgetUsd = 0 }) {
+  const skip = new Set(exclude.map(lower));
+  let circulating = 0n;
+  for (const [addr, bal] of balances) {
+    if (!skip.has(addr)) circulating += bal;
+  }
+  const circulatingNum = Number(circulating);
+  const addrs = Array.from(balances.keys()).filter((a) => !skip.has(a)).sort();
+  const wallets = {};
+  for (const addr of addrs) {
+    const bal = balances.get(addr);
+    const share = circulating === 0n ? 0 : Number(bal) / circulatingNum;
+    wallets[addr] = { tokens: bal.toString(), share, allowanceUsd: round4(share * budgetUsd) };
+  }
+  return { circulating, wallets, holders: addrs.length };
+}
+
+/**
+ * Sum a set of USDG Transfer logs into a raw dollar amount (before budgetBps). The caller is
+ * responsible for scoping `logs` to the right block range (the curve -> feeEscrow topic filter over
+ * last week's two boundary blocks) — this only adds up what it is given, so "which week" is
+ * entirely a matter of which logs were fetched, not of any per-log filtering here.
+ */
+function sumTaxUsd(logs, decimals = 6) {
+  let units = 0n;
+  for (const log of logs) {
+    if (!log || log.data == null) continue;
+    units += BigInt(log.data);
+  }
+  return Number(units) / 10 ** decimals;
+}
+
+/** The contract shape with nothing in it: what the site and the API read before the launch, or for
+ *  a week whose budget is zero because there was no tax to collect. 18 is a placeholder — there is
+ *  no token to ask — and harmless, since circulating is "0" regardless of what it is divided by. */
+function emptyAllowances({ asOf, block = 0, week }) {
+  return {
+    asOf, block, week,
+    weekStart: weekStart(week), weekEnd: weekEnd(week),
+    snapshotBlock: 0, coin: '', curve: '',
+    budgetUsd: 0, budgetSource: 'the coin is not launched yet',
+    circulating: '0', decimals: 18, holders: 0,
+    wallets: {},
+  };
 }
 
 function writeAllowances(out, data) {
@@ -183,13 +262,37 @@ async function launchedToken(rpc, factory, coin) {
   };
 }
 
+/** token.decimals(), read from the token rather than assumed — a wrong assumption here would
+ *  silently be wrong in the same direction for every wallet, and 18 is not universal. */
+async function tokenDecimals(rpc, token) {
+  const raw = await rpc('eth_call', [{ to: token, data: chain.encodeCall('decimals()') }, 'latest']);
+  return Number(word(raw, 0));
+}
+
 /**
- * The block the coin was launched in — where the scan starts. The factory's TokenLaunched log
- * indexes the token, so one getLogs over the whole chain with the coin as topics[1] is a cheap
+ * The smallest block number in [0, head] whose timestamp is >= `ts`, or head + 1 if every block up
+ * to head is still earlier than `ts` (the boundary has not been mined yet — e.g. `ts` falls inside
+ * a week still in progress). One binary search, used three ways: the snapshot block is the block
+ * just before firstBlockAtOrAfter(weekStart(week) + 1); last week's tax window is the block range
+ * [firstBlockAtOrAfter(weekStart(week - 1)), firstBlockAtOrAfter(weekStart(week)) - 1].
+ */
+async function firstBlockAtOrAfter(rpc, ts, head) {
+  const timestamp = async (n) => Number(BigInt((await rpc('eth_getBlockByNumber', [hex(n), false])).timestamp));
+  let lo = 0, hi = head + 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if ((await timestamp(mid)) < ts) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The block the coin was launched in — where the balance scan starts. The factory's TokenLaunched
+ * log indexes the token, so one getLogs over the whole chain with the coin as topics[1] is a cheap
  * query for a node that will accept a wide range (the official endpoint does; the others refuse
  * older blocks or answer "busy"). If none of them will, the curve's own launchedAt() timestamp is
- * binary-searched against block timestamps instead: about 26 eth_getBlockByNumber calls, and no
- * range limits to argue with.
+ * binary-searched against block timestamps instead (firstBlockAtOrAfter), so there is no range
+ * limit to argue with, just about 20-something eth_getBlockByNumber calls.
  */
 async function launchBlock({ rpc, factory, coin, curve, head, log = () => {} }) {
   try {
@@ -201,33 +304,26 @@ async function launchBlock({ rpc, factory, coin, curve, head, log = () => {} }) 
   }
   const at = Number(word(await rpc('eth_call', [{ to: curve, data: chain.encodeCall('launchedAt()') }, 'latest']), 0));
   if (!at) throw new Error(`curve ${curve} reports no launchedAt(); pass --from-block`);
-  const timestamp = async (n) => Number(BigInt((await rpc('eth_getBlockByNumber', [hex(n), false])).timestamp));
-  let lo = 0, hi = head;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (await timestamp(mid) < at) lo = mid + 1; else hi = mid;
-  }
-  return lo;
+  return firstBlockAtOrAfter(rpc, at, head);
 }
 
 /**
- * Every USDG Transfer with the curve on either side, from `fromBlock` to `toBlock` inclusive, in
- * chunks of at most CHUNK blocks. A topic filter is an AND across positions, so "from the curve" and
- * "to the curve" are two queries per chunk; a log that somehow matches both (the curve sending to
- * itself) is kept once, by block and index.
+ * Every log matching `address`/`topics` from `fromBlock` to `toBlock` inclusive, in chunks of at
+ * most `chunk` blocks, sleeping `pause` ms between chunks so as not to trip the public endpoints'
+ * rate limits. One query per chunk: unlike the old rebate ledger (which had to OR two directions
+ * together because "traded with the curve" meant either side), every caller here already knows
+ * exactly which topics it wants — every Transfer of the coin, or specifically curve -> feeEscrow —
+ * so a single precise filter replaces the old two-queries-and-dedupe.
  */
-async function scanTransfers({ rpc, usdg, curve, fromBlock, toBlock, chunk = CHUNK, pause = PAUSE_MS, onChunk = () => {} }) {
+async function scanTransfers({ rpc, address, topics, fromBlock, toBlock, chunk = CHUNK, pause = PAUSE_MS, onChunk = () => {} }) {
   const seen = new Set();
   const logs = [];
   let chunks = 0;
   for (let from = fromBlock; from <= toBlock; from += chunk) {
     const to = Math.min(from + chunk - 1, toBlock);
-    const range = { address: usdg, fromBlock: hex(from), toBlock: hex(to) };
-    // Sequential on purpose: two requests in flight at once is exactly what the official endpoint
-    // rate-limits.
-    const outgoing = await rpc('eth_getLogs', [Object.assign({ topics: [TRANSFER, pad(curve)] }, range)]);
-    const incoming = await rpc('eth_getLogs', [Object.assign({ topics: [TRANSFER, null, pad(curve)] }, range)]);
-    for (const log of outgoing.concat(incoming)) {
+    const found = await rpc('eth_getLogs', [{ address, topics, fromBlock: hex(from), toBlock: hex(to) }]);
+    for (const log of found) {
+      // Belt and braces: real endpoints have occasionally answered an overlapping chunk twice.
       const key = `${log.blockNumber}:${log.logIndex}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -245,14 +341,15 @@ async function scanTransfers({ rpc, usdg, curve, fromBlock, toBlock, chunk = CHU
 // ---------------------------------------------------------------------------
 
 /**
- * Build the ledger for `config` and write it to `out`. Returns { data, summary } so the test can
- * inspect what was written without parsing stdout. Throws with a plain message when the coin is
- * not something this script can index (unknown to the factory, or not paired with USDG).
+ * Build the week's ledger for `config` and write it to `out`. Returns { data, summary } so the test
+ * can inspect what was written without parsing stdout. Throws with a plain message when the coin is
+ * not something this script can index (unknown to the factory, not paired with USDG, or esim.json
+ * disagrees with the factory about the curve).
  */
-async function run({ config, addresses, rpc, out = DEFAULT_OUT, fromBlock, toBlock, now = () => Date.now(), log = () => {} }) {
-  const rebateBps = Number(config.rebateBps);
-  if (!(rebateBps >= 0 && rebateBps <= 10000)) throw new Error('esim.json needs a rebateBps between 0 and 10000');
+async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock, toBlock, now = () => Date.now(), log = () => {} }) {
   const asOf = Math.floor(now() / 1000);
+  const wk = week != null ? Number(week) : weekOf(asOf);
+  if (!Number.isFinite(wk)) throw new Error(`--week "${week}" is not a number`);
   const rel = path.relative(process.cwd(), out);
 
   if (!config.coin) {
@@ -260,23 +357,29 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, fromBlock, toBlo
     // was produced in chain time — so an unreachable RPC is not a reason to fail the run.
     let block = 0;
     try { block = Number(BigInt(await rpc('eth_blockNumber', []))); } catch (e) { log(`  eth_blockNumber unavailable (${e.message}); recording block 0`); }
-    const data = emptyAllowances({ asOf, block, rebateBps });
+    const data = emptyAllowances({ asOf, block, week: wk });
     writeAllowances(out, data);
     const why = config.missing ? 'site/config/esim.json is not there yet' : 'no coin in site/config/esim.json yet';
-    return { data, summary: `allowances: ${why} — wrote an empty ledger (block ${block}) to ${rel}` };
+    return { data, summary: `allowances: ${why} — wrote an empty ledger for week ${wk} (block ${block}) to ${rel}` };
+  }
+
+  if (config.budgetBps != null) {
+    const b = Number(config.budgetBps);
+    if (!(b >= 0 && b <= 10000)) throw new Error('esim.json needs a budgetBps between 0 and 10000');
   }
 
   const coin = lower(config.coin);
   const usdg = lower(addresses.usdg);
-  const decimals = Number(addresses.usdgDecimals || 6);
+  const usdgDecimals = Number(addresses.usdgDecimals || 6);
   const { factory, feeEscrow, memeHook } = addresses.pons;
+  const treasury = lower(config.treasury || '');
 
   const launched = await launchedToken(rpc, factory, coin);
   if (!launched) throw new Error(`the factory ${factory} does not know ${coin}; is esim.json's coin right?`);
   if (launched.pair !== usdg) {
     const isNative = /^0x0{40}$/.test(launched.pair);
     throw new Error(`${coin} is paired with ${isNative ? 'native ether' : launched.pair}, not USDG. `
-      + (isNative ? 'Ether moves without Transfer events, so there is nothing to index; ' : '')
+      + (isNative ? 'Ether moves without Transfer events, so the tax sweep has nothing to sum in dollars; ' : '')
       + 'v1 indexes USDG-paired coins only.');
   }
   const curve = config.curve ? lower(config.curve) : launched.curve;
@@ -285,33 +388,71 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, fromBlock, toBlo
   }
 
   const head = toBlock != null ? Number(toBlock) : Number(BigInt(await rpc('eth_blockNumber', [])));
-  const start = fromBlock != null ? Number(fromBlock) : await launchBlock({ rpc, factory, coin, curve, head, log });
-  if (start > head) throw new Error(`launch block ${start} is past the chain head ${head}`);
+  const decimals = await tokenDecimals(rpc, coin);
 
-  const { logs, chunks } = await scanTransfers({
-    rpc, usdg, curve, fromBlock: start, toBlock: head,
-    onChunk: ({ from, to, count }) => log(`  blocks ${from}-${to}: ${count} transfers so far`),
-  });
-  const wallets = aggregate(logs, { curve, exclude: [feeEscrow, factory, memeHook], rebateBps, decimals });
+  // The snapshot: the last block at or before this week's start, i.e. one block before the first
+  // block whose timestamp is past it.
+  const snapshotBlock = (await firstBlockAtOrAfter(rpc, weekStart(wk) + 1, head)) - 1;
+  const launchBlk = fromBlock != null ? Number(fromBlock) : await launchBlock({ rpc, factory, coin, curve, head, log });
 
-  const data = { asOf, block: head, coin, curve, rebateBps, wallets };
+  let balances = new Map();
+  if (snapshotBlock >= launchBlk) {
+    const { logs } = await scanTransfers({
+      rpc, address: coin, topics: [TRANSFER], fromBlock: launchBlk, toBlock: snapshotBlock,
+      onChunk: ({ from, to, count }) => log(`  balances: blocks ${from}-${to}: ${count} transfers of the coin so far`),
+    });
+    balances = foldBalances(logs);
+  }
+  const exclude = [curve, feeEscrow, factory, memeHook, treasury].filter(Boolean);
+
+  // The budget: last week's curve -> feeEscrow USDG only, found the same way as the snapshot.
+  const budgetFromBlock = await firstBlockAtOrAfter(rpc, weekStart(wk - 1), head);
+  const budgetToBlock = (await firstBlockAtOrAfter(rpc, weekStart(wk), head)) - 1;
+  let rawTaxUsd = 0;
+  if (budgetToBlock >= budgetFromBlock) {
+    const { logs: taxLogs } = await scanTransfers({
+      rpc, address: usdg, topics: [TRANSFER, pad(curve), pad(feeEscrow)], fromBlock: budgetFromBlock, toBlock: budgetToBlock,
+      onChunk: ({ from, to, count }) => log(`  tax: blocks ${from}-${to}: ${count} transfers so far`),
+    });
+    rawTaxUsd = sumTaxUsd(taxLogs, usdgDecimals);
+  }
+  const budgetBps = config.budgetBps != null ? Number(config.budgetBps) : 10000;
+  const budgetUsd = round4(rawTaxUsd * budgetBps / 10000);
+  const budgetSource = `tax collected in week ${wk - 1}`;
+
+  const { circulating, wallets, holders } = buildWallets({ balances, exclude, budgetUsd });
+
+  const data = {
+    asOf, block: head, week: wk, weekStart: weekStart(wk), weekEnd: weekEnd(wk),
+    snapshotBlock, coin, curve,
+    budgetUsd, budgetSource,
+    circulating: circulating.toString(), decimals, holders,
+    wallets,
+  };
   writeAllowances(out, data);
 
-  const entries = Object.values(wallets);
-  const usd = entries.reduce((s, w) => s + w.tradedUsd, 0);
-  const earned = entries.reduce((s, w) => s + w.earnedUsd, 0);
-  const summary = `allowances: ${coin} on curve ${curve}, blocks ${start}-${head} in ${chunks} chunk(s): `
-    + `${logs.length} transfers, ${entries.length} wallet(s), $${usd.toFixed(2)} traded, $${earned.toFixed(4)} of data credit earned -> ${rel}`;
+  const summary = `allowances: ${coin} week ${wk}, snapshot block ${snapshotBlock}: ${holders} holder(s), `
+    + `${chain.fromUnits(circulating, decimals)} tokens circulating, $${budgetUsd.toFixed(4)} budget (${budgetSource}) -> ${rel}`;
   return { data, summary };
 }
 
 module.exports = {
-  aggregate,
+  WEEK_S,
+  ANCHOR,
+  weekOf,
+  weekStart,
+  weekEnd,
+  foldBalances,
+  buildWallets,
+  sumTaxUsd,
+  round4,
   emptyAllowances,
   writeAllowances,
   loadConfig,
   makeRpc,
   launchedToken,
+  tokenDecimals,
+  firstBlockAtOrAfter,
   launchBlock,
   scanTransfers,
   run,
@@ -334,6 +475,7 @@ if (require.main === module) {
     addresses,
     rpc: makeRpc(endpoints, { log: (m) => process.stderr.write(m + '\n') }),
     out: outArg ? path.resolve(process.cwd(), outArg) : DEFAULT_OUT,
+    week: arg('week'),
     fromBlock: arg('from-block'),
     toBlock: arg('to-block'),
     log: (m) => process.stderr.write(m + '\n'),

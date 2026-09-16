@@ -1,11 +1,15 @@
 # OT+T
 
 OT+T — Onchain Telephone + Telegraph, ticker OTT — is a phone carrier whose network is a bonding
-curve. One coin, launched on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax, funds
-a pool that pays 8% of every trade made against its curve back to the trader who made it — not in
-the coin, but in dollars of mobile-data credit, spent on eSIMs from nadanada: 28 places at 1, 5 or
-10 GB, 84 packages in all. Connect the wallet that traded, sign a message, pick a place, scan the QR
-at the airport: the coin is the SIM, the trades are the plan.
+curve. One coin, launched on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax. **Holding
+the coin is the plan**: the tax the coin collected last week becomes this week's data budget, and a
+wallet's allowance is its share of the circulating supply times that budget — in dollars of
+mobile-data credit, spent on eSIMs from nadanada: 28 places at 1, 5 or 10 GB, 84 packages in all.
+Connect a wallet, sign a message, pick a place, scan the QR at the airport.
+
+The allowance expires at the end of the week. That is not meanness, it is what makes the promise
+affordable: the pool never owes more than one week of tax it has already collected, so there is no
+accruing claim on a treasury funded by a tax that may stop.
 
 The name is built the way AT&T's was: a formal corporate name, Onchain Telephone + Telegraph, worn
 down to the initialism people actually say — the same way American Telephone and Telegraph wore
@@ -27,15 +31,24 @@ treasury's USDG on Robinhood Chain, filled as exactly that USDC on Base and deli
 FixedFloat's address — no wallet on Base, no gas spent there. Every quote is checked against Blink's
 own BTC price before anything moves, and the deposit is simulated before it is sent.
 
-Meanwhile `scripts/allowances.js` re-derives who has earned how much by reading USDG `Transfer`
-events against the curve — 8% of every trade's USDG side, credited to the trader, in dollars.
-Nothing about that ledger is stored on top of chain data; `site/data/allowances.json` is rebuilt
-from logs on every run. `scripts/treasury.js` reads what the sweep and the top-up left behind — the
+Meanwhile `scripts/allowances.js` re-derives the week's plan. It sums the coin's own `Transfer`
+logs to fold every wallet's balance as of the week's first block — a log sum rather than an archive
+`eth_call`, because this chain's public endpoints cannot be relied on to answer a historical block
+tag, and folding transfers is exact on any endpoint that can serve `eth_getLogs`. The circulating
+supply excludes the curve, the fee escrow, the factory, the hook and the treasury: the curve holds
+all the unsold supply before graduation, so counting it would hand most of every week's budget to a
+contract. The budget itself is the USDG the curve paid into the fee escrow during the previous
+week. Nothing is stored on top of chain data; `site/data/allowances.json` is rebuilt from logs on
+every run.
+
+Taking the snapshot at the week boundary rather than at the moment of redemption is deliberate: an
+allowance computed from a live balance can be taken by borrowing a large position, redeeming the
+biggest share, and returning it in the same block. `scripts/treasury.js` reads what the sweep and the top-up left behind — the
 Lightning wallet's balance, the last 30 days of what redemptions actually cost, the runway they
 imply — into `site/data/treasury.json`, which is where the pool's status (funded, low, empty,
 unknown) comes from.
 
-A trader spends what they've earned at `/api/redeem`: sign in with a wallet signature, pick a
+A holder spends the week's allowance at `/api/redeem`: sign in with a wallet signature, pick a
 nadanada package, and it places the order — invoice, payment and completion, all against the
 Lightning wallet `fund.js` keeps stocked — and hands back the ICCID, the QR and the install links
 nadanada returns.
@@ -44,16 +57,19 @@ nadanada returns.
 
 A gigabyte is not one thing. nadanada's own packages price it from $0.70 to $8.99 per GB depending
 on size and place — ten gigabytes for a month in France is $6.99, one gigabyte for a week worldwide
-is $8.99 — and a ledger denominated in gigabytes would let a wallet earn the cheap kind and spend
-the dear kind. Crediting dollars keeps that honest: what a trade earned is what a trade earned, and
-what it buys is whatever a trader actually picks.
+is $8.99 — and an allowance denominated in gigabytes would let a wallet claim the cheap kind and
+spend the dear kind. Dollars keep it honest: a share of the budget is a share of the budget, and
+what it buys is whatever the holder actually picks.
 
-## Why the trader, and not the holder
+## What the allowance is, and what it is not
 
-A rebate of your own trading fee, in kind, is a loyalty programme. A pool of other people's fees
-paid out to whoever holds the coin is a dividend — and on a chain run by a US broker, that is a
-shape worth not having. The coin is the receipt for having traded; holding it is the bet that
-someone else will too.
+It is a weekly usage allowance, funded by the coin's own tax, spendable only on mobile data, and it
+expires. It is not a dividend: nothing is paid out in money, nothing accrues, and holding the coin
+is not a claim on the treasury. That distinction is the whole reason the allowance expires weekly
+and is denominated in data rather than dollars paid out — a pool of other people's fees paid to
+whoever holds, in cash and without limit, is a shape worth not having on a chain run by a US
+broker. The coin is the subscription; what it entitles you to is a share of one week of data, and
+if you do not use it, it is gone.
 
 ## What is verified, and what is guaranteed
 
@@ -103,7 +119,7 @@ stale.
 | `site/api/lib/eip191.js`, `site/api/lib/secp256k1.js`, `site/api/lib/keccak.js` | Verify the wallet signature a redeem signs in with |
 | `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from nadanada |
 | `site/config/addresses.json` | Chain id, RPC endpoints, USDG, the Pons factory and its friends — the copy the site and the API read |
-| `site/data/allowances.json` | Every wallet's earned and redeemed credit — written by `scripts/allowances.js` |
+| `site/data/allowances.json` | The week's plan: each wallet's balance, share and allowance — written by `scripts/allowances.js` |
 | `site/data/claims.json` | A log of every sweep out of the fee escrow — written by `scripts/claim.js` |
 | `site/data/funding.json` | A log of every top-up of the Lightning wallet — written by `scripts/fund.js` |
 | `site/data/treasury.json` | The pool card's numbers: balance, 30-day spend, runway, status — written by `scripts/treasury.js` |
@@ -128,7 +144,8 @@ node scripts/lint.js                                # every script parses, every
 npm test                                             # the ledger, the redeem function, both providers,
                                                       # the invoice check, the store, and the keepers — offline
 
-npm run allowances                                   # rebuild site/data/allowances.json from chain
+npm run allowances                                   # rebuild this week's plan from chain
+npm run allowances -- --week 2957                    # rebuild a specific week
 npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from nadanada's portfolio
 npm run treasury                                     # rebuild site/data/treasury.json (the pool side needs ESIM_PROVIDER and its keys)
 PRIVATE_KEY=<treasury> npm run claim -- --dry-run    # what the sweep would do

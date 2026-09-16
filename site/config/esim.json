@@ -9,7 +9,7 @@
   "since": "2026" },
  "pair": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
  "taxBps": 1000,
- "rebateBps": 800,
+ "budgetBps": 10000,
  "provider": "nadanada",
  "catalogueAt": "2026-09-16",
  "packages": [
