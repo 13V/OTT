@@ -45,6 +45,39 @@ const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 200, waitMs: 10 * 60 * 10
 const QUOTE_TOLERANCE = 0.05;   // FixedFloat's rate vs Blink's price
 const ASK_TOLERANCE = 0.03;     // USDC FixedFloat asks for vs the amount quoted
 const BRIDGE_TOLERANCE = 0.02;  // USDG in vs USDC out across the bridge
+const APPROVE_SEL = '0x095ea7b3';  // approve(address,uint256)
+
+/**
+ * The one approval this run is willing to sign, built here rather than taken from Across.
+ *
+ * Every other number in fund() is bounded — what FixedFloat may ask, what the bridge may charge,
+ * what the treasury holds. An approval is not a number, it is a standing permission, and the one
+ * Across hands back asks for all of it, for ever. Signing that on trust would make a bad answer
+ * from their API — compromised, hijacked, or merely wrong — worth the entire treasury including
+ * every fee it has not earned yet, which is not a risk any amount in this file justifies.
+ *
+ * So their calldata is read, never sent. It has to be an approve() of our own USDG for the very
+ * contract the deposit is about to call; anything else means the flow has changed and this run
+ * stops rather than guesses. What is then signed is ours: the same spender, for what this run
+ * needs and not a unit more. scripts/claim.js has never signed anyone else's bytes; this is the
+ * same discipline reaching the one leg that had escaped it.
+ */
+function approvalFor(chain, t, { usdg, spender, units }) {
+  const to = String((t && t.to) || '').toLowerCase();
+  const data = String((t && t.data) || '').toLowerCase();
+  if (to !== String(usdg).toLowerCase()) {
+    throw new Error(`Across wants an approval sent to ${to || '(nothing)'}, which is not USDG (${usdg}); refusing to sign it`);
+  }
+  if (!data.startsWith(APPROVE_SEL) || data.length !== 2 + 8 + 64 + 64) {
+    throw new Error('Across wants to send calldata that is not a plain approve(address,uint256); refusing to sign it');
+  }
+  const asked = '0x' + data.slice(10, 74).slice(24);
+  if (asked !== String(spender).toLowerCase()) {
+    throw new Error(`Across wants USDG approved for ${asked}, but the deposit goes to ${spender}; refusing to sign it`);
+  }
+  // Same token, same spender, our amount: enough for this deposit and worthless afterwards.
+  return { to: usdg, data: chain.encodeCall('approve(address,uint256)', [spender, units]) };
+}
 
 const lower = (a) => String(a || '').toLowerCase();
 const round2 = (x) => Math.round(x * 100) / 100;
@@ -167,15 +200,19 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   if (inUnits > usdcUnits + (usdcUnits * BigInt(Math.round(BRIDGE_TOLERANCE * 1000))) / 1000n) throw new Error(`Across wants ${inUnits} USDG units for ${usdcUnits} USDC; more than ${BRIDGE_TOLERANCE * 100}% over`);
   if (inUnits > walletUnits) throw new Error(`the bridge needs ${inUnits} USDG units and the treasury holds ${walletUnits}`);
 
-  // Approve if Across says so, then simulate the deposit from the treasury, then send it.
+  const tx = q.swapTx || {};
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(tx.to || ''))) throw new Error('Across returned no deposit address');
+  const value = tx.value ? BigInt(tx.value) : 0n;
+
+  // Approve if Across says so — for this deposit's spender and this deposit's amount, in calldata
+  // built here. See approvalFor() for why none of theirs is signed.
   const hashes = [];
   for (const t of q.approvalTxns || []) {
-    const r = await chain.send({ to: t.to, data: t.data });
+    const safe = approvalFor(chain, t, { usdg, spender: tx.to, units: inUnits });
+    const r = await chain.send(safe);
     hashes.push(r.transactionHash);
-    log(`  approved USDG for the bridge: ${r.transactionHash}`);
+    log(`  approved ${inUnits} USDG units for the bridge at ${tx.to}: ${r.transactionHash}`);
   }
-  const tx = q.swapTx;
-  const value = tx.value ? BigInt(tx.value) : 0n;
   await chain.rpc('eth_call', [{ from: treasury, to: tx.to, data: tx.data, value: '0x' + value.toString(16) }, 'latest']);
   const receipt = await chain.send({ to: tx.to, data: tx.data, value });
   log(`  deposited: ${receipt.transactionHash}`);

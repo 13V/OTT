@@ -80,7 +80,9 @@ const ffServer = http.createServer((req, res) => {
   });
 });
 
-const bridge = { feeFactor: 1.003, shortFactor: 1.0, log: [] };
+// `approval`, when set, replaces the approvalTxns entry: an Across that has been compromised,
+// hijacked, or is simply wrong, asking us to sign something other than what it should.
+const bridge = { feeFactor: 1.003, shortFactor: 1.0, approval: null, log: [] };
 const acrossServer = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const q = Object.fromEntries(url.searchParams.entries());
@@ -93,7 +95,7 @@ const acrossServer = http.createServer((req, res) => {
   const word = (hex) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
   res.end(JSON.stringify({
     amountType: q.tradeType, inputAmount: inUnits.toString(), maxInputAmount: inUnits.toString(), expectedOutputAmount: outUnits.toString(), minOutputAmount: minOut.toString(),
-    approvalTxns: [{ chainId: 4663, to: USDG, data: '0x095ea7b3' + word('0xd29c85f15df544ba632c9e25829fd29d767d7978') + 'f'.repeat(64) }],
+    approvalTxns: [bridge.approval || { chainId: 4663, to: USDG, data: '0x095ea7b3' + word('0xd29c85f15df544ba632c9e25829fd29d767d7978') + 'f'.repeat(64) }],
     swapTx: { ecosystem: 'evm', chainId: 4663, to: '0xD29C85F15DF544bA632C9E25829fd29d767d7978', data: '0xad5425c6' + word(q.depositor) + word(q.recipient) + word(USDG) + word(q.outputToken) + word('0x' + inUnits.toString(16)) + word('0x' + outUnits.toString(16)), value: '0' },
     quoteExpiryTimestamp: Math.floor(Date.now() / 1000) + 3600,
   }));
@@ -149,6 +151,34 @@ function fakeChain({ usd }) {
   check('with no invoice, no order and no transaction', [mockPayer._state.invoices.length, ff.orders.size, chain.log.sent.length], [0, 0, 0]);
   check('and no log', fs.existsSync(path.join(tmp, 'funding.json')), false);
 
+  // ------------------------------------------------------------------------------------------
+  // Across's answer is the only thing in this file that arrives as calldata rather than a number,
+  // and an approval is a standing permission, not an amount — an unbounded one is worth the whole
+  // treasury, for ever, including fees it has not earned yet. So none of theirs is signed.
+  // ------------------------------------------------------------------------------------------
+  console.log('\nan Across that asks for something else gets nothing signed');
+  const SPENDER = '0xd29c85f15df544ba632c9e25829fd29d767d7978';
+  const word32 = (hex) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
+  for (const [what, entry, why] of [
+    ['an approval on a token that is not USDG', { chainId: 4663, to: '0x' + '1'.repeat(40), data: '0x095ea7b3' + word32(SPENDER) + 'f'.repeat(64) }, /not USDG/],
+    ['an approval for a spender the deposit does not go to', { chainId: 4663, to: USDG, data: '0x095ea7b3' + word32('0x' + '2'.repeat(40)) + 'f'.repeat(64) }, /deposit goes to/],
+    ['calldata that is not an approve() at all', { chainId: 4663, to: USDG, data: '0xa9059cbb' + word32(SPENDER) + 'f'.repeat(64) }, /not a plain approve/],
+    ['an approve() truncated to hide its arguments', { chainId: 4663, to: USDG, data: '0x095ea7b3' + word32(SPENDER) }, /not a plain approve/],
+  ]) {
+    bridge.approval = entry;
+    chain = fakeChain({ usd: 500 });
+    await rejects(what + ' is refused', F.run(base({ chain })), why);
+    check('  and nothing at all was signed', chain.log.sent.length, 0);
+  }
+  bridge.approval = null;
+  // Each refusal above happened after the invoice and the FixedFloat order were created — the
+  // approval cannot be judged until the bridge has been quoted, and the bridge cannot be quoted
+  // until FixedFloat has named its price and address. No money moved (the deposit is the only
+  // thing that spends), so what is left behind is an unpaid invoice on our own wallet and an
+  // order that expires by itself, which is the same shape as every other late refusal in this
+  // file. Reset so the counts below are this test's own.
+  mockPayer._reset(); mockPayer._state.sats = 0; ff.orders.clear(); ff.log.length = 0;
+
   console.log('\nthe order asks for more than was quoted');
   ff.askFactor = 1.05;
   chain = fakeChain({ usd: 500 });
@@ -181,6 +211,14 @@ function fakeChain({ usd }) {
   const q = bridge.log[0];
   check('the bridge quote asks for exactly the USDC FixedFloat wants, delivered to its address', [q.tradeType, q.amount, q.recipient, q.depositor, q.originChainId, q.destinationChainId, q.outputToken], ['exactOutput', '100000000', FF_ADDRESS, TREASURY, '4663', '8453', F.USDC_BASE]);
   check('approval then deposit, in that order', chain.log.sent.map((s) => s.sel), ['0x095ea7b3', '0xad5425c6']);
+  // Across asked for an unlimited approval (the fake sends ff..ff, as the real one does). What was
+  // signed is ours: same token, same spender, and exactly the units this deposit is about to move,
+  // so the permission is worthless the moment the deposit lands.
+  check('the approval went to USDG for the contract the deposit calls',
+    [chain.log.sent[0].to.toLowerCase(), '0x' + chain.log.sent[0].data.slice(10, 74).slice(24)],
+    [USDG.toLowerCase(), '0xd29c85f15df544ba632c9e25829fd29d767d7978']);
+  check('and for this deposit\'s 100.3 USDG, not the unlimited amount Across asked for',
+    String(BigInt('0x' + chain.log.sent[0].data.slice(74))), '100300000');
   check('the deposit was simulated from the treasury first', [chain.log.simulated.length, chain.log.simulated[0].from, chain.log.simulated[0].to], [1, TREASURY, '0xD29C85F15DF544bA632C9E25829fd29d767d7978']);
   checkThat('and carries FixedFloat\'s address as the recipient', chain.log.sent[1].data.includes(FF_ADDRESS.slice(2)), chain.log.sent[1].data);
   const written = JSON.parse(fs.readFileSync(path.join(tmp, 'funding.json'), 'utf8'));
