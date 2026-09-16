@@ -144,6 +144,23 @@ async function main() {
   r = await call(redeem, { method: 'POST', url: '/api/redeem', body: '{not json' });
   check('a POST with a broken body is 400, not a throw', r.status, 400);
 
+  // Regression: readBody()'s streamed-body branch (req.body undefined — the "bare Node" case
+  // this fake exercises via a real async-iterable req, unlike the string/object bodies above)
+  // used to abandon an oversized request mid-read without saying so on the wire, leaving the
+  // connection looking reusable to an HTTP/1.1 client even though its stream was never drained.
+  // Driven over a real socket (see the verification harness), a client that then reused that
+  // connection for its next request got ECONNRESET or a multi-second stall on a completely
+  // unrelated request. `connection: close` on this one response is what tells Node (and any
+  // real client) not to offer the socket back for reuse.
+  r = await new Promise((resolve) => {
+    const req = { method: 'POST', url: '/api/redeem', headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.alloc(20 * 1024, 'A'); } }; // > MAX_BODY_BYTES (16KiB)
+    const headers = {};
+    const res = { statusCode: 200, setHeader(k, v) { headers[k.toLowerCase()] = v; }, end(text) { resolve({ status: res.statusCode, headers, body: JSON.parse(text) }); } };
+    redeem(req, res).catch((e) => resolve({ status: 'THREW', headers, body: { error: String(e && e.message) } }));
+  });
+  check('an oversized streamed body is 400, not a throw', r.status, 400);
+  checkThat('and the connection is closed, so a reused socket is never handed a corrupted stream', r.headers.connection === 'close', JSON.stringify(r.headers));
+
   console.log('\nwho may redeem');
   r = await POST(signed(RICH, 'EU-35_1_7', { signature: '0x' + 'ab'.repeat(65) }));
   check('a garbage signature is 401', r.status, 401);

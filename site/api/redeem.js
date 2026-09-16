@@ -220,7 +220,7 @@ async function readBody(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new Error('body too large');
+    if (size > MAX_BODY_BYTES) { const e = new Error('body too large'); e.tooLarge = true; throw e; }
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString('utf8');
@@ -306,7 +306,14 @@ module.exports = async (req, res) => {
     }
 
     let body;
-    try { body = await readBody(req); } catch (e) { return fail(res, 400, 'body must be JSON'); }
+    try { body = await readBody(req); } catch (e) {
+      // An oversized body means the request stream was abandoned mid-read (see readBody() above):
+      // the socket must not be offered back for HTTP/1.1 keep-alive, or whatever request happens
+      // to reuse the connection next can be answered out of a corrupted stream (observed directly
+      // as an ECONNRESET, or as several seconds' stall while a client's pool waits on it).
+      if (e && e.tooLarge) res.setHeader('connection', 'close');
+      return fail(res, 400, 'body must be JSON');
+    }
     if (!body || typeof body !== 'object') return fail(res, 400, 'body must be JSON');
     const address = String(body.address || '').toLowerCase();
     if (!isAddress(address)) return fail(res, 400, 'address required');

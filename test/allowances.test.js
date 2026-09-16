@@ -242,10 +242,58 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
       const found = pool.filter((l) => { const b = Number(BigInt(l.blockNumber)); return b >= from && b <= to; });
       return found.concat(found); // answer every log twice, so de-dupe has something to do
     };
-    const { logs, chunks } = await A.scanTransfers({ rpc: chunkRpc, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 25000, pause: 0 });
-    check('a 25,001-block range at CHUNK=10,000 takes three chunks', chunks, 3);
+    const { logs, chunks } = await A.scanTransfers({ rpc: chunkRpc, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 25000, pause: 0, chunk: 10000 });
+    check('a 25,001-block range at a 10,000 span takes three chunks', chunks, 3);
     check('the duplicated answer de-dupes down to one copy of each log', logs.length, 3);
-    checkThat('no chunk asked for more than CHUNK blocks', ranges.every(([f, t]) => t - f + 1 <= A.CHUNK), JSON.stringify(ranges));
+    checkThat('no chunk asked for more than the span it was given', ranges.every(([f, t]) => t - f + 1 <= 10000), JSON.stringify(ranges));
+  }
+
+  // This chain makes a block every tenth of a second, so a week is about six million blocks and a
+  // fixed narrow chunk turns one week's scan into six hundred requests — slow enough that the
+  // scheduled job does not finish. The window therefore starts wide and only narrows when an
+  // endpoint actually complains, which is the behaviour these three checks pin down.
+  console.log('\nscanTransfers() adapts its window to what the endpoint will serve');
+  {
+    check('the default span is a million blocks, not ten thousand', [A.CHUNK, A.MAX_CHUNK, A.MIN_CHUNK], [1000000, 1000000, 10000]);
+    const spans = [];
+    // An endpoint that refuses anything wider than 250,000 the way a real one does.
+    const fussy = async (method, params) => {
+      const from = Number(BigInt(params[0].fromBlock)), to = Number(BigInt(params[0].toBlock));
+      const span = to - from + 1;
+      spans.push(span);
+      if (span > 250000) throw new Error('log query timed out');
+      return [];
+    };
+    const r = await A.scanTransfers({ rpc: fussy, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 2000000, pause: 0 });
+    checkThat('it halves until the endpoint accepts the range', spans.slice(0, 3).join(',') === '1000000,500000,250000', spans.slice(0, 5).join(','));
+    // Every window it *chooses* is at or above the floor; the one short range at the end is simply
+    // what was left of the span, which is not the scan narrowing.
+    const chosen = spans.slice(0, -1);
+    checkThat('and never chooses a window below the floor', chosen.every((n) => n >= A.MIN_CHUNK), spans.join(','));
+    checkThat('the last request is just the remainder of the range', spans[spans.length - 1] <= 250000, spans.join(','));
+    checkThat('it covers the whole range exactly once', r.chunks >= 8, 'chunks=' + r.chunks);
+
+    // The two refusals these endpoints actually send, captured verbatim on 16 Sep 2026. The first
+    // is a result-count cap rather than a range cap, which is the one that would otherwise slip
+    // past a regex written only for ranges and crash the scan instead of narrowing it.
+    for (const msg of ['logs matched by query exceeds limit of 10000', 'log query timed out']) {
+      const seen = [];
+      const capped = async (method, params) => {
+        const span = Number(BigInt(params[0].toBlock)) - Number(BigInt(params[0].fromBlock)) + 1;
+        seen.push(span);
+        if (span > 100000) throw new Error(msg);
+        return [];
+      };
+      await A.scanTransfers({ rpc: capped, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 300000, pause: 0 });
+      checkThat('"' + msg + '" narrows the window instead of throwing', seen.some((n) => n <= 100000), seen.join(','));
+    }
+
+    // A real error is not a range complaint and must not be swallowed by narrowing forever.
+    let threw = null;
+    try {
+      await A.scanTransfers({ rpc: async () => { throw new Error('execution reverted'); }, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 100, pause: 0 });
+    } catch (e) { threw = e.message; }
+    check('an error that is not about the range is rethrown, not retried smaller', threw, 'execution reverted');
   }
 
   console.log('\nrun() with no coin writes a valid empty ledger for the current week, and does not need the chain to be up');

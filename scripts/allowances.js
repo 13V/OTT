@@ -63,8 +63,22 @@ const LAUNCHED = chain.topic('TokenLaunched(address,address,address,address,uint
 // The official endpoint refuses ranges much wider than this, and the probe that sized it found the
 // others either refusing older blocks outright or answering "busy" — so the chunk is small and the
 // pause between chunks is real, not decorative.
-const CHUNK = 10000;
-const PAUSE_MS = 400;
+// Robinhood Chain produces a block roughly every 0.1 seconds, so a week is about six MILLION
+// blocks. A 10,000-block chunk — the right size for a broad scan — would need six hundred requests
+// to cover one week's tax window, which does not finish inside a scheduled job.
+//
+// Measured against all three endpoints on 16 Sep 2026: a *narrow* filter (one address, one or two
+// topics, which is every query this file makes) is served over a 1,000,000-block range in about
+// 70ms by two of the three, and the third refuses every range as it is rate-limited anyway. So the
+// scan starts wide and only narrows when an endpoint complains, rather than paying for the worst
+// case on every request.
+const MAX_CHUNK = 1000000;
+const MIN_CHUNK = 10000;
+const CHUNK = MAX_CHUNK;
+const PAUSE_MS = 120;
+// What an endpoint says when a range is too wide for it. Anything else is a real error and is
+// rethrown — narrowing the window would only hide it.
+const TOO_WIDE = /timed out|too many|range|limit exceeded|exceeds|query returned more than|block range/i;
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
@@ -315,13 +329,34 @@ async function launchBlock({ rpc, factory, coin, curve, head, log = () => {} }) 
  * exactly which topics it wants — every Transfer of the coin, or specifically curve -> feeEscrow —
  * so a single precise filter replaces the old two-queries-and-dedupe.
  */
+/**
+ * Every matching log between two blocks, in as few requests as the endpoints will allow.
+ *
+ * The window adapts: it starts at `chunk` and halves whenever an endpoint says the range is too
+ * wide, down to MIN_CHUNK, then widens again after a clean pass. That way one slow endpoint costs
+ * a retry rather than forcing the whole scan to crawl, and a chain that speeds up later does not
+ * need this constant re-tuned by hand.
+ */
 async function scanTransfers({ rpc, address, topics, fromBlock, toBlock, chunk = CHUNK, pause = PAUSE_MS, onChunk = () => {} }) {
   const seen = new Set();
   const logs = [];
   let chunks = 0;
-  for (let from = fromBlock; from <= toBlock; from += chunk) {
-    const to = Math.min(from + chunk - 1, toBlock);
-    const found = await rpc('eth_getLogs', [{ address, topics, fromBlock: hex(from), toBlock: hex(to) }]);
+  let span = Math.max(MIN_CHUNK, Math.min(chunk, MAX_CHUNK));
+  let clean = 0;
+  let from = fromBlock;
+  while (from <= toBlock) {
+    const to = Math.min(from + span - 1, toBlock);
+    let found;
+    try {
+      found = await rpc('eth_getLogs', [{ address, topics, fromBlock: hex(from), toBlock: hex(to) }]);
+    } catch (e) {
+      if (span > MIN_CHUNK && TOO_WIDE.test(String(e && e.message))) {
+        span = Math.max(MIN_CHUNK, Math.floor(span / 2));
+        clean = 0;
+        continue;                         // same `from`, a narrower window
+      }
+      throw e;
+    }
     for (const log of found) {
       // Belt and braces: real endpoints have occasionally answered an overlapping chunk twice.
       const key = `${log.blockNumber}:${log.logIndex}`;
@@ -330,8 +365,14 @@ async function scanTransfers({ rpc, address, topics, fromBlock, toBlock, chunk =
       logs.push(log);
     }
     chunks++;
-    onChunk({ from, to, count: logs.length });
-    if (to < toBlock && pause) await sleep(pause);
+    onChunk({ from, to, count: logs.length, span });
+    from = to + 1;
+    // After a run of clean passes the window opens back up: an endpoint that refused once is often
+    // just busy, and staying narrow forever is how a scan silently becomes an hour long again. The
+    // run is four rather than two because widening costs a refused request when the endpoint really
+    // does have a hard ceiling, and probing for it every third chunk is most of that saving back.
+    if (++clean >= 4 && span < MAX_CHUNK) { span = Math.min(MAX_CHUNK, span * 2); clean = 0; }
+    if (from <= toBlock && pause) await sleep(pause);
   }
   return { logs, chunks };
 }
@@ -459,6 +500,8 @@ module.exports = {
   TRANSFER,
   LAUNCHED,
   CHUNK,
+  MAX_CHUNK,
+  MIN_CHUNK,
   pad,
 };
 
