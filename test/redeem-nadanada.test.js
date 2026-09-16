@@ -78,6 +78,11 @@ const STALE_PACKAGES = [Object.assign({}, PACKAGES[0], { priceUsd: 1.50 }), PACK
 const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'nadanada' };
 const NORMAL_CONFIG = Object.assign({}, BASE_CONFIG, { packages: PACKAGES });
 const STALE_CONFIG = Object.assign({}, BASE_CONFIG, { packages: STALE_PACKAGES });
+// The same catalogue after `npm run catalogue -- --write` picked up cheaper prices from nadanada,
+// which is the ordinary weekly reason that file changes.
+const CHEAPER_CONFIG = Object.assign({}, BASE_CONFIG, {
+  packages: PACKAGES.map((p) => Object.assign({}, p, { priceUsd: Math.round(p.priceUsd * 50) / 100 })),
+});
 // The contract shape: written by the indexer, for one specific week, each wallet's standing FOR
 // THAT WEEK ONLY — tokens (base units), its share of the circulating supply, and the dollars that
 // share is worth of this week's budget.
@@ -97,6 +102,7 @@ const allowances = {
 const FILES = {
   '/config/esim.json': NORMAL_CONFIG,
   '/config/esim-stale.json': STALE_CONFIG,
+  '/config/esim-cheaper.json': CHEAPER_CONFIG,
   '/data/allowances.json': allowances,
 };
 
@@ -237,6 +243,25 @@ async function main() {
   // trust that response enough to put it in an <img> unchecked; this is the same care, applied to
   // the rest of it, at BOTH ends — where the record is written, and where it is served.
   // ------------------------------------------------------------------------------------------
+  // ------------------------------------------------------------------------------------------
+  // A week's allowance is a fixed sum, so what a wallet has already spent out of it has to be a
+  // fixed sum too. The catalogue is not: scripts/catalogue.js rewrites it from nadanada's live
+  // prices whenever it runs, which is an ordinary weekly thing to do. Pricing a past order from
+  // the catalogue as it stands NOW means that refresh silently rewrites history.
+  // ------------------------------------------------------------------------------------------
+  console.log('\na catalogue refresh does not rewrite what a wallet already spent');
+  const beforeRefresh = await GET(addr(RICH));
+  const spent = beforeRefresh.body.redeemedUsd;
+  const left = beforeRefresh.body.remainingUsd;
+  checkThat('RICH has spent something this week to begin with', spent > 0, spent);
+  process.env.ESIM_CONFIG_URL = base + '/config/esim-cheaper.json';
+  const afterRefresh = await GET(addr(RICH));
+  check('each past order still shows the price it was actually charged, not the new one',
+    afterRefresh.body.orders.map((o) => o.priceUsd), beforeRefresh.body.orders.map((o) => o.priceUsd));
+  check('so what was spent, and what is left, are exactly what they were',
+    [afterRefresh.body.redeemedUsd, afterRefresh.body.remainingUsd], [spent, left]);
+  process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
+
   console.log('\nnadanada sends links that would run script, and none of them reach the page');
   fake.state.hostileInstall = true;
   const hostile = await POST(signed(HOSTILE, 'fixed_1GB_7D_DE'));

@@ -149,9 +149,19 @@ function transactionIdFor(address, week, n) {
  * the alternative is credit that can be spent twice.
  */
 function priceOf(order, config) {
+  // What this order was actually charged, when the provider wrote it down. It is the only figure
+  // that cannot move afterwards: the catalogue is regenerated from nadanada's live prices whenever
+  // scripts/catalogue.js runs, and pricing a past order from the current catalogue means a
+  // mid-week refresh silently rewrites what a wallet has already spent — a package that got
+  // cheaper hands back allowance the pool has already paid out, one that got dearer takes away
+  // allowance nobody spent. Neither is a thing a week's budget can absorb.
+  const paid = Number(order && order.priceUsd);
+  if (Number.isFinite(paid) && paid > 0) return paid;
   const code = String(order && order.packageCode || '');
   const pkg = config.packages.find((p) => p && (p.code === code || p.packageCode === code));
   if (pkg && Number.isFinite(Number(pkg.priceUsd))) return Number(pkg.priceUsd);
+  // Nothing recorded and nothing in the catalogue: charge the dearest thing still sold, since the
+  // alternative is credit that can be spent twice.
   return config.packages.reduce((m, p) => Math.max(m, Number(p && p.priceUsd) || 0), 0);
 }
 
