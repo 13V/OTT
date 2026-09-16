@@ -56,6 +56,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(message, status) { const e = new Error(message); if (status) e.status = status; return e; }
 
+/** A URL we are willing to put behind a link, or nothing. Both install links nadanada sends are https. */
+const httpsOnly = (u) => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
+
 /** The store, refusing the forgetful one unless a test says so in the environment. */
 function storeFor() {
   const s = chooseStore();
@@ -255,8 +258,12 @@ async function finish(store, rec, data) {
   rec.ac = /^LPA:/i.test(manual) ? manual
     : /^LPA:/i.test(qr) ? qr
       : (rec.smdpAddress && rec.matchingId ? 'LPA:1$' + rec.smdpAddress + '$' + rec.matchingId : manual);
-  rec.appleInstallUrl = String(inst.appleInstallUrl || '');
-  rec.androidInstallUrl = String(inst.androidInstallUrl || '');
+  // Scheme-checked for the same reason the QR above is: these become the href of a button the
+  // holder is invited to press, on the page that is showing their activation code. A "javascript:"
+  // in either field would run in that page's origin. We already decline to trust this response
+  // enough to put it in an <img>; an <a> deserves no more trust.
+  rec.appleInstallUrl = httpsOnly(inst.appleInstallUrl);
+  rec.androidInstallUrl = httpsOnly(inst.androidInstallUrl);
   rec.completedAt = new Date().toISOString();
   rec.error = '';
   await save(store, rec);

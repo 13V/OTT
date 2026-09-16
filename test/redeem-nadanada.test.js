@@ -44,6 +44,7 @@ const BROKE = secp.newPrivateKey();  // $2.99 allowance, for a wallet whose wall
 const SLOW = secp.newPrivateKey();   // $2.99 allowance, for a profile slower than the function waits
 const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price nadanada disagrees with
 const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provider still works untouched
+const HOSTILE = secp.newPrivateKey(); // $2.99, for the day nadanada sends links that are not links
 const addr = (k) => secp.addressOf(k).toLowerCase();
 
 // The current week, computed the same way redeem.js computes it (site/api/lib/week.js), so the
@@ -90,6 +91,7 @@ const allowances = {
     [addr(SLOW)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
     [addr(STALE)]: { tokens: '200000000000000000000', share: 0.02, allowanceUsd: 2.0 },
     [addr(MOCKW)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(HOSTILE)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
   },
 };
 const FILES = {
@@ -227,6 +229,39 @@ async function main() {
   check('GET is 503', noStore.status, 503);
   checkThat('and says a durable store is needed', /durable store/.test(noStore.body.error), noStore.body.error);
   process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
+
+  // ------------------------------------------------------------------------------------------
+  // Everything nadanada says about how to install an eSIM becomes an attribute on the page that
+  // is displaying the holder's activation code: the QR an <img src>, the two install links an
+  // <a href>. A "javascript:" in any of them runs in that origin, next to the codes. We do not
+  // trust that response enough to put it in an <img> unchecked; this is the same care, applied to
+  // the rest of it, at BOTH ends — where the record is written, and where it is served.
+  // ------------------------------------------------------------------------------------------
+  console.log('\nnadanada sends links that would run script, and none of them reach the page');
+  fake.state.hostileInstall = true;
+  const hostile = await POST(signed(HOSTILE, 'fixed_1GB_7D_DE'));
+  check('the order still succeeds — the eSIM is real, only its links were not', [hostile.status, !!hostile.body.order.iccid], [200, true]);
+  check('the javascript: QR, the javascript: Apple link and the data: Android link are all dropped',
+    [hostile.body.order.qrCodeUrl, hostile.body.order.appleInstallUrl, hostile.body.order.androidInstallUrl], ['', '', '']);
+  check('and the activation code, which is the part that actually matters, survives intact',
+    /^LPA:1\$rsp\.example\.com\$/.test(hostile.body.order.ac), true);
+  const hostileSims = (await POST(signed(HOSTILE))).body.sims || [];
+  check('the SIM the codes are shown on carries none of them either',
+    hostileSims.map((x) => [x.qrCodeUrl, x.appleInstallUrl, x.androidInstallUrl]), [['', '', '']]);
+  fake.state.hostileInstall = false;
+
+  // The guard at the serving end is not redundant: a record written before it existed, or by any
+  // provider that never checked, is cleaned on the way out rather than trusted because it is ours.
+  console.log('\na hostile record already in the store is still not served');
+  const store = require(path.join(API, 'lib', 'store.js')).store();
+  const planted = await store.get('sim:' + addr(HOSTILE));
+  const onlyIccid = Object.keys(planted.cards)[0];
+  planted.cards[onlyIccid].appleInstallUrl = 'javascript:alert(1)';
+  planted.cards[onlyIccid].qrCodeUrl = 'javascript:alert(2)';
+  await store.set('sim:' + addr(HOSTILE), planted);
+  const served = (await POST(signed(HOSTILE))).body.sims || [];
+  check('a record poisoned in the database is served with its links emptied',
+    served.map((x) => [x.qrCodeUrl, x.appleInstallUrl]), [['', '']]);
 
   console.log('\nthe mock provider is untouched — the switch is env-only');
   process.env.ESIM_PROVIDER = 'mock';

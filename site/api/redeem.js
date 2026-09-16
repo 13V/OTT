@@ -124,6 +124,11 @@ async function readAllowances() {
 // Small pure helpers.
 // ---------------------------------------------------------------------------------------------
 const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
+// Anything that becomes an href or an <img src> on the page is scheme-checked HERE as well as
+// where it was written, so a record stored before the provider checked — or by a provider that
+// never did — cannot put a "javascript:" link on the page that is showing a wallet's codes.
+const safeHref = (u) => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
+const safeImg = (u) => (/^(data:image\/|https:\/\/)/i.test(String(u || '')) ? String(u) : '');
 const round6 = (x) => Math.round(x * 1e6) / 1e6;
 
 /**
@@ -187,9 +192,9 @@ function publicSim(sim, { codes = false } = {}) {
   const c = (v) => (codes ? v || '' : '');
   return {
     iccid: sim.iccid || '', slug: sim.slug || '', createdAt: sim.createdAt || null,
-    qrCodeUrl: c(sim.qrCodeUrl), ac: c(sim.ac), manualCode: c(sim.manualCode),
+    qrCodeUrl: safeImg(c(sim.qrCodeUrl)), ac: c(sim.ac), manualCode: c(sim.manualCode),
     smdpAddress: c(sim.smdpAddress), matchingId: c(sim.matchingId),
-    appleInstallUrl: c(sim.appleInstallUrl), androidInstallUrl: c(sim.androidInstallUrl),
+    appleInstallUrl: safeHref(c(sim.appleInstallUrl)), androidInstallUrl: safeHref(c(sim.androidInstallUrl)),
     codes,
   };
 }
@@ -198,7 +203,7 @@ function publicOrder(o, config, { codes = false } = {}) {
   const c = (v) => (codes ? v || '' : '');
   return {
     n: o.n, week: o.week, transactionId: o.transactionId, packageCode: o.packageCode, priceUsd: priceOf(o, config),
-    qrCodeUrl: c(o.qrCodeUrl), ac: c(o.ac), iccid: o.iccid || '', createdAt: o.createdAt || null,
+    qrCodeUrl: safeImg(c(o.qrCodeUrl)), ac: c(o.ac), iccid: o.iccid || '', createdAt: o.createdAt || null,
     pending: !!o.pending,
     // Which eSIM this bundle is on, and whether it queued on one already installed. A top-up
     // carries no code of its own — the profile it joined is the one the holder already scanned.
@@ -207,7 +212,7 @@ function publicOrder(o, config, { codes = false } = {}) {
     // other ways into the phone besides the QR, and one line of why if it is stuck.
     stage: o.stage || o.step || (o.pending ? 'pending' : 'done'),
     smdpAddress: c(o.smdpAddress), matchingId: c(o.matchingId),
-    appleInstallUrl: c(o.appleInstallUrl), androidInstallUrl: c(o.androidInstallUrl),
+    appleInstallUrl: safeHref(c(o.appleInstallUrl)), androidInstallUrl: safeHref(c(o.androidInstallUrl)),
     note: String(o.error || '').slice(0, 200),
     codes,
   };

