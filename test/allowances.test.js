@@ -412,6 +412,19 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   await rejects('a native-ether pair has no Transfer events to sum a tax sweep from',
     A.run({ config: { coin: COIN }, addresses, rpc: fakeNode({ head: HEAD, pair: '0x' + '0'.repeat(40) }).rpc, out: path.join(tmp, 'x3.json'), week: 10 }), /native ether/);
 
+  // A coin with no curve beside it indexes fine — the factory knows the curve. The SITE does not:
+  // redeem.js and status.js both read "launched" as coin AND curve, so this half-filled state
+  // publishes a real ledger that nobody is allowed to spend. run() has to say so, and say which
+  // address is missing, because from the outside it looks like everything worked.
+  console.log('\ncoin filled in, curve left blank: the ledger is real but the site is still shut');
+  const half = await A.run({ config: { coin: COIN, treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: path.join(tmp, 'half.json'), week: 10, now: () => 1700000000000 });
+  check('run() flags it rather than reporting a clean run', half.curveMissing, true);
+  checkThat('the summary names the curve to paste and says the site is still closed',
+    /still closed/.test(half.summary) && half.summary.includes(CURVE.toLowerCase()), half.summary);
+  check('and the ledger it wrote is a real one, with the curve the factory gave it', [half.data.curve, half.data.holders > 0], [CURVE.toLowerCase(), true]);
+  const whole = await A.run({ config: { coin: COIN, curve: CURVE, treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: path.join(tmp, 'whole.json'), week: 10, now: () => 1700000000000 });
+  check('with the curve filled in, nothing is flagged and the ledger is identical', [!!whole.curveMissing, whole.data.curve], [false, CURVE.toLowerCase()]);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\n${failures} of ${total} check(s) failed` : `\nall ${total} checks passed`);
   process.exit(failures ? 1 : 0);

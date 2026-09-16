@@ -427,6 +427,17 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
   if (curve !== launched.curve) {
     throw new Error(`esim.json says the curve is ${curve} but the factory says ${launched.curve}; refusing to index the wrong one`);
   }
+  // A coin with no curve beside it indexes perfectly well — the factory knows the curve, and the
+  // line above just took it. The site does not: site/api/redeem.js and site/api/status.js both
+  // treat "launched" as coin AND curve, so with one filled in and not the other the ledger goes
+  // live while every holder is still told the coin has not launched. That is a launch-day half
+  // step nobody would guess at from the outside, so it is said here, where the operator is
+  // looking, with the value they need to paste.
+  const curveMissing = !config.curve;
+  if (curveMissing) {
+    log(`  ! esim.json has no curve. The factory says it is ${launched.curve} — put that in site/config/esim.json.`);
+    log('    Until you do, this ledger is published but the site answers "coin not launched yet" and nobody can spend it.');
+  }
 
   const head = toBlock != null ? Number(toBlock) : Number(BigInt(await rpc('eth_blockNumber', [])));
   const decimals = await tokenDecimals(rpc, coin);
@@ -473,8 +484,9 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
   writeAllowances(out, data);
 
   const summary = `allowances: ${coin} week ${wk}, snapshot block ${snapshotBlock}: ${holders} holder(s), `
-    + `${chain.fromUnits(circulating, decimals)} tokens circulating, $${budgetUsd.toFixed(4)} budget (${budgetSource}) -> ${rel}`;
-  return { data, summary };
+    + `${chain.fromUnits(circulating, decimals)} tokens circulating, $${budgetUsd.toFixed(4)} budget (${budgetSource}) -> ${rel}`
+    + (curveMissing ? `\n  ! the site is still closed: site/config/esim.json needs curve ${launched.curve}` : '');
+  return { data, summary, curveMissing };
 }
 
 module.exports = {
