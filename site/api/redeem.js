@@ -179,12 +179,30 @@ async function historyOrders(prov, address, week) {
  * and the install links are included; without, they are blank — a GET by address is public, and
  * the codes go only to the wallet that signed for them.
  */
+/**
+ * An eSIM as the wire shows it. The codes are withheld on an unsigned read, exactly as an order's
+ * are: the QR and the activation string are the eSIM, and anyone holding them can install it.
+ */
+function publicSim(sim, { codes = false } = {}) {
+  const c = (v) => (codes ? v || '' : '');
+  return {
+    iccid: sim.iccid || '', slug: sim.slug || '', createdAt: sim.createdAt || null,
+    qrCodeUrl: c(sim.qrCodeUrl), ac: c(sim.ac), manualCode: c(sim.manualCode),
+    smdpAddress: c(sim.smdpAddress), matchingId: c(sim.matchingId),
+    appleInstallUrl: c(sim.appleInstallUrl), androidInstallUrl: c(sim.androidInstallUrl),
+    codes,
+  };
+}
+
 function publicOrder(o, config, { codes = false } = {}) {
   const c = (v) => (codes ? v || '' : '');
   return {
     n: o.n, week: o.week, transactionId: o.transactionId, packageCode: o.packageCode, priceUsd: priceOf(o, config),
     qrCodeUrl: c(o.qrCodeUrl), ac: c(o.ac), iccid: o.iccid || '', createdAt: o.createdAt || null,
     pending: !!o.pending,
+    // Which eSIM this bundle is on, and whether it queued on one already installed. A top-up
+    // carries no code of its own — the profile it joined is the one the holder already scanned.
+    topupOf: o.topupOf || '', toppedUp: !!o.toppedUp,
     // What a Lightning-paid provider adds: where a pending order stands (invoiced, paid, done), the
     // other ways into the phone besides the QR, and one line of why if it is stuck.
     stage: o.stage || o.step || (o.pending ? 'pending' : 'done'),
@@ -260,9 +278,21 @@ async function standing(prov, config, allowances, address, week) {
   const redeemedUsd = round6(orders.reduce((s, o) => s + priceOf(o, config), 0));
   const remainingUsd = round6(Math.max(0, allowanceUsd - redeemedUsd));
   const history = await historyOrders(prov, address, week);
+  // The eSIMs themselves, which outlive any week: a bundle claimed in week 2958 queues on the
+  // profile issued in 2957. A provider with no such notion (the reseller one) simply has none.
+  let sims = [];
+  if (typeof prov.sims === 'function') {
+    try { sims = await prov.sims(address); } catch (e) { sims = []; }
+  }
   let holds = false;
   try { holds = BigInt(tokens) > 0n; } catch (e) { holds = false; }
-  return { stale, week, weekEnd: weekEndOf(week), tokens, share, allowanceUsd, redeemedUsd, remainingUsd, orders, history, holds };
+  return { stale, week, weekEnd: weekEndOf(week), tokens, share, allowanceUsd, redeemedUsd, remainingUsd, orders, history, sims, holds };
+}
+
+/** This wallet's eSIMs, for a response that has just changed them. Never fatal: codes also ride on the order. */
+async function simsFor(prov, address, codes) {
+  if (typeof prov.sims !== 'function') return [];
+  try { return (await prov.sims(address)).map((x) => publicSim(x, { codes })); } catch (e) { return []; }
 }
 
 /** The standing as the wire shows it — the shape both GET and a signed read answer with. */
@@ -276,6 +306,7 @@ function standingBody(s, address, allowances, config, codes) {
     stale: s.stale, allowancesWeek: Number.isFinite(fileWeek) ? fileWeek : null,
     orders: s.orders.map((o) => publicOrder(o, config, { codes })),
     history: s.history.map((o) => publicOrder(o, config, { codes })),
+    sims: (s.sims || []).map((x) => publicSim(x, { codes })),
   };
 }
 
@@ -349,7 +380,12 @@ module.exports = async (req, res) => {
     const asked = Number(body.n);
     if (asked < n) {
       const done = s.orders[asked];
-      if (done && done.packageCode === pkg.code) return send(res, 200, { ok: true, order: publicOrder(done, config, { codes: true }), remainingUsd: s.remainingUsd, replayed: true });
+      if (done && done.packageCode === pkg.code) {
+        return send(res, 200, {
+          ok: true, order: publicOrder(done, config, { codes: true }), remainingUsd: s.remainingUsd,
+          sims: await simsFor(prov, address, true), replayed: true,
+        });
+      }
       return fail(res, 409, 'your orders have changed since; reload');
     }
     if (asked > n) return fail(res, 409, 'your orders have changed since; reload');
@@ -368,7 +404,12 @@ module.exports = async (req, res) => {
     // for (nadanada) or the record name (eSIM Access), and `code` is what priceOf() looks up.
     const order = existing || await prov.order({ transactionId, packageCode: pkg.packageCode || pkg.code, slug: pkg.slug || pkg.code, code: pkg.code, priceUsd, address });
     const remainingUsd = round6(Math.max(0, s.remainingUsd - priceOf(order, config)));
-    return send(res, 200, { ok: true, order: publicOrder(Object.assign({ n, week }, order), config, { codes: true }), remainingUsd });
+    // The eSIMs after this order, not before: a wallet's first claim mints the profile this very
+    // call created, and the page needs its code without another round trip.
+    return send(res, 200, {
+      ok: true, order: publicOrder(Object.assign({ n, week }, order), config, { codes: true }),
+      remainingUsd, sims: await simsFor(prov, address, true),
+    });
   } catch (e) {
     // Provider and config failures land here. The message is the provider's or ours, never a
     // stack, and never anything that came from the environment. A provider that knows its problem

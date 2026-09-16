@@ -82,6 +82,34 @@ manual code, the SM-DP+ address and matching id, and install links for Apple and
 call more than once. There is no listing endpoint, and nothing on nadanada's side records which
 wallet an order was for.
 
+Read again on 16 September 2026 for the two endpoints that decide the shape of the product:
+`POST /esim/{iccid}/purchase` and `POST /esim/{iccid}/complete` add a bundle to a profile that
+already exists. The top-up completion answers `{iccid, bundleName, toppedUp}` and no installation
+details, because there is nothing new to install; it 403s when the checkout belongs to a different
+ICCID. What makes this the right default rather than a convenience is nadanada's own account of how
+bundles behave: a bundle's validity does not begin when it is bought but when the phone first
+connects to a network in its region, and bundles on one profile run **consecutively** — a top-up
+queues behind whatever is running and starts the moment that ends, losing neither days nor data
+from the bundle in front of it. The profile itself lapses only after six months with no connection,
+and every connection starts that six months again.
+
+So a holder gets one eSIM per place they buy, topped up every week, instead of a new eSIM every
+week: ten claims become one profile with ten bundles queued behind each other, not ten QR codes and
+ten independent idle clocks. Per place, not per holder, and that distinction is load-bearing —
+because bundles run in sequence, a Japan bundle queued behind an unused Europe one would be
+unreachable until the Europe one ended, and the holder would land in Tokyo with data they had paid
+for and could not use. A second profile for a second region costs nothing (the SIM is free; only
+data is billed) and works on arrival. `simFor()` in the nadanada provider is where that is decided,
+and `test/sim.test.js` holds it there.
+
+One thing is **not** settled, and it is worth knowing before the first holder stockpiles a queue:
+nadanada's two pages disagree on whether a bundle has a shelf life. Their `/faq` says "There is no
+separate activation deadline: unused bundles stay on your eSIM until you use them"; their `/esim`
+page says "You must activate the data bundle within 6 weeks of purchase or it expires." Both were
+read on 16 September 2026. If the six weeks is the real rule, a holder who claims every week and
+does not travel loses the oldest bundles, and the weekly allowance should be given a way to be
+banked rather than claimed. Ask them before relying on either answer.
+
 That last fact is what `site/api/lib/store.js` exists to fix: one record per redemption id, kept in
 Upstash Redis over REST (`KV_REST_API_URL` / `KV_REST_API_TOKEN`; in memory only for tests), moved
 through invoiced → paid → done and resumable at every step, so a crash mid-payment picks up where it

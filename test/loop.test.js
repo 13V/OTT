@@ -564,9 +564,11 @@ async function main() {
     check('RICH\'s new-week dashboard: $126.00 allowance, $0 used, nothing carried over from last week\'s $292.02', [r.body.week, r.body.allowanceUsd, r.body.redeemedUsd, r.body.remainingUsd, r.body.orders], [WEEK + 1, 126, 0, 126, []]);
     check('last week\'s two eSIMs are still in history, most recent week first, still without codes on a plain GET', r.body.history.map((o) => [o.week, o.n, o.packageCode, o.iccid, o.ac]), [[WEEK, 0, 'fixed_5GB_30D_EUROPE', europe.body.order.iccid, ''], [WEEK, 1, 'fixed_1GB_7D_DE', germany.body.order.iccid, '']]);
 
+    const paidBeforeGermanyAgain = mockPayer._state.log.length;
     const germanyAgain = await POST(signed(RICH_KEY, 'fixed_1GB_7D_DE', 0));
     check('RICH can redeem again in the new week, at n=0 of a fresh sequence: $124.01 left', [germanyAgain.status, germanyAgain.body.order.n, germanyAgain.body.remainingUsd], [200, 0, 124.01]);
-    checkThat('it is a genuinely new eSIM, not last week\'s Germany order replayed under a new week number', germanyAgain.body.order.iccid !== germany.body.order.iccid, germanyAgain.body.order.iccid);
+    checkThat('it is a genuinely new transaction for the new week — a fresh invoice paid, not last week\'s Germany order replayed under a new week number', germanyAgain.body.order.transactionId !== germany.body.order.transactionId && mockPayer._state.log.length - paidBeforeGermanyAgain === 1, JSON.stringify({ transactionId: germanyAgain.body.order.transactionId, lastWeeksTransactionId: germany.body.order.transactionId }));
+    checkThat('and — one eSIM per wallet, topped up per place — that new transaction lands on the SAME Germany profile RICH already has, not a second one', germanyAgain.body.order.iccid === germany.body.order.iccid && germanyAgain.body.order.toppedUp === true && germanyAgain.body.order.topupOf === germany.body.order.iccid, JSON.stringify(germanyAgain.body.order));
 
     r = await GET(POORER);
     check('POORER\'s new-week allowance is recomputed the same way: $84.00, untouched by RICH\'s new redemption', [r.body.week, r.body.allowanceUsd, r.body.remainingUsd], [WEEK + 1, 84, 84]);

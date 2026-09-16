@@ -51,6 +51,7 @@ const CLAIM_TTL_MS = 60 * 1000;  // a claim older than this belongs to an instan
 const CLAIM_POLL_MS = 250;
 const RECENT = 'orders:recent';
 const keyOf = (tx) => 'order:' + tx;
+const simKeyOf = (address) => 'sim:' + String(address || '').toLowerCase();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(message, status) { const e = new Error(message); if (status) e.status = status; return e; }
@@ -98,19 +99,96 @@ const errorOf = (r, what) => (r.json && (r.json.error || r.json.message))
   ? String(r.json.error || r.json.message)
   : 'nadanada answered HTTP ' + r.status + (r.json ? '' : ' with no JSON') + ' on ' + what;
 
-async function purchase({ bundleName, slug }) {
-  const r = await api('POST', '/esim/purchase', { bundleName, slug, paymentMethod: 'lightning' });
-  if (r.status !== 200 || !r.json || !r.json.success || !r.json.data) throw fail('nadanada refused the order: ' + errorOf(r, 'purchase'), 502);
+async function purchase({ bundleName, slug, iccid }) {
+  const path = iccid ? '/esim/' + encodeURIComponent(iccid) + '/purchase' : '/esim/purchase';
+  const r = await api('POST', path, { bundleName, slug, paymentMethod: 'lightning' });
+  if (r.status !== 200 || !r.json || !r.json.success || !r.json.data) {
+    const e = fail('nadanada refused the order: ' + errorOf(r, 'purchase'), 502);
+    // Marked so order() can fall back to a new eSIM: nadanada warns that not every bundle can
+    // join every profile. Nothing has been paid at this point, so the fallback costs a round trip.
+    if (iccid) e.topupRefused = true;
+    throw e;
+  }
   return r.json.data;
 }
 
-/** One completion attempt: { done, data } | { unpaid } | { gone, error } | { error }. */
-async function complete(paymentHash) {
-  const r = await api('POST', '/esim/complete', { paymentHash });
+/**
+ * One completion attempt: { done, data } | { unpaid } | { gone, error } | { error }.
+ *
+ * `iccid` names the profile being topped up, and is empty for a new eSIM. A top-up answers
+ * { iccid, bundleName, toppedUp } and no installation details — the profile is already on the
+ * phone, so there is nothing new to install. Its 403 (the checkout belongs to another ICCID) is
+ * as final as a 404: this record can never complete, so both are 'gone'.
+ */
+async function complete(paymentHash, iccid) {
+  const path = iccid ? '/esim/' + encodeURIComponent(iccid) + '/complete' : '/esim/complete';
+  const r = await api('POST', path, { paymentHash });
   if (r.status === 200 && r.json && r.json.success && r.json.data && r.json.data.iccid) return { done: true, data: r.json.data };
   if (r.status === 402) return { done: false, unpaid: true };
-  if (r.status === 404) return { done: false, gone: true, error: errorOf(r, 'complete') };
+  if (r.status === 404 || r.status === 403) return { done: false, gone: true, error: errorOf(r, 'complete') };
   return { done: false, error: errorOf(r, 'complete') };
+}
+
+// ---------------------------------------------------------------------------------------------
+// One eSIM per wallet, topped up.
+//
+// nadanada's bundles run consecutively on a profile, not concurrently: a top-up queues behind
+// whatever is running and starts the moment that one ends, and a bundle's validity does not begin
+// until the phone first connects to a network in its region. So the right thing to give a holder
+// every week is another bundle on the SIM they already have — not another SIM. Ten weekly claims
+// become one profile with ten bundles queued, instead of ten profiles each with its own six-month
+// idle clock and its own QR code to install.
+//
+// The index is one document per wallet: which ICCID to top up (per place, and in general), and the
+// installation details of each, which is all the dashboard needs to show a card. It is written
+// when a new eSIM completes — the first writer wins with NX, so two first-ever claims racing each
+// other leave the loser's SIM out of the index rather than overwriting the winner's. That holder
+// ends up with two profiles for one week and one from then on, which is worth more than a lock.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The eSIM this wallet should top up for `slug` — its SIM for that place, and only that place.
+ *
+ * Deliberately NOT "whichever SIM it has". Bundles on a profile run consecutively, so a Japan
+ * bundle queued behind an unused Europe one would be unreachable until the Europe one ended: the
+ * holder would land in Tokyo with data they had paid for and could not use. A second profile for
+ * a second region costs nothing (the SIM is free; only data is billed) and is always usable on
+ * arrival. So a wallet has one eSIM per place it buys — one, for anyone who keeps buying the
+ * same place, which is nearly everyone.
+ */
+async function simFor(store, address, slug) {
+  if (!address) return '';
+  const rec = await store.get(simKeyOf(address));
+  if (!rec || !rec.bySlug) return '';
+  return String(rec.bySlug[slug] || '');
+}
+
+/** Remember a newly issued eSIM as this wallet's, for this place and — if it is the first — at large. */
+async function recordSim(store, address, slug, card) {
+  if (!address || !card || !card.iccid) return;
+  const key = simKeyOf(address);
+  const now = new Date().toISOString();
+  const fresh = {
+    address: String(address).toLowerCase(), primary: card.iccid, bySlug: {}, cards: {},
+    createdAt: now, updatedAt: now,
+  };
+  fresh.bySlug[slug] = card.iccid;
+  fresh.cards[card.iccid] = card;
+  if (await store.set(key, fresh, { nx: true })) return;
+  const rec = (await store.get(key)) || fresh;
+  rec.bySlug = rec.bySlug || {};
+  rec.cards = rec.cards || {};
+  if (!rec.primary) rec.primary = card.iccid;
+  // Unconditional, unlike `primary`: this runs whenever a genuinely new eSIM was just issued for
+  // `slug`, which happens not only the first time (bySlug[slug] unset) but also when a top-up of
+  // the wallet's existing SIM for this place was refused and order() minted a replacement instead
+  // (see the topupRefused fallback in order()). Leaving the old, now-refusing ICCID in bySlug[slug]
+  // would make every future order for this place retry and fail against a dead profile forever,
+  // instead of adopting the replacement — the opposite of "one eSIM per wallet, topped up".
+  rec.bySlug[slug] = card.iccid;
+  if (!rec.cards[card.iccid]) rec.cards[card.iccid] = card;
+  rec.updatedAt = now;
+  await store.set(key, rec);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -130,9 +208,12 @@ const save = (store, rec) => store.set(keyOf(rec.transactionId), rec);
 /** The record as the API sees it: pending until done, and the step named. */
 const publicOf = (rec) => (rec ? Object.assign({}, rec, { pending: rec.step !== 'done', stage: rec.step }) : null);
 
-function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote, inv, attempt }) {
+function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote, inv, attempt, topupOf }) {
   return {
     transactionId, attempt, address: String(address || '').toLowerCase(), packageCode, slug,
+    // The profile this bundle joins, empty when it is a new eSIM. It decides which pair of
+    // nadanada endpoints completes the order, so it is written before the invoice is ever paid.
+    topupOf: String(topupOf || ''),
     checkoutId: quote.checkoutId || '', paymentHash: inv.paymentHash, paymentRequest: quote.paymentRequest,
     providerBundleName: quote.providerBundleName || '',
     priceUsd: Number(priceUsd), paidUsd: Number(quote.price), sats: inv.sats,
@@ -144,8 +225,22 @@ function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote,
   };
 }
 
-/** The completion payload onto the record. The activation code is whichever field carries an LPA string. */
+/**
+ * The completion payload onto the record. The activation code is whichever field carries an LPA
+ * string. A top-up carries none — its bundle queues on a profile already installed — so it keeps
+ * the fields blank and the dashboard shows it under the SIM it joined.
+ */
 async function finish(store, rec, data) {
+  if (rec.topupOf) {
+    rec.step = 'done';
+    rec.iccid = String(data.iccid || rec.topupOf);
+    rec.bundleName = String(data.bundleName || '');
+    rec.toppedUp = true;
+    rec.completedAt = new Date().toISOString();
+    rec.error = '';
+    await save(store, rec);
+    return rec;
+  }
   const inst = data.installationDetails || {};
   const qr = String(inst.qrCode || '');
   const manual = String(inst.manualCode || '');
@@ -165,6 +260,16 @@ async function finish(store, rec, data) {
   rec.completedAt = new Date().toISOString();
   rec.error = '';
   await save(store, rec);
+  // From here on this wallet is topped up rather than re-issued. Recorded after the order is
+  // saved: a failure to index costs a duplicate SIM next week, a failure to save costs the eSIM.
+  try {
+    await recordSim(store, rec.address, rec.slug, {
+      iccid: rec.iccid, slug: rec.slug, ac: rec.ac, qrCodeUrl: rec.qrCodeUrl, manualCode: rec.manualCode,
+      smdpAddress: rec.smdpAddress, matchingId: rec.matchingId,
+      appleInstallUrl: rec.appleInstallUrl, androidInstallUrl: rec.androidInstallUrl,
+      createdAt: rec.completedAt,
+    });
+  } catch (e) { /* indexed next time; the eSIM is issued either way */ }
   return rec;
 }
 
@@ -179,7 +284,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
   const payer = choosePayer();
 
   // 1. Completing is the cheapest truth about whether the invoice was paid.
-  let c = await complete(rec.paymentHash);
+  let c = await complete(rec.paymentHash, rec.topupOf);
   if (c.done) return finish(store, rec, c.data);
   if (c.gone) {
     // Unpaid and gone: the order never happened. Paid and gone: money out and no eSIM — stays
@@ -243,7 +348,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
     await sleep(COMPLETE_POLL_MS);
   }
   for (;;) {
-    c = await complete(rec.paymentHash);
+    c = await complete(rec.paymentHash, rec.topupOf);
     if (c.done) return finish(store, rec, c.data);
     if (c.gone || (!c.unpaid && c.error)) { rec.error = c.error; await save(store, rec); return rec; }
     if (Date.now() >= deadline) return rec;
@@ -320,11 +425,27 @@ module.exports = {
     const mine = async () => { const cur = await store.get(key); return !!cur && cur.attempt === claim.attempt; };
     if (existing && !(await mine())) return awaitClaim();
 
-    let quote, inv;
+    let quote, inv, topupOf = '';
     try {
       const payer = choosePayer();
-      quote = await purchase({ bundleName: packageCode, slug });
+      // The eSIM this wallet already has, if any: the bundle queues on that profile rather than
+      // arriving as another SIM to install. A refusal here is free — nothing has been paid yet —
+      // so a bundle the profile cannot take simply becomes a new eSIM.
+      topupOf = await simFor(store, address, slug);
+      try {
+        quote = await purchase({ bundleName: packageCode, slug, iccid: topupOf });
+      } catch (e) {
+        if (!e.topupRefused) throw e;
+        topupOf = '';
+        quote = await purchase({ bundleName: packageCode, slug });
+      }
       if (!quote.paymentRequest || !quote.paymentHash) throw fail('nadanada returned no Lightning invoice', 502);
+      // A top-up quote names the profile it is for. If that is not the profile we asked to top up,
+      // paying this invoice would put a holder's data on someone else's SIM — refuse before the
+      // money moves rather than rely on their 403 at completion, when it is already spent.
+      if (topupOf && quote.iccid && String(quote.iccid) !== topupOf) {
+        throw fail('nadanada quoted a top-up for a different eSIM than the one asked for', 502);
+      }
       try { inv = bolt11.decode(quote.paymentRequest); } catch (e) { throw fail('nadanada returned an invoice that does not decode: ' + e.message, 502); }
       if (inv.paymentHash !== String(quote.paymentHash).toLowerCase()) throw fail('nadanada\'s invoice does not carry the payment hash it quoted', 502);
       if (inv.sats === null) throw fail('nadanada returned an invoice with no amount', 502);
@@ -344,7 +465,7 @@ module.exports = {
       throw e;
     }
 
-    const rec = newRecord({ transactionId, packageCode, slug, priceUsd, address, quote, inv, attempt: claim.attempt });
+    const rec = newRecord({ transactionId, packageCode, slug, priceUsd, address, quote, inv, attempt: claim.attempt, topupOf });
     if (!(await mine())) return awaitClaim();   // lost the id while quoting; this invoice is never paid
     await save(store, rec);
     await store.zadd(RECENT, Date.parse(rec.createdAt), transactionId);
@@ -367,6 +488,19 @@ module.exports = {
   /** What the pool holds, in dollars: the Lightning wallet's balance at its own price. */
   async balanceUsd() { return (await choosePayer().balance()).usd; },
   async balance() { return choosePayer().balance(); },
+
+  /**
+   * The eSIMs this wallet has been issued, newest first, each with what a phone needs to install
+   * it. A wallet that has only ever bought one place has exactly one; the dashboard shows its
+   * code once and lists every bundle queued on it underneath.
+   */
+  async sims(address) {
+    const store = storeFor();
+    const rec = await store.get(simKeyOf(address));
+    if (!rec || !rec.cards) return [];
+    return Object.keys(rec.cards).map((k) => rec.cards[k]).filter((c) => c && c.iccid)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  },
 
   /** Profile status and usage for an issued eSIM, straight from nadanada. */
   async status(iccid) {
