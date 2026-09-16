@@ -123,6 +123,11 @@ async function main() {
   process.env.STORE = 'memory';
   process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
   process.env.NADANADA_BASE_URL = nadanadaBase;
+  // Off everywhere except the section that tests it below, so every other ?fresh=1 in this file
+  // (the default GET()) keeps forcing a real computation the way it always has — on a fast enough
+  // machine two calls can land in the same millisecond, so "negligible" has to mean exactly 0, not
+  // just small.
+  process.env.STATUS_FRESH_MIN_MS = '0';
   delete process.env.VERCEL_URL;
   delete process.env.BLINK_API_KEY;
   delete process.env.BLINK_API_URL;
@@ -193,14 +198,30 @@ async function main() {
   check('but the config itself still loaded fine', r.body.ready.config, true);
   process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
 
-  console.log('\nthe cache');
+  console.log('\nthe cache, and the floor under an unauthenticated ?fresh=1');
   await GET('?fresh=1');
   const baseline = bundleHits;
   await GET('');
   await GET('');
   check('two more calls with no ?fresh=1 cost nothing more: the cache answered both', bundleHits, baseline);
+
+  // Give ?fresh=1 a real floor and prove a loop of it can no longer cost one nadanada hit per
+  // request — the amplifier the audit found: 3 store ops, 2 Blink calls and 1 nadanada call per
+  // bypass, unauthenticated, against the same rate-limited accounts real redemptions depend on.
+  process.env.STATUS_FRESH_MIN_MS = '250';
+  const beforeLoop = bundleHits;
   await GET('?fresh=1');
-  check('?fresh=1 always costs a fresh hit on nadanada', bundleHits, baseline + 1);
+  await GET('?fresh=1');
+  await GET('?fresh=1');
+  checkThat('three ?fresh=1 requests in a row cost at most one real hit, not three', bundleHits - beforeLoop <= 1, 'went from ' + beforeLoop + ' to ' + bundleHits);
+  const afterLoop = bundleHits;
+  await new Promise((r) => setTimeout(r, 300));
+  await GET('?fresh=1');
+  check('once the floor elapses, ?fresh=1 does force exactly one more fresh hit — it still works for an operator', bundleHits, afterLoop + 1);
+  const afterElapsed = bundleHits;
+  await GET('?fresh=1');
+  check('and looping it again right away goes back to costing nothing: the floor renews on every real computation', bundleHits, afterElapsed);
+  process.env.STATUS_FRESH_MIN_MS = '0';
 
   console.log('\nan unknown provider name is a broken deployment, not a clean bill of health');
   process.env.ESIM_PROVIDER = 'atlantis';

@@ -26,8 +26,13 @@
  * (Promise.allSettled, each under its own timeout), so one slow or broken upstream can neither hold
  * up the response nor take another check down with it. The endpoint always answers 200 once the
  * method checks out: a failing check is data for the dashboard to show in red, not a reason for
- * this endpoint to fail too. A 20-second in-memory cache (bypassed with ?fresh=1) keeps a dashboard
- * left open, or a refresh loop, from hammering Blink or nadanada on every tick.
+ * this endpoint to fail too. A 20-second in-memory cache keeps a dashboard left open, or a refresh
+ * loop, from hammering Blink or nadanada on every tick. ?fresh=1 is for an operator who wants past
+ * that cache right now; it is not authenticated, so it cannot be allowed to cost more than an
+ * operator actually asking a few times in a row would. FRESH_MIN_MS is the floor under it: a real
+ * computation happens at most that often, however many requests — fresh or not — arrive while one
+ * is already due. A looping ?fresh=1 degrades to costing exactly what leaving the cache alone
+ * would; a person who genuinely wants a new read still gets one, just not on every single request.
  *
  * Same file-tracing constraint as redeem.js: Vercel's bundler only follows a literal
  * readFileSync(path.join(__dirname, …)), so esim.json is read that way here too, with the same
@@ -46,6 +51,14 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
 const CHECK_TIMEOUT_MS = 5000;     // how long any one check may take before it counts as failed
 const RESPONSE_CACHE_MS = 20 * 1000;
+// The floor under ?fresh=1: a real computation happens at most this often no matter how many
+// requests ask for one. Deliberately shorter than RESPONSE_CACHE_MS — an operator asking for a
+// fresh read should get one sooner than the passive cache would turn over — but the shipped
+// default is never zero, which is what let an unauthenticated ?fresh=1 loop cost the store, Blink
+// and nadanada a fresh hit each on every request. env-overridable, the same idea as e.g.
+// NADANADA_COMPLETE_WAIT_MS, so a test can shrink it rather than sleep through a production-sized
+// window — Number.isFinite rather than `|| 5000` so a test can set it to exactly 0, too.
+const FRESH_MIN_MS = () => { const n = Number(process.env.STATUS_FRESH_MIN_MS); return Number.isFinite(n) ? n : 5000; };
 const PROBE_KEY = 'status:probe';
 const DETAIL_MAX = 200;
 const NADANADA_DEFAULT_BASE = 'https://nadanada.me/api/v2';
@@ -304,7 +317,8 @@ function send(res, status, body) {
 }
 const fail = (res, status, error) => send(res, status, { ok: false, error });
 
-let cached = null; // { at, body } — the entire response, kept for RESPONSE_CACHE_MS
+let cached = null; // { at, body } — the entire response, kept for RESPONSE_CACHE_MS; `at` is also
+                    // the one clock ?fresh=1's own floor is measured against, below.
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -314,7 +328,12 @@ module.exports = async (req, res) => {
   try {
     const url = new URL(req.url || '/', 'http://local');
     const fresh = url.searchParams.get('fresh') === '1';
-    if (!fresh && cached && Date.now() - cached.at < RESPONSE_CACHE_MS) return send(res, 200, cached.body);
+    const age = cached ? Date.now() - cached.at : Infinity;
+    // Ordinary traffic is happy with anything under RESPONSE_CACHE_MS old. ?fresh=1 asks for less
+    // than that, but never for a computation that already happened within FRESH_MIN_MS — otherwise
+    // it would be an unauthenticated way to force the very fan-out to Blink and nadanada the cache
+    // exists to prevent, simply by asking twice.
+    if (age < (fresh ? FRESH_MIN_MS() : RESPONSE_CACHE_MS)) return send(res, 200, cached.body);
     const body = await computeStatus();
     cached = { at: Date.now(), body };
     return send(res, 200, body);
