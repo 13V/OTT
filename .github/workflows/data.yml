@@ -157,6 +157,49 @@ jobs:
       # This still cannot see everything: a job killed by timeout-minutes is a hard cancellation
       # that skips every later step, this one included, so that failure mode still only shows up
       # as a red run rather than an issue — there is no step-level hook that runs after a timeout.
+      # The keepers above can all succeed while the thing holders actually touch is broken: nadanada
+      # refusing orders, the store unreachable, the Lightning wallet's key revoked. /api/status
+      # already notices every one of those — it probes the store, the payer, the provider and the
+      # freshness of the ledger on each call — and until now nothing ever read it. A holder finding
+      # out by pressing a button and getting a 502 is not a monitoring strategy.
+      - name: Alert if the live site is unhealthy
+        id: health
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_URL: ${{ vars.SITE_URL || 'https://ott-one-virid.vercel.app' }}
+        run: |
+          coin=$(node -e "try{console.log(require('./site/config/esim.json').coin||'')}catch(e){console.log('')}")
+          # Before launch there is nothing to be unhealthy about: the endpoint answers "not launched".
+          if [ -z "$coin" ]; then echo "not launched yet; nothing to check"; exit 0; fi
+          body=$(curl -sS --max-time 25 "$SITE_URL/api/status" || echo '')
+          if [ -z "$body" ]; then
+            echo "could not reach $SITE_URL/api/status"
+            summary="the health endpoint could not be reached at all"
+          else
+            summary=$(printf '%s' "$body" | node -e "
+              let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{
+                let j=null; try{ j=JSON.parse(b) }catch(e){ console.log('the health endpoint answered something that is not JSON'); return }
+                if (j.ok) { console.log(''); return }
+                const bad=Object.entries(j.checks||{}).filter(([,c])=>c&&!c.ok)
+                  .map(([k,c])=>'- **'+k+'**: '+String(c.detail||'(no detail)').slice(0,200));
+                console.log(bad.length ? bad.join('\n') : 'the endpoint reports itself unhealthy without naming a check');
+              })" || echo 'the health endpoint could not be parsed')
+          fi
+          if [ -z "$summary" ]; then echo "the site reports itself healthy"; exit 0; fi
+          echo "unhealthy:"; echo "$summary"
+          gh label create health --color D93F0B --description "the live site reports itself unhealthy" --force >/dev/null 2>&1 || true
+          open=$(gh issue list --label health --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then echo "an issue is already open"; exit 0; fi
+          gh issue create --label health --title "Site: holders cannot redeem" --body "$(printf '%s\n' \
+            "\`$SITE_URL/api/status\` is reporting itself unhealthy as of $(date -u '+%Y-%m-%d %H:%M UTC')." \
+            "" \
+            "$summary" \
+            "" \
+            "The keepers in this workflow may all be green: this is the half of the system they do not touch. A holder hitting the redeem button right now most likely gets an error." \
+            "" \
+            "[This run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) · [the endpoint]($SITE_URL/api/status)")"
+
       - name: Alert if a keeper failed
         id: keeper_alert
         if: always()
