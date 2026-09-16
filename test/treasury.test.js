@@ -71,6 +71,7 @@ const SEL = {
   claimToken1: chainLib.selector('claimToken(address)'),
   claimToken2: chainLib.selector('claimToken(address,uint256)'),
   claim0: chainLib.selector('claim()'),
+  claim1: chainLib.selector('claim(uint256)'),
 };
 
 (async () => {
@@ -92,6 +93,19 @@ const SEL = {
   r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c2.json'), now: () => 1_800_000_000_000 });
   check('the one-argument claim is simulated first, then sent', [chain.log.simulated, chain.log.sent.map((s) => s.sel)], [[SEL.claimToken1], [SEL.claimToken1]]);
   check('and logged with its hash', JSON.parse(fs.readFileSync(path.join(tmp, 'c2.json'), 'utf8')), [{ at: 1800000000, kind: 'usdg', amount: 41.7, call: 'claimToken(address)', txHash: '0x' + 'ab'.repeat(32), dryRun: false }]);
+
+  // A claim already sent, mined and confirmed must survive a LATER item failing in the same run.
+  // `todo` puts USDG before ether, and the loop throws when every call shape for one of them
+  // reverts — which the escrow's selectors being read off its bytecode rather than its source
+  // makes a live possibility. Writing the log once at the end meant a real, on-chain transaction
+  // vanished from the record because the thing after it went wrong.
+  chain = fakeChain({ usd: 41.7, eth: 1.5, revert: [SEL.claim0, SEL.claim1] });
+  const partial = path.join(tmp, 'c-partial.json');
+  await rejects('a run whose second claim cannot be made fails', C.run({ chain, config, addresses, treasury: TREASURY, out: partial, now: () => 1_800_000_000_000 }), /every claim shape reverts/);
+  check('and the first claim, which really happened, is still in the log',
+    JSON.parse(fs.readFileSync(partial, 'utf8')).map((c) => [c.kind, c.amount, c.txHash]),
+    [['usdg', 41.7, '0x' + 'ab'.repeat(32)]]);
+  check('the ether claim was attempted and is not in the log', chain.log.sent.map((x) => x.sel), [SEL.claimToken1]);
 
   chain = fakeChain({ usd: 41.7, eth: 0, revert: [SEL.claimToken1] });
   r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c3.json') });

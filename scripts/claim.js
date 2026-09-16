@@ -77,6 +77,20 @@ async function run({ chain, config, addresses, treasury, minUsd, minEth, dryRun 
   if (!todo.length) return { claimed: [], claimableUsd, claimableEth, summary: 'claim: nothing above the floor; no transaction sent' };
 
   const claimed = [];
+  // Written after each item rather than after the loop. `todo` can hold both a USDG and an ether
+  // claim, and the loop throws when every call shape for one of them reverts — which the escrow's
+  // selectors being read off its bytecode rather than its source makes a real possibility. With
+  // one write at the end, a USDG claim that had already been sent, mined and confirmed was
+  // discarded from the log by the ether claim failing after it: a real transaction, on chain, with
+  // no record anywhere but that one run's console.
+  // Read once, up front: writing after every item means re-reading what this run just wrote, and
+  // appending `claimed` to that would record each claim again on every subsequent write.
+  const before = readJson(out, []);
+  const record = () => {
+    if (dryRun || !claimed.length) return;
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(appendClaims(before, claimed), null, 1) + '\n');
+  };
   for (const item of todo) {
     // One-argument first, two-argument if the escrow wants the amount spelled out.
     const candidates = item.kind === 'usdg'
@@ -93,15 +107,17 @@ async function run({ chain, config, addresses, treasury, minUsd, minEth, dryRun 
       sent = { sig, transactionHash: receipt.transactionHash };
       break;
     }
-    if (!sent) throw new Error(`could not claim ${item.kind}: every claim shape reverts (${lastErr && lastErr.message})`);
+    if (!sent) {
+      // Whatever was claimed before this one is on chain and has to stay in the log, even though
+      // this run is about to fail.
+      record();
+      throw new Error(`could not claim ${item.kind}: every claim shape reverts (${lastErr && lastErr.message})`);
+    }
     claimed.push({ at: Math.floor(now() / 1000), kind: item.kind, amount: item.amount, call: sent.sig, txHash: sent.transactionHash, dryRun });
     log(`  claimed ${item.kind} ${item.amount}${sent.transactionHash ? ' in ' + sent.transactionHash : ''}`);
+    record();
   }
 
-  if (!dryRun) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, JSON.stringify(appendClaims(readJson(out, []), claimed), null, 1) + '\n');
-  }
   const summary = `claim: ${claimed.map((c) => `${c.kind} ${c.amount}`).join(', ')}${dryRun ? ' (dry run, nothing sent)' : ' -> ' + path.relative(process.cwd(), out)}`;
   return { claimed, claimableUsd, claimableEth, summary };
 }

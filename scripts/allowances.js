@@ -47,6 +47,7 @@
 const fs = require('fs');
 const path = require('path');
 const chain = require(path.join(__dirname, 'chain.js'));
+const { timedFetch } = chain;
 
 const SITE = path.join(__dirname, '..', 'site');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
@@ -239,7 +240,7 @@ function makeRpc(endpoints, { pause = PAUSE_MS, log = () => {} } = {}) {
   return async function rpc(method, params, attempt = 0) {
     const url = endpoints[turn++ % endpoints.length];
     try {
-      const res = await fetch(url, {
+      const res = await timedFetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),

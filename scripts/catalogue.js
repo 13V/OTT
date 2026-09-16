@@ -21,6 +21,7 @@ const path = require('path');
 
 const ESIM_PATH = path.join(__dirname, '..', 'site', 'config', 'esim.json');
 const PORTFOLIO_URL = 'https://nadanada.me/api/v2/esim/portfolio';
+const { timedFetch } = require(path.join(__dirname, 'chain.js'));
 
 // Regions first (one eSIM for a whole trip), then the countries people actually fly to.
 const REGIONS = ['europe', 'north-america', 'oceania', 'south-east-asia', 'middle-east', 'asia', 'latam', 'global'];
@@ -62,7 +63,7 @@ function pick(portfolio, { regions = REGIONS, countries = COUNTRIES, sizes = SIZ
 }
 
 async function fetchPortfolio(url = PORTFOLIO_URL) {
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const res = await timedFetch(url, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error('nadanada portfolio answered HTTP ' + res.status);
   const j = await res.json();
   if (!j || !j.success || !j.data) throw new Error('nadanada portfolio has no data');

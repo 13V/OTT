@@ -34,6 +34,10 @@ const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const OUT_PATH = path.join(SITE, 'data', 'funding.json');
 const TREASURY_PATH = path.join(SITE, 'data', 'treasury.json');
+// Both exchanges are reached with a deadline: this runs unattended, on a job with a wall clock,
+// and an endpoint that accepts the connection and then says nothing would burn the whole run.
+const { timedFetch } = require(path.join(__dirname, 'chain.js'));
+const HTTP_TIMEOUT_MS = 30000;
 const KEEP = 100;
 
 const ACROSS_API = () => (process.env.ACROSS_API || 'https://app.across.to/api').replace(/\/$/, '');
@@ -150,7 +154,7 @@ function fixedFloat({ key = process.env.FIXEDFLOAT_API_KEY || '', secret = proce
   async function call(method, body) {
     if (!key || !secret) throw new Error('FIXEDFLOAT_API_KEY and FIXEDFLOAT_API_SECRET are not set');
     const json = JSON.stringify(body);
-    const res = await fetch(api + '/' + method, {
+    const res = await timedFetch(api + '/' + method, {
       method: 'POST',
       headers: {
         accept: 'application/json', 'content-type': 'application/json; charset=UTF-8',
@@ -178,7 +182,7 @@ function across({ api = ACROSS_API() } = {}) {
     name: 'across',
     async quote(params) {
       const url = api + '/swap/approval?' + new URLSearchParams(params).toString();
-      const res = await fetch(url, { headers: { accept: 'application/json' } });
+      const res = await timedFetch(url, { headers: { accept: 'application/json' } }, HTTP_TIMEOUT_MS);
       let j = null;
       try { j = await res.json(); } catch (e) { j = null; }
       if (!res.ok) throw new Error('Across answered HTTP ' + res.status + ((j && j.message) ? ': ' + j.message : ''));
@@ -258,17 +262,29 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
     log(`  approved ${inUnits} USDG units for the bridge at ${tx.to}: ${r.transactionHash}`);
   }
   await chain.rpc('eth_call', [{ from: treasury, to: tx.to, data: tx.data, value: '0x' + value.toString(16) }, 'latest']);
+
+  // The journal opens HERE — one line before the only call in this file that moves money, and not
+  // after it. Everything above can be retried for nothing; the deposit cannot. A process killed
+  // between the broadcast returning and the write landing used to leave real USDG in the bridge
+  // with no record of it anywhere but one run's console. 'sending' says a deposit was broadcast
+  // and not yet confirmed, and it already names the FixedFloat order, which is what a person needs
+  // to find the money again.
+  const journal = appendLog(readJson(out, []), {
+    at: Math.floor(now() / 1000), amountUsd, usdcSent: ask, usdgIn: Number(inUnits) / 10 ** decimals, sats,
+    fixedFloatOrder: order.id, invoiceHash: invoice.paymentHash, depositTx: null, approvals: hashes,
+    status: 'sending', dryRun: false,
+  });
+  const entry = journal[journal.length - 1];
+  const write = () => { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(journal, null, 1) + '\n'); };
+  write();
+
   const receipt = await chain.send({ to: tx.to, data: tx.data, value });
   log(`  deposited: ${receipt.transactionHash}`);
 
-  const entry = {
-    at: Math.floor(now() / 1000), amountUsd, usdcSent: ask, usdgIn: Number(inUnits) / 10 ** decimals, sats,
-    fixedFloatOrder: order.id, invoiceHash: invoice.paymentHash, depositTx: receipt.transactionHash, approvals: hashes,
-    status: 'sent', dryRun: false,
-  };
-  // One entry per run, appended once and rewritten in place as its status moves on.
-  const journal = appendLog(readJson(out, []), entry);
-  const write = () => { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(journal, null, 1) + '\n'); };
+  // One entry per run, opened above and rewritten in place as its status moves on.
+  entry.depositTx = receipt.transactionHash;
+  entry.approvals = hashes;
+  entry.status = 'sent';
   write();
 
   // 4. Wait for the sats. FixedFloat: NEW → PENDING → EXCHANGE → WITHDRAW → DONE; EXPIRED and
