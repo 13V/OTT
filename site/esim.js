@@ -6,7 +6,7 @@
  * with it is mobile data: every week, the tax the coin collected LAST week becomes THIS week's data
  * budget, and a wallet's allowance is its share of the circulating supply times that budget —
  * allowanceUsd = (tokens ÷ circulating) × budgetUsd — banked as dollars of data credit and spent on
- * eSIMs from nadanada, in 1, 5 or 10 GB sizes across a few dozen places, paid for over Lightning.
+ * eSIMs from wholesale, in 1, 5 or 10 GB sizes across a few dozen places, paid for over Lightning.
  * Holding is the whole mechanism: there is no claim to file and no trade to make. The allowance
  * expires at the end of the week it was published for — use it or lose it, which is what keeps the
  * promise affordable, since the pool never owes more than one week of tax it has already collected.
@@ -120,7 +120,7 @@
   const packageByCode = (cfg, code) => packagesOf(cfg).find((p) => p.code === code || p.packageCode === code) || null;
   const packageLabel = (p) => p.name + ' · ' + (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days';
   // Every place the catalogue sells, once each, in the order esim.json lists them — the same order
-  // the picker's place <select> lists them in. `flag` is nadanada's own and empty for a region (a
+  // the picker's place <select> lists them in. `flag` is wholesale's own and empty for a region (a
   // region has no single flag); the plan picker and the coverage grid both use it as-is.
   function places(cfg) {
     const seen = new Set();
@@ -317,6 +317,8 @@
     // alone, so they render the same whether or not a coin has launched — which matters, because
     // "not launched" is the state a first-time visitor sees.
     view.appendChild(trustRow(ctx, cfg));
+    const numsBand = numbersBand(ctx, cfg);
+    if (numsBand) view.appendChild(numsBand);
     view.appendChild(plansSection(ctx, cfg, allow));
     view.appendChild(howItWorks(ctx, cfg));
     view.appendChild(coverageSection(ctx, cfg));
@@ -369,10 +371,92 @@
         } }, 'Connect wallet');
     return h('div', { class: 'section hero' }, h('div', { class: 'wrap' },
       h('div', { class: 'hero-copy' },
+        h('div', { class: 'hero-kicker' }, h('span', { 'aria-hidden': 'true' }, ''), 'Community-powered carrier'),
         h('h1', { class: 'hero-title' }, 'Mobile data in 28 places, just for holding OTT.'),
         h('p', { class: 'hero-sub' }, 'Your share of OTT becomes a data allowance every week — spend it on an eSIM before it resets.'),
         h('div', { class: 'hero-actions' }, primary,
-          h('a', { class: 'btn btn-ghost', href: '#how-it-works' }, 'How it works')))));
+          h('a', { class: 'btn btn-ghost', href: '#how-it-works' }, 'How it works')),
+        h('div', { class: 'hero-proof', 'aria-label': 'Programme highlights' },
+          h('span', {}, 'No contract'), h('span', {}, 'No staking'), h('span', {}, 'Weekly allowance'))),
+      heroVisual(ctx)));
+  }
+
+  /**
+   * The hero's schematic: the four stages a trade passes through on its way to being a gigabyte,
+   * drawn rather than described. The headline sells the offer and this says how it is kept — which
+   * is the one claim on this page a visitor has most reason to disbelieve, and the cheapest one to
+   * answer with a picture.
+   *
+   * Built as markup rather than through ctx.h because h() calls createElement, and an SVG assembled
+   * that way lands in the HTML namespace and renders as nothing. The string is authored here and
+   * interpolates no input, so there is nothing for innerHTML to be unsafe about.
+   */
+  function heroVisual(ctx) {
+    const { h } = ctx;
+
+    // glyph, label, sub, unit — the fourth column is the denomination each stage is counted in,
+    // which is what makes the four read as one pipeline rather than four unrelated facts.
+    const STAGES = [
+      ['trade', 'Trade', 'A 10% creator tax, every buy and sell', 'OTT'],
+      ['vault', 'Treasury', 'Swept out of the fee escrow daily', 'USDG'],
+      ['bolt', 'Lightning', 'Provider invoice, paid in sats', 'BTC'],
+      ['grid', 'eSIM', 'Scan the code, connect on arrival', 'QR'],
+    ];
+
+    const NODE_H = 62, GAP = 28, W = 320;
+    const height = STAGES.length * NODE_H + (STAGES.length - 1) * GAP;
+
+    const glyph = (kind, gx, gy) => {
+      if (kind === 'trade') return `<polyline class="sch-glyph" points="${gx + 7},${gy + 19} ${gx + 12},${gy + 13} ${gx + 16},${gy + 16} ${gx + 21},${gy + 9}"/>`;
+      if (kind === 'vault') return `<g class="sch-glyph"><line x1="${gx + 8}" y1="${gy + 10}" x2="${gx + 20}" y2="${gy + 10}"/><line x1="${gx + 8}" y1="${gy + 14}" x2="${gx + 20}" y2="${gy + 14}"/><line x1="${gx + 8}" y1="${gy + 18}" x2="${gx + 20}" y2="${gy + 18}"/></g>`;
+      if (kind === 'bolt') return `<path class="sch-glyph sch-glyph--fill" d="M${gx + 17} ${gy + 7} L${gx + 10} ${gy + 15} L${gx + 14} ${gy + 15} L${gx + 12} ${gy + 21} L${gx + 19} ${gy + 13} L${gx + 15} ${gy + 13} Z"/>`;
+      return `<g class="sch-glyph sch-glyph--fill"><rect x="${gx + 8}" y="${gy + 8}" width="5" height="5" rx="1"/><rect x="${gx + 16}" y="${gy + 8}" width="5" height="5" rx="1"/><rect x="${gx + 8}" y="${gy + 16}" width="5" height="5" rx="1"/><rect x="${gx + 16}" y="${gy + 16}" width="5" height="5" rx="1"/></g>`;
+    };
+
+    let body = '';
+    STAGES.forEach(([kind, label, sub, unit], i) => {
+      const y = i * (NODE_H + GAP);
+      const accent = kind === 'bolt' ? ' sch-node--accent' : '';
+      if (i < STAGES.length - 1) {
+        body += `<line class="sch-flow" x1="${W / 2}" y1="${y + NODE_H}" x2="${W / 2}" y2="${y + NODE_H + GAP}" style="--flow-i:${i}"/>`;
+      }
+      body += `<g class="sch-node${accent}">`
+        + `<rect class="sch-box" x="0" y="${y}" width="${W}" height="${NODE_H}" rx="12"/>`
+        + `<rect class="sch-chip" x="16" y="${y + 17}" width="28" height="28" rx="8"/>`
+        + glyph(kind, 16, y + 17)
+        + `<text class="sch-label" x="58" y="${y + 28}">${label}</text>`
+        + `<text class="sch-sub" x="58" y="${y + 45}">${sub}</text>`
+        + `<text class="sch-unit" x="${W - 16}" y="${y + 37}" text-anchor="end">${unit}</text>`
+        + `</g>`;
+    });
+
+    const box = h('div', { class: 'hero-visual' });
+    const stage = h('div', { class: 'hero-stage' });
+
+    // Decorative, so it carries no alt text: the wordmark above already names the brand, and a
+    // screen reader gains nothing from being told there is a bird. Dimensions are set so the hero
+    // does not reflow when it arrives, and a missing file removes the element rather than leaving
+    // a broken-image glyph standing on the panel.
+    const mascot = h('img', {
+      class: 'hero-mascot', src: './brand/mascot.webp', alt: '',
+      width: '760', height: '755', decoding: 'async',
+    });
+    mascot.addEventListener('error', () => mascot.remove());
+    stage.appendChild(h('div', { class: 'hero-mascot-frame', 'aria-hidden': 'true' }, mascot));
+
+    const panel = h('div', { class: 'schematic' });
+    panel.innerHTML =
+      '<div class="sch-head">'
+      + '<span class="sch-head-label">Trade → data</span>'
+      + '<span class="sch-live"><i></i>live</span>'
+      + '</div>'
+      + `<svg class="sch-svg" viewBox="0 0 ${W} ${height}" role="img" `
+      + 'aria-label="How a trade becomes mobile data: a creator tax on every trade funds the treasury, '
+      + 'which pays a Lightning invoice, which buys the eSIM.">'
+      + body + '</svg>';
+    stage.appendChild(panel);
+    box.appendChild(stage);
+    return box;
   }
 
   // ============================================================================ 2. trust row
@@ -395,6 +479,58 @@
     ];
     return h('div', { class: 'section trust' }, h('div', { class: 'wrap' },
       h('div', { class: 'trust-row' }, items.map((t) => h('div', { class: 'trust-item' }, t)))));
+  }
+
+  // ============================================================================ 2b. the numbers
+  /**
+   * The catalogue, counted. Every figure here is computed from config/esim.json at render time
+   * rather than written down, for the same reason the trust row above is: a number typed into a
+   * page is a number that can quietly stop being true, and this one is dated on the page itself so
+   * a visitor can see how old it is.
+   *
+   * What is deliberately absent is a speed. wholesale publishes none — their own page claims only
+   * "stable, fast data from top-tier networks", with no figure behind it — and neither the API nor
+   * the catalogue carries a megabit, a carrier name or a latency. A speed on this band would be
+   * invented, and an invented number on a page whose entire argument is that its numbers are
+   * checkable is worse than no number at all.
+   *
+   * Returns null rather than a row of zeros when the catalogue is empty, so a fork that has not
+   * configured one shows nothing here instead of claiming nothing.
+   */
+  function numbersBand(ctx, cfg) {
+    const { h } = ctx;
+    const list = packagesOf(cfg);
+    if (!list.length) return null;
+
+    const plist = places(cfg);
+    // The `regions` field is free text ("38 countries", or a bare code like "US" for a single
+    // country), so only the ones that actually state a count are read, and the widest wins.
+    const counts = list
+      .map((p) => Number((String(p.regions || '').match(/\d+/) || [])[0]))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const widest = counts.length ? Math.max(...counts) : null;
+    const perGb = list.map((p) => Number(p.priceUsd) / Number(p.gb)).filter((n) => Number.isFinite(n) && n > 0);
+    const bestPerGb = perGb.length ? Math.min(...perGb) : null;
+    const taxPct = Number(cfg.taxBps) > 0 ? Number(cfg.taxBps) / 100 : null;
+
+    const figures = [
+      [String(plist.length), 'Places on the menu', 'Regions and single countries, each priced on its own'],
+      widest ? [String(widest), 'Countries on the widest package', 'One profile, one code, the whole footprint'] : null,
+      bestPerGb ? ['$' + bestPerGb.toFixed(2), 'Best price per gigabyte', 'At the largest size, where data is cheapest'] : null,
+      taxPct ? [taxPct + '%', 'Of every trade funds it', 'The creator tax is the whole of the revenue'] : null,
+    ].filter(Boolean);
+
+    const cell = ([fig, label, sub]) => h('div', { class: 'num-cell' },
+      h('div', { class: 'num-fig', 'data-count': true }, fig),
+      h('div', { class: 'num-label' }, label),
+      h('div', { class: 'num-sub' }, sub));
+
+    const dated = cfg.catalogueAt ? ' Catalogue read ' + cfg.catalogueAt + '.' : '';
+    return h('div', { class: 'section alt numbers' }, h('div', { class: 'wrap' },
+      h('div', { class: 'num-grid' }, figures.map(cell)),
+      h('p', { class: 'num-note' },
+        list.length + ' packages across ' + plist.length + ' places, in 1, 5 and 10 GB, over 7 and 30 days.' + dated
+        + ' No speed is quoted because none is published.')));
   }
 
   // ============================================================================ 3. plans
@@ -473,7 +609,7 @@
       { title: 'Your share becomes this week’s budget',
         body: 'Every Monday, last week’s creator tax on ' + carrier + '’s trades becomes this week’s data budget, and your allowance is your share of the circulating supply times that budget — banked as dollars of credit, because a gigabyte’s price depends on where you spend it.' },
       { title: 'Redeem an eSIM and scan it',
-        body: 'Spend the credit on an eSIM from nadanada: pick a place and size, sign a message to prove the wallet is yours, and scan the QR at the airport — and spend it before the week ends, because what is unused does not carry over.' },
+        body: 'Spend the credit on an eSIM from our network partner: pick a place and size, sign a message to prove the wallet is yours, and scan the QR at the airport — and spend it before the week ends, because what is unused does not carry over.' },
     ];
     return h('div', { class: 'section alt', id: 'how-it-works' }, h('div', { class: 'wrap' },
       h('div', { class: 'section-head' }, h('h2', {}, 'How it works')),
@@ -525,7 +661,7 @@
     row('Status', 'Not launched yet');
     row('Weekly budget', 'last week’s creator tax, split by every wallet’s share of the circulating supply');
     row('Packages', plist.length && cheapEntry ? plist.length + ' places · ' + gbSizesText(cfg, 'and') + ' GB · from ' + fmtPrice(cheapEntry.priceUsd) : 'none configured yet');
-    row('Redeemed as', 'eSIMs from nadanada, paid by Lightning');
+    row('Redeemed as', 'eSIMs from our network partner, paid by Lightning');
     row('Creator tax', fmtPct(Number(cfg.taxBps) || 0) + ' to the treasury');
     row('Paired to', cfg.pair === ZERO || !cfg.pair ? 'native ETH (tax not priced in v1)' : 'USDG');
     row('Counts', 'balances snapshotted pre-graduation only');
@@ -744,7 +880,7 @@
     const regions = plist.filter((p) => p.kind === 'region');
     const countries = plist.filter((p) => p.kind === 'country');
     const remaining = Number(standing.remainingUsd) || 0;
-    // Every place this wallet already has a standing eSIM for — nadanada's own sims list, not a
+    // Every place this wallet already has a standing eSIM for — wholesale's own sims list, not a
     // guess from past orders, because it is the only thing that actually knows whether the next
     // claim for a place will queue on a profile already installed or mint a new one.
     const simSlugs = new Set((standing.sims || []).map((s) => s.slug).filter(Boolean));
@@ -824,7 +960,7 @@
       try {
         const { message, signature } = await signIn(addr);
         clear(result);
-        result.appendChild(notice('Ordering your eSIM… the pool pays nadanada over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
+        result.appendChild(notice('Ordering your eSIM… the pool pays our network partner over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
         // n names the slot this redeem means to fill — the count of orders the panel was painted
         // from — so a picture that has gone stale is refused rather than risking two eSIMs for one
         // balance.
@@ -832,7 +968,7 @@
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
         clear(result);
         // A preview of the eSIM this bundle just landed on — built the same way the repainted
-        // panel below will build it, from `out.sims` (nadanada's fresher-than-`standing` picture) —
+        // panel below will build it, from `out.sims` (wholesale's fresher-than-`standing` picture) —
         // so there is something to look at for the second or two the fuller signed read below
         // takes, not just a toast.
         const previewed = Object.assign({}, standing, {
@@ -898,7 +1034,7 @@
   }
 
   /**
-   * Everything this wallet has queued onto an eSIM, one card per profile nadanada actually issued
+   * Everything this wallet has queued onto an eSIM, one card per profile wholesale actually issued
    * it. A wallet gets one eSIM per PLACE it buys — not one eSIM full stop — because bundles on a
    * profile run consecutively: a Japan bundle queued behind an unused Europe one would be
    * unreachable until the Europe one ended, and the holder would land in Tokyo with data already
@@ -957,7 +1093,7 @@
 
   /**
    * This wallet's orders and history, filed under the eSIM each actually lives on. `standing.sims`
-   * is nadanada's own list of profiles, and an order's `iccid` — or, before nadanada has finished
+   * is wholesale's own list of profiles, and an order's `iccid` — or, before wholesale has finished
    * issuing it, `topupOf` — says which one a bundle belongs to; both are public even before a
    * signature reveals the codes, so grouping reads the same redacted or not. A provider with no
    * notion of a standing profile (site/api/lib/providers/esimaccess.js, and any order fixture
@@ -1025,12 +1161,12 @@
   /**
    * One eSIM: the QR the phone scans, the same activation code as text for the phones that would
    * rather be told than shown, the one-tap install links and the manual SM-DP+/matching-id pair
-   * when nadanada sent them, and its ICCID — shown once, per item 1 of the brief, because
+   * when wholesale sent them, and its ICCID — shown once, per item 1 of the brief, because
    * installing it is a one-time thing even though claiming against it is not. Underneath, every
    * bundle claimed onto it, this week's and previous weeks' together, newest first: what actually
    * changes week to week is not the SIM, only what is queued on it.
    *
-   * `group.sim` is null only for a bundle nadanada could not be matched to any known profile — a
+   * `group.sim` is null only for a bundle wholesale could not be matched to any known profile — a
    * top-up whose own founding order sits outside the three weeks of history this page ever asks
    * for — and gets a plain notice instead of a card nobody can back with a real code.
    */
@@ -1063,7 +1199,7 @@
       setTimeout(() => { copy.textContent = 'Copy'; }, 1800);
     } }, 'Copy');
 
-    // nadanada usually sends a picture of the QR; when it does not, the activation code alone is
+    // wholesale usually sends a picture of the QR; when it does not, the activation code alone is
     // enough to draw the same one here — a phone only ever reads the code, never the provider's PNG.
     let qrSrc = sim.qrCodeUrl || '';
     if (!qrSrc && sim.ac && window.WhateverQr) {
@@ -1098,11 +1234,11 @@
     const when = o.createdAt ? new Date(o.createdAt) : null;
 
     // What "still working on it" means depends on the stage: the Lightning invoice can be sitting
-    // unpaid, or paid and waiting on nadanada to issue it. o.note, when the pool left one, is why.
+    // unpaid, or paid and waiting on wholesale to issue it. o.note, when the pool left one, is why.
     let pendingText = null;
     if (o.pending) {
       pendingText = o.stage === 'invoiced' ? 'Paying the invoice… open this page again in a minute.'
-        : o.stage === 'paid' ? 'Paid. nadanada is issuing this bundle — open this page again in a minute.'
+        : o.stage === 'paid' ? 'Paid. Our network partner is issuing this bundle — open this page again in a minute.'
         : 'Ordered. The provider is still issuing this bundle — open this page again in a minute.';
       if (o.note) pendingText += ' (' + o.note + ')';
     }
@@ -1127,7 +1263,7 @@
   }
 
   /**
-   * Is the pool funded. The Lightning wallet that pays nadanada is what actually pays for a
+   * Is the pool funded. The Lightning wallet that pays wholesale is what actually pays for a
    * redemption, and it lives off chain where nothing here can read it directly — so it is written
    * down in public every half hour, with the rate it is being spent at and the runway that implies,
    * and shown here with one word on it. "unknown" is what a fork without that wallet configured
@@ -1141,10 +1277,10 @@
     const badgeClass = status === 'funded' ? 'badge' : status === 'low' ? 'badge badge-hold' : 'badge badge-off';
     const r = t.reseller || null;
     const balance = r && Number.isFinite(Number(r.balanceUsd)) ? Number(r.balanceUsd) : null;
-    // nadanada is paid from a Lightning wallet rather than a reseller account, so its balance is
+    // wholesale is paid from a Lightning wallet rather than a reseller account, so its balance is
     // introduced as what it is, sats and all; anything else keeps the older "at <reseller>" line.
-    const balanceSub = r && r.name === 'nadanada'
-      ? 'in the Lightning wallet that pays nadanada' + (Number.isFinite(Number(r.sats)) ? ' · ' + Number(r.sats).toLocaleString('en-US') + ' sats' : '') + (r.error ? ' — could not be read' : '')
+    const balanceSub = r && r.name === 'wholesale'
+      ? 'in the Lightning wallet that pays our network partner' + (Number.isFinite(Number(r.sats)) ? ' · ' + Number(r.sats).toLocaleString('en-US') + ' sats' : '') + (r.error ? ' — could not be read' : '')
       : (r && r.name ? 'at ' + r.name + (r.error ? ' — could not be read' : '') : 'no reseller reading');
     const runwayText = t.runwayDays === null || t.runwayDays === undefined
       ? (Number(t.redemptions30d) > 0 ? '—' : 'no spend yet')
@@ -1162,7 +1298,7 @@
         ctx.tile('Last claim', last && !Number.isNaN(last.getTime()) ? last.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'none yet',
           t.lastClaim ? fmtMoney(Number(t.lastClaim.amount) || 0) + ' ' + (t.lastClaim.kind === 'eth' ? 'ETH' : 'USDG') + ' out of the escrow' : 'the escrow is swept daily', 'arrows')),
       h('p', { class: 'small', style: 'margin-top:10px' },
-        brand ? 'The balance that pays for a redemption is what ' + brand.name + ' pays nadanada from; it sits in a Lightning wallet, off chain. It is read and published every half hour'
+        brand ? 'The balance that pays for a redemption is what ' + brand.name + ' pays its network partner from; it sits in a Lightning wallet, off chain. It is read and published every half hour'
               : 'The balance that pays for a redemption sits in a Lightning wallet, off chain. It is read and published every half hour',
         asOf && !Number.isNaN(asOf.getTime()) ? ' — last at ' + asOf.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' UTC' : '',
         Number.isFinite(Number(t.walletUsd)) ? '. The treasury wallet holds ' + fmtMoney(Number(t.walletUsd)) + ' USDG waiting to be moved there.' : '.'));

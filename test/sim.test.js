@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * One eSIM per wallet, per place, topped up — the real nadanada provider (site/api/lib/providers/
- * nadanada.js), against the fake of nadanada (test/support/fake-nadanada.js), the mock Lightning
- * payer, and the in-memory store. test/nadanada.test.js checks the provider's money-handling in
+ * One eSIM per wallet, per place, topped up — the real wholesale provider (site/api/lib/providers/
+ * wholesale.js), against the fake of wholesale (test/support/fake-wholesale.js), the mock Lightning
+ * payer, and the in-memory store. test/wholesale.test.js checks the provider's money-handling in
  * isolation; this file checks the layer on top of it: which eSIM a redemption lands on.
  *
  * What is asserted: a wallet's first order for a place is a new eSIM; its next order for the SAME
@@ -11,7 +11,7 @@
  * bundles on one profile queue consecutively and a Japan bundle stuck behind an unused Europe one
  * would be unreachable on arrival; a DIFFERENT wallet never lands on someone else's SIM; sims()
  * shows one card per eSIM, install details included, no matter how many times it has been topped
- * up; a top-up nadanada refuses (not every bundle can join every profile) becomes a new eSIM
+ * up; a top-up wholesale refuses (not every bundle can join every profile) becomes a new eSIM
  * instead, and the wallet recovers — later orders for that place adopt the replacement rather than
  * retrying the dead one forever; a top-up quote naming the wrong ICCID is refused before anything
  * is paid; and, exactly as for a fresh order, a top-up is resumable when interrupted after paying
@@ -23,7 +23,7 @@ const path = require('path');
 
 const LIB = path.join(__dirname, '..', 'site', 'api', 'lib');
 const mockPayer = require(path.join(LIB, 'payers', 'mock.js'));
-const fakeNadanada = require(path.join(__dirname, 'support', 'fake-nadanada.js'));
+const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -42,35 +42,35 @@ const rejects = async (what, p, re, status) => {
 };
 
 // --------------------------------------------------------------------------- fixtures
-// The fake nadanada itself lives in test/support/fake-nadanada.js, shared with
-// test/nadanada.test.js and test/redeem-nadanada.test.js so there is exactly one fake to keep
+// The fake wholesale itself lives in test/support/fake-wholesale.js, shared with
+// test/wholesale.test.js and test/redeem-wholesale.test.js so there is exactly one fake to keep
 // faithful to the real API. Japan is added to its default catalogue (Germany, Europe) so there is
 // a second, unrelated place to prove top-ups are scoped per slug, not per wallet-at-large.
 const DE = { packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99 };
 const JP = { packageCode: 'fixed_2GB_15D_JAPAN', slug: 'japan', priceUsd: 12.99 };
-const CATALOGUE = Object.assign({}, fakeNadanada.CATALOGUE, { fixed_2GB_15D_JAPAN: { slug: 'japan', price: 12.99 } });
+const CATALOGUE = Object.assign({}, fakeWholesale.CATALOGUE, { fixed_2GB_15D_JAPAN: { slug: 'japan', price: 12.99 } });
 
 const mkAddr = (tag) => '0x' + tag.padStart(40, '0');
 const WALLET_A = mkAddr('a1');   // first order, then a same-place top-up, then a different place
 const WALLET_B = mkAddr('b2');   // must never land on WALLET_A's eSIM
-const WALLET_C = mkAddr('c3');   // a top-up nadanada refuses, and recovery afterwards
+const WALLET_C = mkAddr('c3');   // a top-up wholesale refuses, and recovery afterwards
 const WALLET_D = mkAddr('d4');   // a top-up paid but interrupted before completion
 const WALLET_E = mkAddr('e5');   // a top-up that cannot pay, then can
 const WALLET_F = mkAddr('f6');   // never ordered anything
-const WALLET_G = mkAddr('9a9a'); // nadanada quotes a top-up for the wrong ICCID
+const WALLET_G = mkAddr('9a9a'); // wholesale quotes a top-up for the wrong ICCID
 
 const noCodesOfItsOwn = (o) => !o.ac && !o.qrCodeUrl && !o.manualCode && !o.smdpAddress && !o.matchingId && !o.appleInstallUrl && !o.androidInstallUrl;
 const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('LPA:1$') && o.smdpAddress && o.matchingId && o.appleInstallUrl && o.androidInstallUrl;
 
 (async () => {
-  const fake = await fakeNadanada.start({ mockPayer, catalogue: CATALOGUE });
-  process.env.NADANADA_BASE_URL = fake.base;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  const fake = await fakeWholesale.start({ mockPayer, catalogue: CATALOGUE });
+  process.env.WHOLESALE_BASE_URL = fake.base;
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
   process.env.LN_PAYER = 'mock';
   process.env.STORE = 'memory';
-  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
+  process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
   const state = fake.state;
-  const prov = require(path.join(LIB, 'providers', 'nadanada.js'));
+  const prov = require(path.join(LIB, 'providers', 'wholesale.js'));
 
   console.log('a wallet\'s first order buys a new eSIM');
   const a1 = await prov.order(Object.assign({ transactionId: 'sim-a-001', address: WALLET_A }, DE));
@@ -105,21 +105,21 @@ const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('
   check('sims() now shows two cards, one per place', simsA5.map((c) => c.iccid).sort(), [a1.iccid, a4.iccid].sort());
   checkThat('each carrying its own install details', simsA5.every((c) => c.ac && c.qrCodeUrl), JSON.stringify(simsA5));
 
-  console.log('\na top-up nadanada refuses becomes a new eSIM, and nothing is paid for the refusal');
+  console.log('\na top-up wholesale refuses becomes a new eSIM, and nothing is paid for the refusal');
   const c1 = await prov.order(Object.assign({ transactionId: 'sim-c-001', address: WALLET_C }, DE));
-  state.refuseTopup = c1.iccid; // nadanada documents that not every bundle can join every profile
+  state.refuseTopup = c1.iccid; // wholesale documents that not every bundle can join every profile
   const purchasesBeforeRefusal = fake.purchases(), paidBeforeRefusal = mockPayer._state.log.length;
   const c2 = await prov.order(Object.assign({ transactionId: 'sim-c-002', address: WALLET_C }, DE));
   check('the order still succeeds, as a new eSIM', [c2.stage, c2.topupOf], ['done', '']);
   checkThat('a different ICCID than the refused one', c2.iccid !== c1.iccid, [c2.iccid, c1.iccid]);
-  check('nadanada was asked twice (the refused top-up, then the fresh purchase) but paid only once', [fake.purchases() - purchasesBeforeRefusal, mockPayer._state.log.length - paidBeforeRefusal], [2, 1]);
+  check('wholesale was asked twice (the refused top-up, then the fresh purchase) but paid only once', [fake.purchases() - purchasesBeforeRefusal, mockPayer._state.log.length - paidBeforeRefusal], [2, 1]);
   const simsC2 = await prov.sims(WALLET_C);
   check('the wallet now has two cards', simsC2.map((c) => c.iccid).sort(), [c1.iccid, c2.iccid].sort());
   state.refuseTopup = '';
   const c3 = await prov.order(Object.assign({ transactionId: 'sim-c-003', address: WALLET_C }, DE));
   check('the wallet has recovered: the next order tops up the REPLACEMENT eSIM, not the dead one', [c3.topupOf, c3.iccid], [c2.iccid, c2.iccid]);
 
-  console.log('\nnadanada quoting a top-up for the wrong ICCID is refused before anything is paid');
+  console.log('\nwholesale quoting a top-up for the wrong ICCID is refused before anything is paid');
   const g1 = await prov.order(Object.assign({ transactionId: 'sim-g-001', address: WALLET_G }, DE));
   state.wrongTopupIccid = '8944999999999999999';
   const paidBeforeMismatch = mockPayer._state.log.length;
@@ -131,7 +131,7 @@ const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('
   console.log('\na top-up that is paid but interrupted resumes on the next find()');
   const d1 = await prov.order(Object.assign({ transactionId: 'sim-d-001', address: WALLET_D }, DE));
   state.settleAfterCalls = 2;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '0';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '0';
   const d2 = await prov.order(Object.assign({ transactionId: 'sim-d-002', address: WALLET_D }, DE));
   check('order() returns it paid and pending — money moved, the top-up is not finished yet', [d2.pending, d2.stage, typeof d2.paidAt], [true, 'paid', 'string']);
   const fd1 = await prov.find('sim-d-002');
@@ -139,7 +139,7 @@ const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('
   const fd2 = await prov.find('sim-d-002');
   check('a later look finds it topped up, on the first ICCID', [fd2.pending, fd2.stage, fd2.topupOf, fd2.iccid], [false, 'done', d1.iccid, d1.iccid]);
   state.settleAfterCalls = 0;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
 
   console.log('\nmoney is not spent twice on a top-up');
   const e1 = await prov.order(Object.assign({ transactionId: 'sim-e-001', address: WALLET_E }, DE));

@@ -4,7 +4,7 @@ OT+T — Onchain Telephone + Telegraph, ticker OTT — is a phone carrier whose 
 curve. One coin, launched on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax. **Holding
 the coin is the plan**: the tax the coin collected last week becomes this week's data budget, and a
 wallet's allowance is its share of the circulating supply times that budget — in dollars of
-mobile-data credit, spent on eSIMs from nadanada: 28 places at 1, 5 or 10 GB, 84 packages in all.
+mobile-data credit, spent on eSIMs from wholesale: 28 places at 1, 5 or 10 GB, 84 packages in all.
 Connect a wallet, sign a message, pick a place, scan the QR at the airport.
 
 The allowance expires at the end of the week. That is not meanness, it is what makes the promise
@@ -24,7 +24,7 @@ it in a fee escrow until somebody claims it. `scripts/claim.js` does that once a
 That is what makes it safe to keep the treasury's key as a repository secret: the daily sweep is also
 what keeps the escrow from ever holding more than a day's tax.
 
-Straight after, `scripts/fund.js` moves what just landed into the wallet nadanada is actually paid
+Straight after, `scripts/fund.js` moves what just landed into the wallet wholesale is actually paid
 from, over three hops, each with an API: a Blink invoice for the sats to receive; a FixedFloat
 fixed-rate order, USDC (Base) → BTC (Lightning), that pays it; and an Across deposit of the
 treasury's USDG on Robinhood Chain, filled as exactly that USDC on Base and delivered straight to
@@ -49,13 +49,13 @@ imply — into `site/data/treasury.json`, which is where the pool's status (fund
 unknown) comes from.
 
 A holder spends the week's allowance at `/api/redeem`: sign in with a wallet signature, pick a
-nadanada package, and it places the order — invoice, payment and completion, all against the
+wholesale package, and it places the order — invoice, payment and completion, all against the
 Lightning wallet `fund.js` keeps stocked — and hands back the ICCID, the QR and the install links
-nadanada returns.
+wholesale returns.
 
 ## Why dollars, and not gigabytes
 
-A gigabyte is not one thing. nadanada's own packages price it from $0.70 to $8.99 per GB depending
+A gigabyte is not one thing. wholesale's own packages price it from $0.70 to $8.99 per GB depending
 on size and place — ten gigabytes for a month in France is $6.99, one gigabyte for a week worldwide
 is $8.99 — and an allowance denominated in gigabytes would let a wallet claim the cheap kind and
 spend the dear kind. Dollars keep it honest: a share of the budget is a share of the budget, and
@@ -73,20 +73,20 @@ if you do not use it, it is gone.
 
 ## What is verified, and what is guaranteed
 
-`nadanada.me/api/v2` (OpenAPI at `/api/v2/openapi.json`) was read directly, not assumed, on 15
+`provider.example/api/v2` (OpenAPI at `/api/v2/openapi.json`) was read directly, not assumed, on 15
 September 2026: `POST /esim/purchase {bundleName, slug, paymentMethod: "lightning"}` answers a
 bolt11 invoice, a payment hash and a price 5% under list for paying in sats — a bundle that doesn't
 belong to the slug it was ordered under is refused rather than silently substituted. `POST
 /esim/complete {paymentHash}` is 402 until the invoice is paid, then 200 with the ICCID, a QR, a
 manual code, the SM-DP+ address and matching id, and install links for Apple and Android — safe to
-call more than once. There is no listing endpoint, and nothing on nadanada's side records which
+call more than once. There is no listing endpoint, and nothing on wholesale's side records which
 wallet an order was for.
 
 Read again on 16 September 2026 for the two endpoints that decide the shape of the product:
 `POST /esim/{iccid}/purchase` and `POST /esim/{iccid}/complete` add a bundle to a profile that
 already exists. The top-up completion answers `{iccid, bundleName, toppedUp}` and no installation
 details, because there is nothing new to install; it 403s when the checkout belongs to a different
-ICCID. What makes this the right default rather than a convenience is nadanada's own account of how
+ICCID. What makes this the right default rather than a convenience is wholesale's own account of how
 bundles behave: a bundle's validity does not begin when it is bought but when the phone first
 connects to a network in its region, and bundles on one profile run **consecutively** — a top-up
 queues behind whatever is running and starts the moment that ends, losing neither days nor data
@@ -99,11 +99,11 @@ ten independent idle clocks. Per place, not per holder, and that distinction is 
 because bundles run in sequence, a Japan bundle queued behind an unused Europe one would be
 unreachable until the Europe one ended, and the holder would land in Tokyo with data they had paid
 for and could not use. A second profile for a second region costs nothing (the SIM is free; only
-data is billed) and works on arrival. `simFor()` in the nadanada provider is where that is decided,
+data is billed) and works on arrival. `simFor()` in the wholesale provider is where that is decided,
 and `test/sim.test.js` holds it there.
 
 One thing is **not** settled, and it is worth knowing before the first holder stockpiles a queue:
-nadanada's two pages disagree on whether a bundle has a shelf life. Their `/faq` says "There is no
+wholesale's two pages disagree on whether a bundle has a shelf life. Their `/faq` says "There is no
 separate activation deadline: unused bundles stay on your eSIM until you use them"; their `/esim`
 page says "You must activate the data bundle within 6 weeks of purchase or it expires." Both were
 read on 16 September 2026. If the six weeks is the real rule, a holder who claims every week and
@@ -113,14 +113,14 @@ banked rather than claimed. Ask them before relying on either answer.
 That last fact is what `site/api/lib/store.js` exists to fix: one record per redemption id, kept in
 Upstash Redis over REST (`KV_REST_API_URL` / `KV_REST_API_TOKEN`; in memory only for tests), moved
 through invoiced → paid → done and resumable at every step, so a crash mid-payment picks up where it
-left off instead of paying twice. Three things follow from that design, and `test/nadanada.test.js`
-and `test/redeem-nadanada.test.js` hold the code to all of them: a redeem names the slot (`n`) it
+left off instead of paying twice. Three things follow from that design, and `test/wholesale.test.js`
+and `test/redeem-wholesale.test.js` hold the code to all of them: a redeem names the slot (`n`) it
 means to fill, so a retried or replayed request gets back the order it already made rather than a
 second one; an unpaid invoice is not a redemption — `find()` answers null for it, so an outage never
 consumes a wallet's credit; and activation codes are only ever attached to a signed request from the
 wallet that earned them — the public `GET` shows balances and order history, never a code, because
 whoever installs a code first has the data. Before any invoice is paid, `site/api/lib/bolt11.js`
-decodes it and refuses to pay unless it carries the payment hash nadanada quoted and an amount
+decodes it and refuses to pay unless it carries the payment hash wholesale quoted and an amount
 matching the quoted price at Blink's own BTC rate, and refuses a quote priced above the catalogue as
 stale.
 
@@ -135,24 +135,24 @@ stale.
 | `site/status.js` | The status dashboard (`#/status`): the whole machine on one screen — what's running, what isn't, and every number behind it |
 | `site/ui.js`, `site/ui.css` | Shared visual components: the token badge, the delta pill, the small charts |
 | `site/style.css` | Site-wide styles and the colour palette |
-| `site/qr.js` | Draws the activation QR in the browser, for the orders nadanada gives no image with |
+| `site/qr.js` | Draws the activation QR in the browser, for the orders wholesale gives no image with |
 | `site/fonts.css`, `site/fonts/` | Self-hosted type, so the page can draw itself without waiting on a CDN |
 | `site/vercel.json` | Function timeouts, cache headers, and the security headers every response carries |
 | `site/api/status.js` | The health endpoint the dashboard reads: what's wired up, checked live, never a secret |
 | `site/api/redeem.js` | The one serverless function that spends money: wallet signature in, eSIM out |
-| `site/api/lib/providers/` | `nadanada.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
+| `site/api/lib/providers/` | `wholesale.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
 | `site/api/lib/payers/` | `blink.js` pays and prices in Lightning through Blink's API; `mock.js`, for tests |
-| `site/api/lib/store.js` | The nadanada provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
+| `site/api/lib/store.js` | The wholesale provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
 | `site/api/lib/bolt11.js` | Decodes a Lightning invoice far enough to check its amount and payment hash before it's paid |
 | `site/api/lib/eip191.js`, `site/api/lib/secp256k1.js`, `site/api/lib/keccak.js` | Verify the wallet signature a redeem signs in with |
-| `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from nadanada |
+| `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from wholesale |
 | `site/config/addresses.json` | Chain id, RPC endpoints, USDG, the Pons factory and its friends — the copy the site and the API read |
 | `site/data/allowances.json` | The week's plan: each wallet's balance, share and allowance — written by `scripts/allowances.js` |
 | `site/data/claims.json` | A log of every sweep out of the fee escrow — written by `scripts/claim.js` |
 | `site/data/funding.json` | A log of every top-up of the Lightning wallet — written by `scripts/fund.js` |
 | `site/data/treasury.json` | The pool card's numbers: balance, 30-day spend, runway, status — written by `scripts/treasury.js` |
 | `scripts/allowances.js` | Re-derives every wallet's credit from USDG `Transfer` logs |
-| `scripts/catalogue.js` | Regenerates the package list in `site/config/esim.json` from nadanada's portfolio |
+| `scripts/catalogue.js` | Regenerates the package list in `site/config/esim.json` from wholesale's portfolio |
 | `scripts/claim.js` | Sweeps the creator tax from Pons's escrow into the treasury; simulates before it sends |
 | `scripts/fund.js` | Tops the Lightning wallet up from the treasury's USDG, over FixedFloat and Across |
 | `scripts/treasury.js` | Pool balance, 30-day spend at what was actually paid, runway, last claim |
@@ -162,7 +162,7 @@ stale.
 | `.github/workflows/data.yml` | Every 30 minutes: the allowances ledger and the treasury file, commit if changed (which deploys), issue if the pool is low |
 | `.github/workflows/claim.yml` | Daily: claim, fund the pool, refresh the treasury file, commit |
 | `test/*.test.js` | The offline suite, one file per unit — see Running it |
-| `test/support/fake-nadanada.js` | A fake nadanada server the nadanada-dependent tests run against instead of the real one |
+| `test/support/fake-wholesale.js` | A fake wholesale server the wholesale-dependent tests run against instead of the real one |
 | `test/site/` | The browser suite (Playwright), maintained alongside the front end |
 
 ## Running it
@@ -174,7 +174,7 @@ npm test                                             # the ledger, the redeem fu
 
 npm run allowances                                   # rebuild this week's plan from chain
 npm run allowances -- --week 2957                    # rebuild a specific week
-npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from nadanada's portfolio
+npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from wholesale's portfolio
 npm run treasury                                     # rebuild site/data/treasury.json (the pool side needs ESIM_PROVIDER and its keys)
 PRIVATE_KEY=<treasury> npm run claim -- --dry-run    # what the sweep would do
 PRIVATE_KEY=<treasury> npm run fund -- --dry-run     # what the next top-up would move, nothing sent
@@ -184,16 +184,18 @@ npm run test:site                                    # the browser suite (needs 
 ```
 
 Everything above `npm run serve` is read-only or dry by default: `allowances`, `catalogue` and
-`treasury` need no key at all, and only write a file when nadanada or the chain actually answer;
+`treasury` need no API key, and only write a file when the configured provider or chain answers;
+`catalogue` does require the private `WHOLESALE_BASE_URL` or `WHOLESALE_PORTFOLIO_URL` endpoint;
 `claim` and `fund` need `PRIVATE_KEY` even to price a dry run, but move nothing without it and a
 real one. Before a coin is launched, `allowances` and `treasury` still run — they write an empty
 ledger and an "unknown" pool rather than fail, which is what a fresh clone actually sees.
 
 ## To turn it on
 
-In Vercel's project settings: `ESIM_PROVIDER=nadanada`, `BLINK_API_KEY`, `KV_REST_API_URL` and
-`KV_REST_API_TOKEN` (Upstash for Redis, provisioned from the Vercel Marketplace, sets the last two
-itself). As repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
+In Vercel's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` (Upstash for Redis, provisioned from the Vercel
+Marketplace, sets the last two itself). Keep `WHOLESALE_BASE_URL` private—it is deliberately not
+present in the source tree. As repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
 `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`. Until the
 coin is launched — `site/config/esim.json`'s `coin` field is empty — the deploy answers with the
 rules and "coin not launched yet", and the workflows say what they skipped rather than failing.

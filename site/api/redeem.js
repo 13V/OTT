@@ -35,8 +35,8 @@
  * wallet, with nothing to reset, because last week's ids simply stop being the ones this week's
  * redemptions look under. Past orders are not deleted or affected in any way — they are just found
  * under last week's ids instead, which is what `history` is for (see below). (The eSIM Access
- * provider answers find() from the reseller's own order history; the nadanada one from a record it
- * keeps per id, because nadanada keeps none — see lib/providers/nadanada.js and lib/store.js.) Two
+ * provider answers find() from the reseller's own order history; the wholesale one from a record it
+ * keeps per id, because wholesale keeps none — see lib/providers/wholesale.js and lib/store.js.) Two
  * requests racing for the same id resolve at the provider, which refuses a duplicate
  * transactionId — so the worst case is one of them being told to try again, never a second eSIM.
  * Each week's lookup loop is capped at 200 so a whale cannot turn a GET into hundreds of upstream
@@ -150,7 +150,7 @@ function transactionIdFor(address, week, n) {
  */
 function priceOf(order, config) {
   // What this order was actually charged, when the provider wrote it down. It is the only figure
-  // that cannot move afterwards: the catalogue is regenerated from nadanada's live prices whenever
+  // that cannot move afterwards: the catalogue is regenerated from wholesale's live prices whenever
   // scripts/catalogue.js runs, and pricing a past order from the current catalogue means a
   // mid-week refresh silently rewrites what a wallet has already spent — a package that got
   // cheaper hands back allowance the pool has already paid out, one that got dearer takes away
@@ -415,8 +415,8 @@ module.exports = async (req, res) => {
     const transactionId = transactionIdFor(address, week, n);
     const existing = await prov.find(transactionId);
     // The provider is given the catalogue entry three ways: `packageCode` is what it keys the order
-    // on (eSIM Access's package code, nadanada's bundle name), `slug` is the place it is priced
-    // for (nadanada) or the record name (eSIM Access), and `code` is what priceOf() looks up.
+    // on (eSIM Access's package code, wholesale's bundle name), `slug` is the place it is priced
+    // for (wholesale) or the record name (eSIM Access), and `code` is what priceOf() looks up.
     const order = existing || await prov.order({ transactionId, packageCode: pkg.packageCode || pkg.code, slug: pkg.slug || pkg.code, code: pkg.code, priceUsd, address });
     const remainingUsd = round6(Math.max(0, s.remainingUsd - priceOf(order, config)));
     // The eSIMs after this order, not before: a wallet's first claim mints the profile this very

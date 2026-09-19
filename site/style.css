@@ -27,9 +27,15 @@
   --text-secondary: #5B6169;
   --border: #DCE0E3;
 
-  --accent: #0B57D6;
-  --accent-hover: #08409E;
-  --accent-tint: rgba(11, 87, 214, .08);
+  /* The brand orange, sampled from the wordmark itself. It is also the one accent this identity
+     spends, so it has to carry white text on a button and sit on white as a link: #BE5810 measures
+     4.57:1 against white, which clears AA for normal text with a little to spare. Nothing lighter
+     does — the first orange tried here was 4.18:1 and would have failed every button on the site. */
+  --brand: #BE5810;
+  --brand-ink: #15191C;                 /* the wordmark's own near-black, a hair off --text */
+  --accent: #BE5810;
+  --accent-hover: #A94D0E;              /* 5.59:1 — darker on hover, the way the blue was */
+  --accent-tint: rgba(190, 88, 16, .08);
 
   --positive: #1E8E3E;
   --positive-tint: rgba(30, 142, 62, .10);
@@ -51,6 +57,18 @@
      toast) that actually need to lift off the page. */
   --shadow-resting: 0 1px 2px rgba(16, 24, 32, .04);
   --shadow-hover: 0 4px 16px rgba(16, 24, 32, .10);
+  /* One step above --shadow-hover, for a card actually under the pointer. Still neutral black. */
+  --shadow-lift: 0 12px 32px rgba(16, 24, 32, .12), 0 2px 6px rgba(16, 24, 32, .06);
+
+  /* Motion. Durations and easings only — no colour enters the palette here. --ease-out is the
+     decelerating curve every entrance below uses; --ease-spring overshoots slightly and is spent
+     only on things the pointer touches, where a little bounce reads as responsiveness. */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-fast: .14s;
+  --dur-base: .3s;
+  --dur-slow: .62s;
+  --reveal-step: 65ms;                  /* per-sibling stagger; ten deep is the cap motion.js sets */
 }
 
 /* ============================================================ reset and base */
@@ -76,7 +94,7 @@ button { border: 0; background: none; cursor: pointer; }
    class (.u-icon, .btn svg); an inline illustrative SVG (e.g. a .hero-visual diagram) needs its own
    dimensions respected, not crushed to icon size. */
 svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-::selection { background: rgba(11, 87, 214, .18); }
+::selection { background: rgba(190, 88, 16, .18); }
 /* Never removed: a 2px accent ring, offset so it reads on both a pill button and a plain link. */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 [hidden] { display: none !important; }
@@ -114,15 +132,44 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .mh-top { display: flex; align-items: center; gap: 24px; height: 72px; }
 @media (max-width: 860px) { .mh-top { height: 56px; } }
 
-/* The wordmark is plain text, one weight, one colour — no gradient, no tinted "+". A trick spent on
-   a logotype is still a trick spent on the one place a carrier site never spends one. */
-.brand { font: 700 18px/1 var(--font-sans); letter-spacing: -.01em; color: var(--text); flex: none; }
-.brand .dot-fun { color: inherit; }
+/* The wordmark: "OT", a filled tile carrying the cross, then "T". One weight, two colours, and the
+   tile is the only place the brand orange appears at full strength in the masthead — the nav and
+   the wallet button underneath it stay as quiet as they were. Heavier and tighter than body type
+   because a logotype is read as a shape, not a word. */
+.brand {
+  display: inline-flex; align-items: center; gap: 1px; flex: none;
+  font: 800 20px/1 var(--font-sans); letter-spacing: -.045em;
+  color: var(--brand-ink);
+}
+@media (max-width: 860px) { .brand { font-size: 18px; } }
+.brand-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.02em; height: 1.02em; margin: 0 .04em;
+  border-radius: .24em;
+  background: var(--brand); color: #fff;
+  font-weight: 700; letter-spacing: 0;
+  /* The glyph is optically a touch small inside the tile at this weight, and a tile that reads as
+     a square wants its cross a shade larger than the letters beside it. */
+  font-size: .92em; line-height: 1; padding-bottom: .04em;
+  transition: transform var(--dur-fast) var(--ease-spring);
+}
+.brand:hover .brand-mark { transform: rotate(90deg); }
 
 #nav { display: flex; gap: 24px; margin-left: 8px; }
 #nav a { font: 500 14px/1 var(--font-sans); color: var(--text-secondary); padding: 8px 2px; transition: color .15s ease; }
 #nav a:hover { color: var(--text); }
-#nav a.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+/* The underline is a pseudo-element rather than an inset shadow so it can grow from the left
+   instead of appearing whole — the one place the nav shows its work. */
+#nav a { position: relative; }
+#nav a::after {
+  content: ''; position: absolute; left: 2px; right: 2px; bottom: 0; height: 2px;
+  background: var(--accent); border-radius: 2px;
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform var(--dur-base) var(--ease-out), opacity var(--dur-base) ease;
+}
+#nav a:hover::after { transform: scaleX(1); opacity: .35; }
+#nav a.active { color: var(--text); }
+#nav a.active::after { transform: scaleX(1); opacity: 1; }
 
 .mh-right { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .nav-toggle { display: none; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--bg); }
@@ -149,6 +196,9 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
   }
   #nav.open { display: flex; }
   #nav a { padding: 12px 24px; font-size: 15px; }
+  /* The drawer is a stack, not a row: a bottom rule under every item reads as a divider, so the
+     active marker goes back to a left edge and the sliding underline is switched off. */
+  #nav a::after { display: none; }
   #nav a.active { box-shadow: inset 3px 0 0 var(--accent); }
 }
 
@@ -300,6 +350,42 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .trust-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 32px; padding: 32px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .trust-item { font: 500 14px/1.4 var(--font-sans); color: var(--text-secondary); text-align: center; }
 
+/* ---- the numbers band
+   The catalogue counted, on the one alternating tone this identity allows. The cells are white on
+   --surface and separated by a 1px grid gap showing the container's own --border through, the same
+   construction the coverage grid uses — a hairline-ruled instrument rather than four floating
+   cards, which is what four cards at this size would read as. */
+.num-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
+  background: var(--border); border: 1px solid var(--border);
+  border-radius: var(--radius-card); overflow: hidden;
+  counter-reset: num;
+}
+@media (min-width: 620px) { .num-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 980px) { .num-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.num-cell {
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg); padding: 26px 22px 24px;
+  counter-increment: num;
+  transition: background-color var(--dur-base) ease;
+}
+.num-cell:hover { background: var(--accent-tint); }
+/* A leading 01/02/03 in the mono face: the one place this page reads as a readout rather than a
+   brochure, and it costs no colour to say so. */
+.num-cell::before {
+  content: counter(num, decimal-leading-zero);
+  font: 600 10px/1 var(--font-mono); letter-spacing: .12em;
+  color: var(--text-secondary); margin-bottom: 4px;
+}
+.num-fig {
+  font: 700 clamp(34px, 4vw, 46px)/1 var(--font-sans);
+  letter-spacing: -.03em; color: var(--text);
+  font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1;
+}
+.num-label { font: 600 13px/1.35 var(--font-sans); color: var(--text); }
+.num-sub { font: 400 12.5px/1.45 var(--font-sans); color: var(--text-secondary); }
+.num-note { margin-top: 16px; font: 400 12.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+
 /* ============================================================ buttons
    Flat pills, one accent fill, a hairline border everywhere else. Hover on the primary is a darker
    flat fill (--accent-hover) — never a glow, never a gradient. */
@@ -409,7 +495,10 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .foot-grid { display: grid; grid-template-columns: 1fr; gap: 32px; }
 @media (min-width: 640px) { .foot-grid { grid-template-columns: 1.4fr repeat(3, 1fr); gap: 24px; } }
 .foot-brand-col { display: flex; flex-direction: column; gap: 8px; }
-.foot-brand { font: 700 18px/1 var(--font-sans); letter-spacing: -.01em; color: var(--text); }
+.foot-brand {
+  display: inline-flex; align-items: center; gap: 1px;
+  font: 800 18px/1 var(--font-sans); letter-spacing: -.045em; color: var(--brand-ink);
+}
 .foot-tagline { font: 400 14px/1.5 var(--font-sans); color: var(--text-secondary); max-width: 32ch; }
 .foot-col { display: flex; flex-direction: column; gap: 10px; }
 .foot-col-title { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); margin: 0 0 4px; }
@@ -506,6 +595,49 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .status-dot.warn { background: var(--warning); }
 .status-dot.off { background: var(--negative); }
 
+/* ============================================================ the Holders route (#/holders)
+   Rendered by site/holders.js. Everything structural here is borrowed — .card, .stat-grid,
+   .status-table, .table-wrap — so the ledger reads as the same instrument the status page is, and
+   only the four things that route genuinely adds are defined below. */
+.status-more-link { color: var(--accent); font-weight: 600; }
+.status-more-link:hover { text-decoration: underline; }
+
+.holders-tools {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 4px;
+}
+.holders-count { margin: 0; white-space: nowrap; }
+.holders-table td, .holders-table th { vertical-align: middle; }
+/* A rank column reads as an index, not a measurement: quiet, narrow, and never the widest thing in
+   the row even when the ledger runs to four figures. */
+.holders-rank { width: 1%; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.holders-none { color: var(--text-secondary); text-align: center; }
+.holders-more { display: flex; justify-content: center; margin-top: 14px; }
+.holders-more button[hidden] { display: none !important; }
+.holders-note {
+  max-width: 68ch; margin-top: 16px;
+  color: var(--text-secondary); font: 400 12.5px/1.55 var(--font-sans);
+}
+
+/* The connected wallet's own row. A tint and a left edge rather than a colour on the text, so the
+   row is findable while every figure in it still reads the same as the ones above and below. */
+.holder-you > td { background: var(--accent-tint); }
+.holder-you > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.holders-you-tag {
+  margin-left: 8px; padding: 2px 7px; border-radius: var(--radius-button);
+  background: var(--accent); color: #fff;
+  font: 600 10px/1.5 var(--font-sans); text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* ---- concentration: how tightly the supply is held */
+.conc-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 720px) { .conc-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+.conc-item { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.conc-label { font: 600 12px/1 var(--font-sans); color: var(--text); }
+.conc-bar { height: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.conc-bar i { display: block; height: 100%; background: var(--accent); }
+.conc-val { font: 400 12px/1 var(--font-sans); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
 /* ============================================================ responsive */
 @media (max-width: 900px) {
   .data-grid { grid-template-columns: 1fr; }
@@ -528,3 +660,493 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .prose-note { max-width: 68ch; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
   color: var(--text-secondary); font-size: 13px; }
 .page-lede { max-width: 60ch; }
+
+/* ============================================================ motion
+ * The layer site/motion.js drives. Three rules held throughout: no effect introduces a colour that
+ * is not already a token above; every entrance is an opacity-and-transform pair, which the
+ * compositor can run without touching layout; and nothing here loops, because a carrier's page is
+ * an instrument and an instrument does not fidget once it has settled. The hero schematic below is
+ * the one exception, and it earns it: what it draws is a process that genuinely does not stop, so
+ * there the loop is the subject rather than decoration.
+ *
+ * .will-reveal is applied by script, never by markup — so a page whose JavaScript failed to run
+ * shows its content rather than a column of invisible sections.
+ */
+.will-reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
+  transition-delay: calc(var(--reveal-i, 0) * var(--reveal-step));
+  will-change: opacity, transform;
+}
+.will-reveal.is-in { opacity: 1; transform: none; will-change: auto; }
+/* Already scrolled past before it was ever shown: arrive finished rather than hold a transition
+   that the browser will not tick until the element is back on screen. */
+.will-reveal.reveal-instant { transition: none; }
+
+/* The route change. #view keeps its class across app.js's clear(), so the incoming route paints
+   into an element that is already moving. */
+#view.view-enter { animation: view-in .42s var(--ease-out) both; }
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---- the masthead, once the page has moved under it */
+#masthead { transition: box-shadow var(--dur-base) ease, border-color var(--dur-base) ease; }
+#masthead.is-scrolled { border-bottom-color: transparent; box-shadow: var(--shadow-hover); }
+.mh-top { transition: height var(--dur-base) var(--ease-out); }
+@media (min-width: 861px) {
+  #masthead.is-scrolled .mh-top { height: 60px; }
+}
+
+/* ---- the hero's field
+   A dot grid at --border, masked so it fades out before it reaches the copy. It is texture, not
+   decoration: it gives the headline something to sit in front of without spending a colour. */
+.hero { position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 30px 30px;
+  -webkit-mask-image: radial-gradient(130% 92% at 50% 0%, #000 0%, transparent 70%);
+  mask-image: radial-gradient(130% 92% at 50% 0%, #000 0%, transparent 70%);
+  opacity: .75;
+}
+.hero .wrap { position: relative; z-index: 1; }
+
+/* ---- the hero schematic
+   The four stages a trade passes through, drawn as one panel. Every fill here is an existing token:
+   the boxes are --surface on a --border hairline, and the only saturated thing on the whole diagram
+   is the Lightning stage and the pulse travelling between them. */
+/* The mascot stands on the panel's top edge rather than over it: a character overlapping a diagram
+   is charming exactly once and then it is covering the Lightning stage every time after. The small
+   negative margin is what makes it read as standing on the panel instead of floating above it. */
+.hero-stage { width: 100%; max-width: 420px; margin-inline: auto; }
+@media (min-width: 900px) { .hero-stage { margin-inline: 0; } }
+.hero-mascot {
+  display: block; width: 132px; height: auto;
+  margin: 0 0 -10px 6px;
+  filter: drop-shadow(0 8px 14px rgba(16, 24, 32, .12));
+}
+@media (min-width: 900px) { .hero-mascot { width: 158px; } }
+
+.schematic {
+  width: 100%; max-width: 420px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-resting);
+  padding: 16px 18px 20px;
+}
+.sch-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
+}
+.sch-head-label {
+  font: 600 11px/1 var(--font-sans); text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-secondary);
+}
+.sch-live {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 11px/1 var(--font-sans); text-transform: uppercase;
+  letter-spacing: .08em; color: var(--positive);
+}
+/* The ring is a pseudo-element animating opacity and transform only. An infinite box-shadow
+   animation repaints the element every frame for as long as the page is open, which is a real cost
+   to spend on a decorative dot; these two properties the compositor can run on its own. */
+.sch-live i { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--positive); }
+.sch-live i::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: var(--positive);
+  animation: sch-pulse 2.4s var(--ease-out) infinite;
+}
+@keyframes sch-pulse {
+  0%        { opacity: .5; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(2.8); }
+}
+.sch-svg { width: 100%; height: auto; overflow: visible; }
+
+.sch-box { fill: var(--surface); stroke: var(--border); stroke-width: 1; transition: fill var(--dur-base) ease, stroke var(--dur-base) ease; }
+.sch-chip { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
+.sch-glyph { stroke: var(--text-secondary); stroke-width: 1.7; fill: none; }
+.sch-glyph--fill { fill: var(--text-secondary); stroke: none; }
+.sch-label { fill: var(--text); stroke: none; font: 600 13px/1 var(--font-sans); }
+.sch-sub { fill: var(--text-secondary); stroke: none; font: 400 10.5px/1 var(--font-sans); }
+.sch-unit {
+  fill: var(--text-secondary); stroke: none;
+  font: 600 10px/1 var(--font-mono); letter-spacing: .06em;
+}
+/* One stage carries the accent, for the same reason the identity spends it once anywhere else: the
+   Lightning hop is the only step that actually moves money out of the system. */
+.sch-node--accent .sch-box { fill: var(--accent-tint); stroke: var(--accent); }
+.sch-node--accent .sch-chip { fill: var(--accent); stroke: var(--accent); }
+.sch-node--accent .sch-glyph--fill { fill: #fff; }
+.sch-node--accent .sch-label { fill: var(--accent); }
+
+/* The pulse between stages. Each connector is offset by its index so the four do not blink in
+   unison — what should read is one packet moving down the chain, not four lights flashing. */
+.sch-flow {
+  stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  stroke-dasharray: 3 7;
+  animation: sch-flow 1.5s linear infinite;
+  animation-delay: calc(var(--flow-i, 0) * -.28s);
+  opacity: .75;
+}
+@keyframes sch-flow { to { stroke-dashoffset: -20; } }
+
+/* Nothing should run while it cannot be seen. motion.js sets this once the panel leaves the
+   viewport, so the one looping thing on the page costs nothing for the rest of the scroll. */
+.schematic.is-idle .sch-flow,
+.schematic.is-idle .sch-live i::after { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sch-flow { animation: none !important; stroke-dasharray: none; opacity: .45; }
+  .sch-live i::after { animation: none !important; opacity: 0; }
+}
+
+/* ---- spotlight surfaces
+   The pointer-tracked highlight, in --accent-tint and nothing else. motion.js sets --mx/--my; with
+   no pointer near it the element renders exactly as it did before this file. */
+.has-spot { position: relative; }
+.has-spot::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 0%), var(--accent-tint), transparent 68%);
+  opacity: 0; transition: opacity var(--dur-base) ease;
+}
+.has-spot:hover::after { opacity: 1; }
+
+/* ---- cards that answer the pointer */
+.plan-card, .card, .stat-tile, .dh-tile, .cov-item {
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) ease,
+    background-color var(--dur-base) ease;
+}
+.plan-card:hover, .card:hover, .stat-tile:hover, .dh-tile:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lift);
+}
+.plan-card.featured:hover { box-shadow: var(--shadow-lift); }
+.cov-item:hover { background: var(--accent-tint); }
+
+/* ---- buttons
+   A shimmer sweep on hover and a spring on press. The sweep is white at 26%, over the accent fill
+   that was already there — a highlight passing across a solid colour, not a gradient replacing it. */
+.btn, .plan-cta {
+  position: relative; overflow: hidden;
+  transition:
+    background-color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    color var(--dur-fast) ease, box-shadow var(--dur-fast) ease,
+    transform var(--dur-fast) var(--ease-spring);
+}
+.btn:hover, .plan-cta:hover { transform: translateY(-1px); }
+.btn:active, .plan-cta:active { transform: translateY(1px) scale(.985); }
+.btn-primary, .plan-cta { box-shadow: 0 1px 2px rgba(16, 24, 32, .10); }
+.btn-primary:hover, .plan-cta:hover { box-shadow: 0 6px 18px rgba(190, 88, 16, .30); }
+.btn-primary::after, .plan-cta::after {
+  content: ''; position: absolute; top: 0; left: -140%; width: 55%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .26), transparent);
+  transform: skewX(-18deg); pointer-events: none;
+}
+.btn-primary:hover::after, .plan-cta:hover::after { animation: shimmer .8s var(--ease-out); }
+@keyframes shimmer { to { left: 150%; } }
+.btn:disabled:hover, .btn-primary:disabled:hover { transform: none; box-shadow: none; }
+
+/* ---- the step row's connector
+   The three steps are a sequence, so they are drawn as one: a hairline runs behind the numbers and
+   stops at the last, which no amount of spacing between three separate columns can say. */
+@media (min-width: 700px) {
+  .steps { position: relative; }
+  .steps::before {
+    content: ''; position: absolute; left: 0; right: 0; top: 20px; height: 1px;
+    background: var(--border); z-index: 0;
+  }
+  .steps > * { position: relative; z-index: 1; }
+  .step-n { box-shadow: 0 0 0 6px var(--bg); }
+}
+
+/* ---- reduced motion
+   The global rule near the top of this file already flattens durations. These two go further: a
+   revealed element must not be left at opacity 0 if its observer never fires, and the decorative
+   field and sweep are removed outright rather than merely sped up. */
+@media (prefers-reduced-motion: reduce) {
+  .will-reveal { opacity: 1 !important; transform: none !important; }
+  .hero::before, .has-spot::after,
+  .btn-primary::after, .plan-cta::after { display: none !important; }
+  .plan-card:hover, .card:hover, .stat-tile:hover, .dh-tile:hover,
+  .btn:hover, .plan-cta:hover, .btn:active, .plan-cta:active { transform: none !important; }
+}
+
+/* ============================================================ 2026 visual refresh
+ * A warmer, more characterful carrier identity. The earlier layout had sound parts, but the home
+ * hero felt split in two and route introductions hugged the left edge of a very wide canvas. These
+ * rules give every page one centred axis, deepen the surfaces without becoming glossy, and move
+ * the mascot into its own intentional perch beside the system diagram.
+ */
+:root {
+  --bg: #FFFCF8;
+  --surface: #F7F1EA;
+  --text: #171717;
+  --text-secondary: #68635E;
+  --border: #E7DED5;
+  --accent-tint: rgba(190, 88, 16, .09);
+  --radius-card: 20px;
+  --radius-control: 12px;
+  --shadow-resting: 0 1px 2px rgba(42, 28, 18, .03), 0 10px 32px rgba(42, 28, 18, .035);
+  --shadow-hover: 0 16px 38px rgba(42, 28, 18, .10);
+  --shadow-lift: 0 20px 48px rgba(42, 28, 18, .12), 0 3px 10px rgba(42, 28, 18, .05);
+}
+
+body {
+  background:
+    radial-gradient(circle at 8% 2%, rgba(190, 88, 16, .055), transparent 27rem),
+    var(--bg);
+}
+
+#masthead {
+  background: rgba(255, 252, 248, .92);
+  border-color: rgba(211, 198, 186, .72);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+.mh-top { height: 76px; }
+.brand { font-size: 21px; }
+#nav { margin-left: 20px; gap: 30px; }
+#nav a { font-weight: 600; }
+.wallet-addr, .nav-toggle { background: rgba(255, 255, 255, .74); }
+
+/* Route introductions sit in the visual centre instead of inheriting the content well's left edge. */
+#view > .page-head {
+  max-width: 820px;
+  padding-top: 40px;
+  margin: 0 auto 34px;
+  text-align: center;
+}
+.page-head .label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-bottom: 16px;
+  padding: 7px 12px;
+  border: 1px solid rgba(190, 88, 16, .16);
+  border-radius: var(--radius-button);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.page-head h1 {
+  font-size: clamp(34px, 4.5vw, 54px);
+  line-height: 1.04;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+}
+.page-lede {
+  max-width: 62ch;
+  margin: 16px auto 0;
+  font-size: clamp(15px, 1.5vw, 18px);
+  text-wrap: pretty;
+}
+
+/* The async route bodies are themselves centred wells. Their nested .wrap used to double the
+   left gutter, which is why Status and Holders looked stranded on one side. */
+#view > .page-head + div { max-width: 1120px; margin-inline: auto; }
+#view > .page-head + div > .section { padding: 30px 0; }
+#view > .page-head + div > .section > .wrap { max-width: none; padding-inline: 0; }
+#view > .page-head + div .section-head {
+  max-width: 760px;
+  margin: 0 auto 24px;
+  text-align: center;
+}
+#view > .page-head + div .section-head h2 {
+  font-size: clamp(25px, 3vw, 34px);
+  line-height: 1.12;
+  letter-spacing: -.03em;
+}
+
+/* Home hero: stronger hierarchy, one coherent visual, and a dedicated mascot perch. */
+.hero { padding: 74px 0 70px; }
+.hero::before {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(190, 88, 16, .14) 1px, transparent 0) 0 0 / 30px 30px,
+    radial-gradient(circle at 78% 38%, rgba(190, 88, 16, .11), transparent 18rem);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 94%);
+  mask-image: linear-gradient(to bottom, #000 0%, transparent 94%);
+  opacity: .72;
+}
+.hero .wrap { gap: clamp(48px, 7vw, 92px); }
+.hero-copy { max-width: 690px; }
+.hero-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 22px;
+  color: var(--accent);
+  font: 700 12px/1 var(--font-sans);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.hero-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 5px var(--accent-tint);
+}
+.hero-title {
+  font-size: clamp(44px, 5.8vw, 76px);
+  line-height: .98;
+  letter-spacing: -.055em;
+  text-wrap: balance;
+}
+.hero-sub { margin-top: 24px; font-size: clamp(17px, 1.6vw, 19px); line-height: 1.6; }
+.hero-actions { margin-top: 34px; }
+.hero-actions .btn { min-height: 50px; padding-inline: 24px; }
+.hero-proof { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 24px; }
+.hero-proof span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.hero-proof span::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.hero-visual { max-width: 560px; }
+.hero-stage {
+  position: relative;
+  width: 100%;
+  max-width: 540px;
+  padding: 36px 122px 26px 0;
+}
+.hero-mascot-frame {
+  position: absolute;
+  z-index: 2;
+  right: -8px;
+  bottom: 4px;
+  display: grid;
+  place-items: center;
+  width: 190px;
+  height: 190px;
+  border: 1px solid rgba(190, 88, 16, .15);
+  border-radius: 50%;
+  background: radial-gradient(circle at 45% 40%, #FFF8EF 0 48%, #F3E4D4 100%);
+  box-shadow: 0 20px 50px rgba(80, 48, 24, .13);
+}
+.hero-mascot {
+  width: 166px;
+  height: auto;
+  margin: -22px 0 0 -7px;
+  filter: drop-shadow(0 10px 12px rgba(16, 24, 32, .14));
+}
+.schematic {
+  max-width: 420px;
+  padding: 18px 20px 22px;
+  border-color: rgba(205, 190, 177, .86);
+  background: rgba(255, 255, 255, .9);
+  box-shadow: 0 24px 60px rgba(60, 39, 23, .10);
+}
+.sch-box { fill: #FBF8F4; }
+
+/* A consistent centred editorial axis across the marketing sections. */
+.section-head { max-width: 760px; margin: 0 auto 40px; text-align: center; }
+.section-lede { margin-inline: auto; }
+.plan-picker { justify-content: center; }
+.steps { text-align: center; }
+.step-n { margin-inline: auto; }
+.step-body { margin-inline: auto; }
+.card, .plan-card, .card-quiet { border-color: rgba(213, 201, 190, .9); }
+.card { padding: clamp(20px, 3vw, 30px); }
+.plan-card { padding: 30px 26px; }
+.plan-card.featured { padding: 29px 25px; }
+.u-tile, .stat-tile, .dh-tile { background: #FBF7F2; }
+
+/* The long-form explanation becomes a single centred reading column with numbered chapters. */
+.prose {
+  max-width: 820px;
+  margin-inline: auto;
+  counter-reset: prose-section;
+}
+.prose-entry {
+  position: relative;
+  counter-increment: prose-section;
+  padding: 30px 32px 30px 82px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, .72);
+  box-shadow: var(--shadow-resting);
+}
+.prose-entry + .prose-entry { margin-top: 18px; padding-top: 30px; border-top: 1px solid var(--border); }
+.prose-entry::before {
+  content: counter(prose-section, decimal-leading-zero);
+  position: absolute;
+  top: 28px;
+  left: 28px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-tint);
+  color: var(--accent);
+  font: 700 11px/1 var(--font-mono);
+}
+.prose-title { font-size: 22px; letter-spacing: -.025em; }
+.prose-body { font-size: 15.5px; line-height: 1.75; }
+.prose-note {
+  max-width: 820px;
+  margin: 24px auto 0;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  text-align: center;
+}
+
+/* Footer content shares the same centred feel without losing its useful desktop columns. */
+#site-footer { margin-top: 72px; background: #F3ECE4; }
+.foot-bottom { text-align: center; }
+.disclaimer { margin-inline: auto; }
+.foot-meta { text-align: center; }
+
+@media (max-width: 899px) {
+  .mh-top { height: 60px; }
+  #nav { top: 60px; }
+  .hero { padding: 52px 0 46px; }
+  .hero .wrap { align-items: center; }
+  .hero-copy { text-align: center; }
+  .hero-sub { margin-inline: auto; }
+  .hero-actions, .hero-proof { justify-content: center; }
+  .hero-stage { max-width: 480px; padding: 64px 42px 60px 0; }
+  .hero-mascot-frame { right: -4px; bottom: 0; width: 142px; height: 142px; }
+  .hero-mascot { width: 125px; margin-top: -17px; }
+  .schematic { max-width: 390px; }
+}
+
+@media (max-width: 560px) {
+  #view { padding-top: 18px; }
+  #view > .page-head { padding-top: 26px; margin-bottom: 20px; }
+  #view > .page-head + div > .section { padding: 22px 0; }
+  .page-head h1 { font-size: clamp(32px, 10vw, 44px); }
+  .hero { margin-top: -18px; padding-top: 52px; }
+  .hero-title { font-size: clamp(42px, 13vw, 58px); }
+  .hero-kicker { font-size: 10px; letter-spacing: .075em; }
+  .hero-actions .btn { flex: 1 1 150px; justify-content: center; }
+  .hero-proof { gap: 8px 14px; }
+  .hero-stage { max-width: 390px; padding: 66px 22px 76px 0; }
+  .hero-mascot-frame { right: -2px; bottom: 2px; width: 128px; height: 128px; }
+  .hero-mascot { width: 112px; }
+  .schematic { padding: 15px 14px 17px; border-radius: 18px; }
+  .prose-entry { padding: 72px 20px 24px; }
+  .prose-entry::before { top: 20px; left: 20px; }
+  .prose-title { font-size: 20px; }
+  .foot-grid { text-align: center; }
+  .foot-brand-col, .foot-col { align-items: center; }
+  .foot-tagline { margin-inline: auto; }
+}

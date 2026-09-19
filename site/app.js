@@ -5,7 +5,7 @@
  * OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin: a
  * creator tax on every trade against the coin's bonding curve funds a treasury, and every week
  * last week's tax becomes that week's data budget — split among HOLDERS by their share of the
- * circulating supply, banked as dollars of credit, and spent on eSIMs from nadanada, paid for over
+ * circulating supply, banked as dollars of credit, and spent on eSIMs from wholesale, paid for over
  * a Blink Lightning wallet. This programme
  * used to be two routes (#/data, #/status) inside a bigger launchpad, whatever.fun; this file is
  * what makes it a site of its own. site/esim.js and site/status.js are the same files that lived
@@ -150,13 +150,14 @@
   }
 
   // ============================================================================ routes
-  const ROUTES = ['home', 'status', 'about'];
+  const ROUTES = ['home', 'status', 'holders', 'about'];
   // Full <title> strings, not just labels — the title bar says where you are. An empty or unknown
   // hash falls back to 'home', so TITLES.home also stands in whenever STATE.route somehow lands on
   // something this map does not name.
   const TITLES = {
     home: 'OT+T — hold the coin, fly with data',
     status: 'Status — OT+T',
+    holders: 'Holders — OT+T',
     about: 'How this works — OT+T',
   };
 
@@ -240,7 +241,7 @@
       entry('What OT+T is',
         'OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin. The coin trades on Robinhood Chain against a bonding curve, and its contract carries ' + taxPhrase + ' on every trade. That tax is the whole of the carrier’s revenue: it funds a treasury, and the treasury’s only job is buying mobile data.'),
       entry('How holding becomes a gigabyte',
-        'Every Monday, last week’s creator tax becomes that week’s data budget — scaled down first if a reserve is held back — and a wallet’s allowance is simply its share of OTT’s circulating supply times that budget: banked as dollars of credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js reads the coin’s balances once a week and writes every wallet’s standing to site/data/allowances.json; /api/redeem is what turns that standing into an eSIM from nadanada. The allowance expires at the end of the week it was published for — use it or lose it, which is what keeps the promise affordable, since the pool never owes more than one week of tax it has already collected. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet is what actually pays nadanada for every eSIM ordered. No person sits in either loop.'),
+        'Every Monday, last week’s creator tax becomes that week’s data budget — scaled down first if a reserve is held back — and a wallet’s allowance is simply its share of OTT’s circulating supply times that budget: banked as dollars of credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js reads the coin’s balances once a week and writes every wallet’s standing to site/data/allowances.json; /api/redeem is what turns that standing into an eSIM from our network partner. The allowance expires at the end of the week it was published for — use it or lose it, which is what keeps the promise affordable, since the pool never owes more than one week of tax it has already collected. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet pays the network partner for every eSIM ordered. No person sits in either loop.'),
       entry('Why holding, and not trading',
         'The tax is paid by trading, but the budget it funds is split by holding: a wallet’s allowance is simply its share of the circulating supply, counted fresh once a week, with nothing to claim and nothing to stake. Trade as much as you like — it changes your balance, and next week’s count reads whatever that balance is then — but the trade itself earns nothing. Buy and hold, and every week you are owed the same share of that week’s budget for as long as you keep holding; sell, and next week simply owes you less.'),
       entry('What v1 deliberately leaves out',
@@ -250,13 +251,29 @@
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 
-  const RENDERERS = { home: renderHome, status: renderStatus, about: renderAbout };
+  /**
+   * The Holders route (#/holders) — the week's ledger in full, from site/holders.js. Same ctx as
+   * the other two route modules; it reads data/allowances.json and the chain never.
+   */
+  function renderHolders(view) {
+    const H = window.OTTHolders;
+    if (!H || typeof H.render !== 'function') { view.appendChild(notice('The holders module has not loaded.', 'warn')); return; }
+    H.render(view, {
+      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
+      account: STATE.account, currentAccount: () => STATE.account,
+    });
+  }
+
+  const RENDERERS = { home: renderHome, status: renderStatus, holders: renderHolders, about: renderAbout };
 
   function renderRoute() {
     const view = $('view');
     clear(view);
     view.scrollTop = 0;
     (RENDERERS[STATE.route] || renderHome)(view);
+    // The document, not #view, owns the scrollbar. Reset it on every route so following a nav link
+    // from halfway down the home page never opens Status, Holders or About halfway down as well.
+    window.scrollTo(0, 0);
   }
 
   function navigate() {

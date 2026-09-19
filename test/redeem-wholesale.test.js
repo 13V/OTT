@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * /api/redeem, end to end, through the real nadanada provider — the fake nadanada
- * (test/support/fake-nadanada.js), the mock Lightning payer, the in-memory store, and, exactly as
+ * /api/redeem, end to end, through the real wholesale provider — the fake wholesale
+ * (test/support/fake-wholesale.js), the mock Lightning payer, the in-memory store, and, exactly as
  * test/redeem.test.js does for the mock provider, a node:http file server standing in for the
  * deployment's own config and allowances and lib/secp256k1 + lib/eip191 standing in for a
  * wallet's personal_sign.
  *
  * test/redeem.test.js checks the endpoint's own logic (who may redeem, how much, idempotence, the
  * week boundary, a stale allowances file) against the mock provider, which never fails and never
- * waits. test/nadanada.test.js checks the nadanada provider's own money-handling in isolation.
+ * waits. test/wholesale.test.js checks the wholesale provider's own money-handling in isolation.
  * This file is the seam between them: does redeem.js still get the accounting right — this week's
  * allowance spent once per package, nothing lost, nothing doubled — when the provider underneath
  * is the one that can be slow, broke, or stale?
  *
- *   node test/redeem-nadanada.test.js
+ *   node test/redeem-wholesale.test.js
  */
 const http = require('node:http');
 const path = require('path');
@@ -24,7 +24,7 @@ const secp = require(path.join(API, 'lib', 'secp256k1.js'));
 const eip191 = require(path.join(API, 'lib', 'eip191.js'));
 const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
 const week = require(path.join(API, 'lib', 'week.js'));
-const fakeNadanada = require(path.join(__dirname, 'support', 'fake-nadanada.js'));
+const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -42,9 +42,9 @@ const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  o
 const RICH = secp.newPrivateKey();   // $9.00 allowance this week: Europe, then Germany, then out of credit
 const BROKE = secp.newPrivateKey();  // $2.99 allowance, for a wallet whose wallet-of-record cannot pay
 const SLOW = secp.newPrivateKey();   // $2.99 allowance, for a profile slower than the function waits
-const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price nadanada disagrees with
+const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price wholesale disagrees with
 const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provider still works untouched
-const HOSTILE = secp.newPrivateKey(); // $2.99, for the day nadanada sends links that are not links
+const HOSTILE = secp.newPrivateKey(); // $2.99, for the day wholesale sends links that are not links
 const addr = (k) => secp.addressOf(k).toLowerCase();
 
 // The current week, computed the same way redeem.js computes it (site/api/lib/week.js), so the
@@ -65,20 +65,20 @@ function signed(key, packageCode, n = 0) {
 
 const COIN = '0x1111111111111111111111111111111111111111';
 const CURVE = '0x2222222222222222222222222222222222222222';
-// The fake nadanada's default catalogue (test/support/fake-nadanada.js) prices exactly these two
+// The fake wholesale's default catalogue (test/support/fake-wholesale.js) prices exactly these two
 // bundles, at exactly these dollar amounts, so the config below is what the fake will agree with.
 const PACKAGES = [
   { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' },
   { code: 'fixed_5GB_30D_EUROPE', slug: 'europe', name: 'Europe', kind: 'region', gb: 5, days: 30, priceUsd: 5.99, regions: '38 countries' },
 ];
-// A second catalogue, identical except Germany is quoted well under what nadanada actually charges
+// A second catalogue, identical except Germany is quoted well under what wholesale actually charges
 // for it — the "our config is out of date" case a real deployment could hit between catalogue
 // refreshes.
 const STALE_PACKAGES = [Object.assign({}, PACKAGES[0], { priceUsd: 1.50 }), PACKAGES[1]];
-const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'nadanada' };
+const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'wholesale' };
 const NORMAL_CONFIG = Object.assign({}, BASE_CONFIG, { packages: PACKAGES });
 const STALE_CONFIG = Object.assign({}, BASE_CONFIG, { packages: STALE_PACKAGES });
-// The same catalogue after `npm run catalogue -- --write` picked up cheaper prices from nadanada,
+// The same catalogue after `npm run catalogue -- --write` picked up cheaper prices from wholesale,
 // which is the ordinary weekly reason that file changes.
 const CHEAPER_CONFIG = Object.assign({}, BASE_CONFIG, {
   packages: PACKAGES.map((p) => Object.assign({}, p, { priceUsd: Math.round(p.priceUsd * 50) / 100 })),
@@ -122,7 +122,7 @@ function call(handler, { method, url, body }) {
 }
 
 async function main() {
-  const fake = await fakeNadanada.start({ mockPayer });
+  const fake = await fakeWholesale.start({ mockPayer });
 
   const server = http.createServer((req, res) => {
     const file = FILES[new URL(req.url, 'http://x').pathname];
@@ -135,12 +135,12 @@ async function main() {
 
   process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
   process.env.ALLOWANCES_URL = base + '/data/allowances.json';
-  process.env.ESIM_PROVIDER = 'nadanada';
+  process.env.ESIM_PROVIDER = 'wholesale';
   process.env.LN_PAYER = 'mock';
   process.env.STORE = 'memory';
-  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
-  process.env.NADANADA_BASE_URL = fake.base;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
+  process.env.WHOLESALE_BASE_URL = fake.base;
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
   delete process.env.VERCEL_URL;
 
   const redeem = require(path.join(API, 'redeem.js'));
@@ -156,8 +156,8 @@ async function main() {
   // exact same signed request. Two such requests racing for the same not-yet-existing order (both
   // see zero prior orders for this wallet before either commits) must settle on one paid eSIM,
   // never two — the "Two requests racing for the same n" guarantee documented at the top of
-  // site/api/redeem.js. What that guarantee does NOT cover is a single call to nadanada's own
-  // /esim/purchase: nadanada.js quotes an invoice before it claims the store slot (the NX claim
+  // site/api/redeem.js. What that guarantee does NOT cover is a single call to wholesale's own
+  // /esim/purchase: wholesale.js quotes an invoice before it claims the store slot (the NX claim
   // happens after quoting), so under a genuine race both requests quote one, and the loser's is
   // simply orphaned and unpaid — only the payment, the part that actually costs money, happens
   // once, and both callers see the identical finished order. Checked below.
@@ -173,17 +173,17 @@ async function main() {
     /^https/.test(europeOrder.qrCodeUrl) && europeOrder.ac.startsWith('LPA:1$') && /^\d{19}$/.test(europeOrder.iccid), JSON.stringify(europeOrder));
   checkThat('and the SM-DP+ address, matching id and both install links', !!(europeOrder.smdpAddress && europeOrder.matchingId && europeOrder.appleInstallUrl && europeOrder.androidInstallUrl), JSON.stringify(europeOrder));
   check('note is empty — nothing went wrong', europeOrder.note, '');
-  check('the fake nadanada saw the purchase named the bundle, its place and Lightning', fake.state.log.find((l) => l.path === '/esim/purchase').body, { bundleName: 'fixed_5GB_30D_EUROPE', slug: 'europe', paymentMethod: 'lightning' });
+  check('the fake wholesale saw the purchase named the bundle, its place and Lightning', fake.state.log.find((l) => l.path === '/esim/purchase').body, { bundleName: 'fixed_5GB_30D_EUROPE', slug: 'europe', paymentMethod: 'lightning' });
   check('the two racing responses carry the identical order', respB.body.order, europeOrder);
   check('the mock payer paid exactly once, with a memo naming the order', mockPayer._state.log.slice(paidBeforeEurope).map((l) => l.memo), ['OT+T ' + europeOrder.transactionId]);
-  check('one quote at nadanada for the two racing requests: the slot is claimed before the quote', fake.purchases() - purchasesBeforeEurope, 1);
+  check('one quote at wholesale for the two racing requests: the slot is claimed before the quote', fake.purchases() - purchasesBeforeEurope, 1);
 
   console.log('\nGET agrees, and a second GET costs nothing');
   r = await GET(addr(RICH));
   check('$5.99 redeemed, $3.01 remaining, one order with the Europe iccid', [r.body.redeemedUsd, r.body.remainingUsd, r.body.orders.length, r.body.orders[0].iccid], [5.99, 3.01, 1, europeOrder.iccid]);
   const logBeforeSecondGet = fake.state.log.length;
   const r2 = await GET(addr(RICH));
-  check('a done order is answered from the store: no request reaches the fake nadanada', [fake.state.log.length - logBeforeSecondGet, r2.body.orders.length], [0, 1]);
+  check('a done order is answered from the store: no request reaches the fake wholesale', [fake.state.log.length - logBeforeSecondGet, r2.body.orders.length], [0, 1]);
 
   console.log('\nPOST Germany, then Germany again with too little left');
   const germany = await POST(signed(RICH, 'fixed_1GB_7D_DE', 1));
@@ -209,7 +209,7 @@ async function main() {
 
   console.log('\na profile slower than the function will wait');
   fake.state.settleAfterCalls = 2;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '0';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '0';
   const slow = await POST(signed(SLOW, 'fixed_1GB_7D_DE'));
   check('POST returns it paid and pending, with the credit already spent', [slow.status, slow.body.order.pending, slow.body.order.stage, slow.body.remainingUsd], [200, true, 'paid', 1.0]);
   const slowGet1 = await GET(addr(SLOW));
@@ -217,27 +217,27 @@ async function main() {
   const slowGet2 = await POST(signed(SLOW, null));   // a signed read: a public GET withholds the codes
   checkThat('a later signed read finds it done, with the QR', !slowGet2.body.orders[0].pending && slowGet2.body.orders[0].stage === 'done' && /^https/.test(slowGet2.body.orders[0].qrCodeUrl) && slowGet2.body.orders[0].codes === true, JSON.stringify(slowGet2.body.orders[0]));
   fake.state.settleAfterCalls = 0;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
 
-  console.log('\na stale catalogue: our price is under what nadanada actually charges');
+  console.log('\na stale catalogue: our price is under what wholesale actually charges');
   process.env.ESIM_CONFIG_URL = base + '/config/esim-stale.json';
   const purchasesBeforeStale = fake.purchases();
   const paidBeforeStale = mockPayer._state.log.length;
   const stale = await POST(signed(STALE, 'fixed_1GB_7D_DE'));
   check('the order is refused, 503', stale.status, 503);
   checkThat('and says the catalogue is stale', /catalogue is stale/.test(stale.body.error), stale.body.error);
-  check('nadanada was quoted (that is how the staleness was caught) but nothing was paid', [fake.purchases() - purchasesBeforeStale, mockPayer._state.log.length - paidBeforeStale], [1, 0]);
+  check('wholesale was quoted (that is how the staleness was caught) but nothing was paid', [fake.purchases() - purchasesBeforeStale, mockPayer._state.log.length - paidBeforeStale], [1, 0]);
   process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
 
   console.log('\nno durable store configured');
-  delete process.env.NADANADA_ALLOW_MEMORY_STORE;
+  delete process.env.WHOLESALE_ALLOW_MEMORY_STORE;
   const noStore = await GET(addr(RICH));
   check('GET is 503', noStore.status, 503);
   checkThat('and says a durable store is needed', /durable store/.test(noStore.body.error), noStore.body.error);
-  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
+  process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
 
   // ------------------------------------------------------------------------------------------
-  // Everything nadanada says about how to install an eSIM becomes an attribute on the page that
+  // Everything wholesale says about how to install an eSIM becomes an attribute on the page that
   // is displaying the holder's activation code: the QR an <img src>, the two install links an
   // <a href>. A "javascript:" in any of them runs in that origin, next to the codes. We do not
   // trust that response enough to put it in an <img> unchecked; this is the same care, applied to
@@ -245,7 +245,7 @@ async function main() {
   // ------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------
   // A week's allowance is a fixed sum, so what a wallet has already spent out of it has to be a
-  // fixed sum too. The catalogue is not: scripts/catalogue.js rewrites it from nadanada's live
+  // fixed sum too. The catalogue is not: scripts/catalogue.js rewrites it from wholesale's live
   // prices whenever it runs, which is an ordinary weekly thing to do. Pricing a past order from
   // the catalogue as it stands NOW means that refresh silently rewrites history.
   // ------------------------------------------------------------------------------------------
@@ -262,7 +262,7 @@ async function main() {
     [afterRefresh.body.redeemedUsd, afterRefresh.body.remainingUsd], [spent, left]);
   process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
 
-  console.log('\nnadanada sends links that would run script, and none of them reach the page');
+  console.log('\nwholesale sends links that would run script, and none of them reach the page');
   fake.state.hostileInstall = true;
   const hostile = await POST(signed(HOSTILE, 'fixed_1GB_7D_DE'));
   check('the order still succeeds — the eSIM is real, only its links were not', [hostile.status, !!hostile.body.order.iccid], [200, true]);
@@ -293,8 +293,8 @@ async function main() {
   const logBeforeMock = fake.state.log.length, paidBeforeMock = mockPayer._state.log.length;
   const mockResp = await POST(signed(MOCKW, 'fixed_1GB_7D_DE'));
   check('the same handler, same signing, same config — just ESIM_PROVIDER=mock — still redeems', [mockResp.status, mockResp.body.order.n], [200, 0]);
-  check('nadanada and the Lightning wallet were never touched', [fake.state.log.length - logBeforeMock, mockPayer._state.log.length - paidBeforeMock], [0, 0]);
-  process.env.ESIM_PROVIDER = 'nadanada';
+  check('wholesale and the Lightning wallet were never touched', [fake.state.log.length - logBeforeMock, mockPayer._state.log.length - paidBeforeMock], [0, 0]);
+  process.env.ESIM_PROVIDER = 'wholesale';
 
   await fake.close();
   server.close();

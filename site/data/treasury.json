@@ -4,7 +4,7 @@
  "escrowClaimableUsd": null,
  "walletUsd": null,
  "reseller": {
-  "name": "nadanada",
+  "name": "wholesale",
   "balanceUsd": null,
   "asOf": 1789545055,
   "error": "BLINK_API_KEY is not set"

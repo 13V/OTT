@@ -3,7 +3,7 @@
  * whatever.fun — a QR encoder, for the one thing on the site that has to be scanned.
  *
  * An eSIM is installed by scanning its activation code ("LPA:1$<SM-DP+ address>$<matching id>").
- * nadanada answers a completed order with that code and, usually, a QR image; when the image is
+ * wholesale answers a completed order with that code and, usually, a QR image; when the image is
  * missing, or is the code itself rather than a picture of it, the page draws the QR here. Byte
  * mode, error-correction level M, versions 1–10 (up to 213 bytes, which is four times the longest
  * activation code anyone issues), mask chosen by the standard penalty score. The arithmetic is

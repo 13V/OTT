@@ -55,7 +55,7 @@ function fmtCountdownLike(weekEndSec) {
   return totalMin + 'm';
 }
 
-// Three places across five nadanada packages, at real catalogue prices. Europe and Global each
+// Three places across five wholesale packages, at real catalogue prices. Europe and Global each
 // sell one 1 GB size; Germany sells all three sizes, which makes it the only place with both a
 // region and a country in the picker, and — at $7.99 for 10 GB, ~80¢/GB — the cheapest place per
 // gigabyte in this fixture, so `cheapest()` picks it. Global's 1 GB at $8.99 is the dearest per
@@ -69,7 +69,7 @@ const PACKAGES = [
   { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE', flag: '🇩🇪' },
 ];
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' };
-const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'nadanada', packages: PACKAGES, brand: BRAND };
+const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'wholesale', packages: PACKAGES, brand: BRAND };
 const NOT_LAUNCHED = Object.assign({ coin: '', curve: '', treasury: '' }, base);
 const LAUNCHED = Object.assign({ coin: COIN, curve: CURVE, treasury: TREASURY }, base);
 // A config from before the brand existed — no `brand` key at all — to prove the fallback path.
@@ -166,7 +166,7 @@ test('before launch, #/ shows the rules and the launch link', async ({ page }) =
   await expect(card).toContainText('OTT');
   await expect(card).toContainText('last week’s creator tax, split by every wallet’s share of the circulating supply');
   await expect(card).toContainText('3 places · 1, 5 and 10 GB · from $1.19');
-  await expect(card).toContainText('eSIMs from nadanada, paid by Lightning');
+  await expect(card).toContainText('eSIMs from our network partner, paid by Lightning');
   await expect(card).toContainText('pre-graduation');
   await expect(card).toContainText('USDG');
   // esim.js has no launchpad route of its own on this site, so the not-launched card sends a
@@ -247,7 +247,7 @@ test('the plan catalogue, how-it-works and coverage render from config alone, th
   await expect(steps.nth(1).locator('.step-body')).toContainText('OT+T’s trades');
   await expect(steps.nth(1).locator('.step-body')).toContainText('share of the circulating supply');
   await expect(steps.nth(2).locator('.step-n')).toHaveText('3');
-  await expect(steps.nth(2).locator('.step-body')).toContainText('nadanada');
+  await expect(steps.nth(2).locator('.step-body')).toContainText('our network partner');
   await expect(steps.nth(2).locator('.step-body')).toContainText('scan the QR at the airport');
   await expect(steps.nth(2).locator('.step-body')).toContainText('does not carry over');
 
@@ -328,7 +328,7 @@ test('once launched, the treasury and pool are read from the chain, and a wallet
   await stubAllowances(page, {});
   await stubTreasury(page, {
     asOf: 1789396369, treasury: TREASURY, escrowClaimableUsd: 1234.56, walletUsd: 67.89,
-    reseller: { name: 'nadanada', balanceUsd: 412, sats: 734521, asOf: 1789396369 },
+    reseller: { name: 'wholesale', balanceUsd: 412, sats: 734521, asOf: 1789396369 },
     spend30dUsd: 10.44, redemptions30d: 4, perDayUsd: 0.35, runwayDays: 1177,
     lastClaim: { at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }, status: 'funded',
   });
@@ -346,7 +346,7 @@ test('once launched, the treasury and pool are read from the chain, and a wallet
   await expect(pool).toContainText('FUNDED');
   await expect(pool).toContainText('Pool balance');
   await expect(pool).toContainText('$412.00');
-  await expect(pool).toContainText('in the Lightning wallet that pays nadanada');
+  await expect(pool).toContainText('in the Lightning wallet that pays our network partner');
   await expect(pool).toContainText('734,521 sats');
   await expect(pool).toContainText('1,177 days');
   await expect(pool).toContainText('4 eSIMs redeemed');
@@ -391,15 +391,15 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
     qrCodeUrl: './qr-old.png', ac: 'LPA:1$old.example$OLD', iccid: '8900000000000000001',
     createdAt: '2026-09-01T00:00:00Z', pending: false, stage: 'done',
     smdpAddress: 'smdp-old.example', matchingId: 'OLD-MATCH',
-    appleInstallUrl: 'https://esimsetup.apple.com/es?a=old', androidInstallUrl: 'https://nadanada.me/install/android/old',
+    appleInstallUrl: 'https://esimsetup.apple.com/es?a=old', androidInstallUrl: 'https://provider.example/install/android/old',
     note: '',
   };
   const fresh = {
     n: 1, transactionId: 'ott-' + 'b'.repeat(32), packageCode: 'fixed_5GB_30D_DE', priceUsd: 4.99, week: CUR_WEEK,
-    qrCodeUrl: '', ac: 'LPA:1$smdp.nadanada.me$MATCH-123', iccid: '8900000000000000002',
+    qrCodeUrl: '', ac: 'LPA:1$smdp.provider.example$MATCH-123', iccid: '8900000000000000002',
     createdAt: '2026-09-14T00:00:00Z', pending: false, stage: 'done',
-    smdpAddress: 'smdp.nadanada.me', matchingId: 'MATCH-123',
-    appleInstallUrl: 'https://esimsetup.apple.com/es?a=1', androidInstallUrl: 'https://nadanada.me/install/android/1',
+    smdpAddress: 'smdp.provider.example', matchingId: 'MATCH-123',
+    appleInstallUrl: 'https://esimsetup.apple.com/es?a=1', androidInstallUrl: 'https://provider.example/install/android/1',
     note: '',
   };
   const redactCodes = (o) => Object.assign({}, o, { qrCodeUrl: '', ac: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '', codes: false });
@@ -488,7 +488,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
 
   // The past order came from a plain GET, so its SIM card is listed but redacted: no code, no QR,
   // no install links, no manual line — only what was never gated (name, price, ICCID) shows. This
-  // fixture names no `sims` and no `topupOf` (the shape written before nadanada tracked a standing
+  // fixture names no `sims` and no `topupOf` (the shape written before wholesale tracked a standing
   // profile), so the past order is its own eSIM, exactly as one order always was.
   await expect(mine).toContainText('YOUR ESIM');
   const pastCard = mine.locator('.data-sim').filter({ hasText: '8900000000000000001' });
@@ -510,7 +510,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(pastCard).toContainText('smdp-old.example');
   await expect(pastCard).toContainText('OLD-MATCH');
   await expect(pastCard.getByRole('link', { name: 'Install on iPhone' })).toHaveAttribute('href', 'https://esimsetup.apple.com/es?a=old');
-  await expect(pastCard.getByRole('link', { name: 'Install on Android' })).toHaveAttribute('href', 'https://nadanada.me/install/android/old');
+  await expect(pastCard.getByRole('link', { name: 'Install on Android' })).toHaveAttribute('href', 'https://provider.example/install/android/old');
 
   // The place select groups regions and countries, and opens on the first place's smallest size.
   await expect(mine.locator('#f-place optgroup[label="Regions"] option')).toHaveCount(2);
@@ -531,15 +531,15 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   const card = mine.locator('.data-sim.fresh');
   await expect(card).toBeVisible();
   await expect(card.locator('img.data-qr')).toHaveAttribute('src', /^data:image\/svg\+xml/);
-  await expect(card.locator('.data-ac')).toHaveText('LPA:1$smdp.nadanada.me$MATCH-123');
+  await expect(card.locator('.data-ac')).toHaveText('LPA:1$smdp.provider.example$MATCH-123');
   await expect(card).toContainText('Germany · 5 GB · 30 days');
   await expect(card).toContainText('$4.99');
   // The one-tap install links and the manual SM-DP+/matching-id fallback both render when
-  // nadanada sent them.
+  // wholesale sent them.
   await expect(card.getByRole('link', { name: 'Install on iPhone' })).toHaveAttribute('href', 'https://esimsetup.apple.com/es?a=1');
-  await expect(card.getByRole('link', { name: 'Install on Android' })).toHaveAttribute('href', 'https://nadanada.me/install/android/1');
+  await expect(card.getByRole('link', { name: 'Install on Android' })).toHaveAttribute('href', 'https://provider.example/install/android/1');
   await expect(card).toContainText('SM-DP+');
-  await expect(card).toContainText('smdp.nadanada.me');
+  await expect(card).toContainText('smdp.provider.example');
   await expect(card).toContainText('MATCH-123');
   // The balance the API answered with, not one the page worked out for itself — and the signed
   // read that followed the redeem carried the past order's code too, with no extra click needed.

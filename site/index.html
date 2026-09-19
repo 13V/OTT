@@ -6,7 +6,9 @@
 <title>OT+T — hold the coin, fly with data</title>
 <meta name="description" content="A memecoin whose creator tax buys mobile data. Hold OTT on Robinhood Chain and your share of the circulating supply becomes a weekly data allowance, spent on eSIM gigabytes paid for over Lightning — not a dividend, and not a claim on the treasury.">
 <meta name="theme-color" content="#FFFFFF">
-<link rel="icon" href="data:,">
+<!-- The mark on its own, drawn inline for the same reason the masthead's is: no request, no file to
+     drift, and it stays crisp at every size a tab or a bookmark asks for. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23BE5810'/%3E%3Cpath d='M13.8 6.5h4.4v19h-4.4z' fill='%23fff'/%3E%3Cpath d='M6.5 13.8h19v4.4h-19z' fill='%23fff'/%3E%3C/svg%3E">
 <link href="fonts.css" rel="stylesheet">
 <link rel="stylesheet" href="./style.css">
 <link rel="stylesheet" href="./ui.css">
@@ -17,11 +19,19 @@
 <header id="masthead">
   <div class="mh-top wrap">
     <!-- The wordmark is also the home link. "The plan" beside it still earns its place because
-         "OT+T" alone does not say what the page under it is. -->
-    <a class="brand" href="#/" data-route="home">OT<span class="dot-fun">+</span>T</a>
+         "OT+T" alone does not say what the page under it is.
+
+         Drawn rather than served: the mark is two letterforms, a rounded tile and a cross, all of
+         which Inter and a border-radius already give us. A file would cost a request, blur on a
+         retina screen unless it were an SVG anyway, and could drift out of step with the type
+         beside it. aria-label carries the real name, since the tile reads as a "+" only visually. -->
+    <a class="brand" href="#/" data-route="home" aria-label="OT+T — home">
+      <span aria-hidden="true">OT</span><span class="brand-mark" aria-hidden="true">+</span><span aria-hidden="true">T</span>
+    </a>
     <nav id="nav" aria-label="Primary">
       <a data-route="home" href="#/">The plan</a>
       <a data-route="status" href="#/status">Status</a>
+      <a data-route="holders" href="#/holders">Holders</a>
       <a data-route="about" href="#/about">How it works</a>
     </nav>
     <div class="mh-right">
@@ -43,13 +53,14 @@
   <div class="footer-inner wrap">
     <div class="foot-grid">
       <div class="foot-brand-col">
-        <span class="foot-brand">OT+T</span>
+        <span class="foot-brand" aria-label="OT+T"><span aria-hidden="true">OT</span><span class="brand-mark" aria-hidden="true">+</span><span aria-hidden="true">T</span></span>
         <p class="foot-tagline">Hold the coin. Fly with data.</p>
       </div>
       <nav class="foot-col" aria-label="Programme">
         <p class="foot-col-title">Programme</p>
         <a href="#/">The plan</a>
         <a href="#/status">Status</a>
+        <a href="#/holders">Holders</a>
         <a href="#/about">How it works</a>
       </nav>
       <nav class="foot-col" aria-label="Network">
@@ -76,7 +87,7 @@
 </footer>
 
 <script src="./ui.js"></script>
-<!-- The QR encoder draws an activation code with when nadanada answers an order without a picture
+<!-- The QR encoder draws an activation code with when wholesale answers an order without a picture
      of its own. It defines window.WhateverQr and does nothing on its own, so loading it here costs
      the page nothing until a redemption actually needs it. -->
 <script src="./qr.js"></script>
@@ -86,6 +97,15 @@
 <!-- The Status route (#/status): the network status page and the operator's dashboard. Same wiring
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
 <script src="./status.js"></script>
+<!-- The Holders route (#/holders): the week's ledger in full. Loaded after esim.js because it
+     borrows that file's token/share/week formatters, so the two can never disagree about how a
+     balance is read. -->
+<script src="./holders.js"></script>
+<!-- The motion layer. Loaded before app.js so its hashchange handler is registered first, which is
+     what lets the route transition start while the outgoing page is still on screen. It finds its
+     own targets by selector and watches #view for whatever the route modules render later, so no
+     other file has to know it exists. -->
+<script src="./motion.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

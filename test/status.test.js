@@ -4,7 +4,7 @@
  * site/api/status.js, end to end, offline.
  *
  * A node:http server stands in for the deployment's own config and allowances files, exactly as
- * test/redeem.test.js's does; a second tiny server stands in for nadanada's bundle listing; the
+ * test/redeem.test.js's does; a second tiny server stands in for wholesale's bundle listing; the
  * mock Lightning payer (site/api/lib/payers/mock.js) stands in for a wallet. What is asserted is
  * the wire contract (GET only, JSON, never cached, no CORS), that a fully wired deployment reports
  * every check healthy with the numbers read from the real config, that one broken leg — a payer
@@ -43,7 +43,7 @@ const PACKAGES = [
   { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', priceUsd: 8.99 },
 ];
 const LAUNCHED_CONFIG = {
-  coin: COIN, curve: CURVE, treasury: '', provider: 'nadanada', catalogueAt: '2026-09-15',
+  coin: COIN, curve: CURVE, treasury: '', provider: 'wholesale', catalogueAt: '2026-09-15',
   budgetBps: 10000, taxBps: 1000, brand: BRAND, packages: PACKAGES,
 };
 const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
@@ -101,10 +101,10 @@ async function main() {
   await new Promise((r) => fileServer.listen(0, '127.0.0.1', r));
   const fileBase = 'http://127.0.0.1:' + fileServer.address().port;
 
-  // A tiny fake of nadanada's own bundle listing, and nothing else — proving the provider check
+  // A tiny fake of wholesale's own bundle listing, and nothing else — proving the provider check
   // never reaches for purchase or complete.
   let bundleHits = 0;
-  const nadanadaServer = http.createServer((req, res) => {
+  const wholesaleServer = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (req.method === 'GET' && u.pathname === '/esim/bundles') {
       bundleHits++;
@@ -113,16 +113,16 @@ async function main() {
     }
     res.statusCode = 404; res.end(JSON.stringify({ error: 'not stubbed: ' + req.url }));
   });
-  await new Promise((r) => nadanadaServer.listen(0, '127.0.0.1', r));
-  const nadanadaBase = 'http://127.0.0.1:' + nadanadaServer.address().port;
+  await new Promise((r) => wholesaleServer.listen(0, '127.0.0.1', r));
+  const wholesaleBase = 'http://127.0.0.1:' + wholesaleServer.address().port;
 
   process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
   process.env.ALLOWANCES_URL = fileBase + '/data/allowances.json';
-  process.env.ESIM_PROVIDER = 'nadanada';
+  process.env.ESIM_PROVIDER = 'wholesale';
   process.env.LN_PAYER = 'mock';
   process.env.STORE = 'memory';
-  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
-  process.env.NADANADA_BASE_URL = nadanadaBase;
+  process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
+  process.env.WHOLESALE_BASE_URL = wholesaleBase;
   delete process.env.VERCEL_URL;
   delete process.env.BLINK_API_KEY;
   delete process.env.BLINK_API_URL;
@@ -148,11 +148,11 @@ async function main() {
   check('packages counts rows, places counts distinct slugs', [r.body.config.packages, r.body.config.places, r.body.config.catalogueAt], [4, 3, '2026-09-15']);
   check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
-  check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'nadanada', payer: 'mock', store: 'memory' });
+  check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'wholesale', payer: 'mock', store: 'memory' });
   checkThat('the allowances check names the holder count and the budget for the current week', new RegExp('3 holders?, \\$412\\.50 budget, week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
   check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances, { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3 });
   checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
-  checkThat('and nadanada saw only the bundle listing, never purchase or complete', bundleHits > 0);
+  checkThat('and wholesale saw only the bundle listing, never purchase or complete', bundleHits > 0);
 
   console.log('\na payer that cannot answer');
   mockPayer._state.mode = 'down';
@@ -200,7 +200,7 @@ async function main() {
   await GET('');
   check('two more calls with no ?fresh=1 cost nothing more: the cache answered both', bundleHits, baseline);
   await GET('?fresh=1');
-  check('?fresh=1 always costs a fresh hit on nadanada', bundleHits, baseline + 1);
+  check('?fresh=1 always costs a fresh hit on wholesale', bundleHits, baseline + 1);
 
   console.log('\nan unknown provider name is a broken deployment, not a clean bill of health');
   process.env.ESIM_PROVIDER = 'atlantis';
@@ -208,7 +208,7 @@ async function main() {
   check('the request still succeeds', r.status, 200);
   check('the provider and store checks both fail rather than reporting nothing to probe', [r.body.checks.provider.ok, r.body.checks.store.ok], [false, false]);
   checkThat('the wiring still names what was actually asked for', r.body.wiring.provider === 'atlantis', r.body.wiring.provider);
-  process.env.ESIM_PROVIDER = 'nadanada';
+  process.env.ESIM_PROVIDER = 'wholesale';
 
   console.log('\nscrubbing a secret');
   process.env.LN_PAYER = 'blink';
@@ -234,7 +234,7 @@ async function main() {
   delete process.env.BLINK_API_URL;
 
   await new Promise((r2) => fileServer.close(r2));
-  await new Promise((r2) => nadanadaServer.close(r2));
+  await new Promise((r2) => wholesaleServer.close(r2));
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
   process.exit(failures ? 1 : 0);
 }

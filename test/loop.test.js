@@ -6,7 +6,7 @@
  * The founder's words: "we just need to make sure we have a system that claims fees then buys
  * sims for holders to claim on the dashboard and be able to claim data as well." Every stage of
  * that loop already has its own test suite (test/claim's arithmetic in test/treasury.test.js,
- * test/fund.test.js, test/allowances.test.js, test/redeem.test.js, test/redeem-nadanada.test.js,
+ * test/fund.test.js, test/allowances.test.js, test/redeem.test.js, test/redeem-wholesale.test.js,
  * test/treasury.test.js again for the report) — but none of them runs the whole thing in order,
  * against one consistent world, and follows a dollar all the way through. This file does:
  *
@@ -17,7 +17,7 @@
  *   4. scripts/allowances.js computes the week's budget (last week's tax) and every wallet's
  *      allowance (its share of the circulating supply at the week's first block).
  *   5. site/api/redeem.js serves a holder's dashboard.
- *   6. The holder redeems: nadanada is ordered, the Lightning wallet pays, an eSIM comes back.
+ *   6. The holder redeems: wholesale is ordered, the Lightning wallet pays, an eSIM comes back.
  *   7. That eSIM shows up in the dashboard's numbers; the allowance has gone down.
  *   8. scripts/treasury.js reports the pool's balance and what redemptions cost.
  *
@@ -33,9 +33,9 @@
  * built to answer exactly that, and only that; it duplicates as little of the other suites' error-
  * path coverage as possible.
  *
- * The eSIM side is not a stub: test/support/fake-nadanada.js (the same fake test/nadanada.test.js
- * and test/redeem-nadanada.test.js drive), site/api/lib/payers/mock.js (LN_PAYER=mock) and the
- * real in-memory store (STORE=memory) stand in for nadanada.me, Blink and Upstash respectively —
+ * The eSIM side is not a stub: test/support/fake-wholesale.js (the same fake test/wholesale.test.js
+ * and test/redeem-wholesale.test.js drive), site/api/lib/payers/mock.js (LN_PAYER=mock) and the
+ * real in-memory store (STORE=memory) stand in for provider.example, Blink and Upstash respectively —
  * everything upstream of those three sockets is the real code, unmodified, run through
  * require(), exactly as it runs in production.
  *
@@ -61,7 +61,7 @@ const secp = require(path.join(API, 'lib', 'secp256k1.js'));
 const eip191 = require(path.join(API, 'lib', 'eip191.js'));
 const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
 const providers = require(path.join(API, 'lib', 'providers'));
-const fakeNadanada = require(path.join(__dirname, 'support', 'fake-nadanada.js'));
+const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 // ---------------------------------------------------------------------------------------------
 // House-style check helpers — identical in shape to every other suite in test/.
@@ -79,7 +79,7 @@ const usd = (n) => '$' + Number(n).toFixed(2);
 
 // ---------------------------------------------------------------------------------------------
 // A real wall clock, replaced with one this file drives by hand. `Date.now` alone is not enough:
-// site/api/redeem.js and site/api/lib/providers/nadanada.js both call `new Date()` (for `week`,
+// site/api/redeem.js and site/api/lib/providers/wholesale.js both call `new Date()` (for `week`,
 // for a sign-in message's freshness, for an order's `createdAt`), and V8 does not route `new
 // Date()` through `Date.now()` — so both have to be replaced together, or "the week rolls" would
 // move scripts/allowances.js's clock and leave redeem.js reading the real one. The class extends
@@ -348,7 +348,7 @@ const PACKAGES = [
   { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' },
   { code: 'fixed_5GB_30D_EUROPE', slug: 'europe', name: 'Europe', kind: 'region', gb: 5, days: 30, priceUsd: 5.99, regions: '38 countries' },
 ];
-const CONFIG = { coin: COIN, curve: CURVE, treasury: TREASURY, pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'nadanada', packages: PACKAGES };
+const CONFIG = { coin: COIN, curve: CURVE, treasury: TREASURY, pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'wholesale', packages: PACKAGES };
 const served = { allowances: null };
 const fileServer = http.createServer((req, res) => {
   const p = new URL(req.url, 'http://x').pathname;
@@ -358,7 +358,7 @@ const fileServer = http.createServer((req, res) => {
   res.end(JSON.stringify(body));
 });
 
-/** The same fake req/res shape test/redeem.test.js and test/redeem-nadanada.test.js drive the handler with. */
+/** The same fake req/res shape test/redeem.test.js and test/redeem-wholesale.test.js drive the handler with. */
 function call(handler, { method, url, body }) {
   return new Promise((resolve) => {
     const req = { method, url, headers: {} };
@@ -395,21 +395,21 @@ async function main() {
   console.log('the loop, start to finish — claim, fund, allowances, redeem, and back around a week later');
   console.log('what is simulated and what is real, so the numbers below are read honestly:');
   console.log('  REAL:      scripts/claim.js, scripts/fund.js, scripts/allowances.js, scripts/treasury.js,');
-  console.log('             site/api/redeem.js, site/api/lib/providers/nadanada.js, site/api/lib/store.js');
+  console.log('             site/api/redeem.js, site/api/lib/providers/wholesale.js, site/api/lib/store.js');
   console.log('             (STORE=memory), lib/bolt11.js, lib/eip191.js, lib/secp256k1.js, lib/keccak.js,');
   console.log('             and scripts/chain.js\'s ABI encoder — all unmodified, run through require().');
   console.log('  SIMULATED: the Robinhood Chain RPC (one in-process fake, below), the Pons escrow and the');
   console.log('             coin/USDG contracts on it, the FixedFloat and Across APIs (localhost HTTP),');
-  console.log('             the nadanada.me API (test/support/fake-nadanada.js), and the Lightning wallet');
+  console.log('             the provider.example API (test/support/fake-wholesale.js), and the Lightning wallet');
   console.log('             (LN_PAYER=mock — no sats ever really move).');
   console.log('  NOT PROVEN by this test or any other in this repo: that a real Blink wallet pays a real');
-  console.log('             Lightning invoice that the real nadanada.me accepts. Everything on our side of');
+  console.log('             Lightning invoice that the real provider.example accepts. Everything on our side of');
   console.log('             that one socket is exercised for real; the socket itself is not.');
 
   await new Promise((r) => ffServer.listen(0, '127.0.0.1', r));
   await new Promise((r) => acrossServer.listen(0, '127.0.0.1', r));
   await new Promise((r) => fileServer.listen(0, '127.0.0.1', r));
-  const fake = await fakeNadanada.start({ mockPayer });
+  const fake = await fakeWholesale.start({ mockPayer });
 
   try {
     // -------------------------------------------------------------------------------------
@@ -485,12 +485,12 @@ async function main() {
     // -------------------------------------------------------------------------------------
     process.env.ESIM_CONFIG_URL = 'http://127.0.0.1:' + fileServer.address().port + '/config/esim.json';
     process.env.ALLOWANCES_URL = 'http://127.0.0.1:' + fileServer.address().port + '/data/allowances.json';
-    process.env.ESIM_PROVIDER = 'nadanada';
+    process.env.ESIM_PROVIDER = 'wholesale';
     process.env.LN_PAYER = 'mock';
     process.env.STORE = 'memory';
-    process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
-    process.env.NADANADA_BASE_URL = fake.base;
-    process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+    process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
+    process.env.WHOLESALE_BASE_URL = fake.base;
+    process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
     delete process.env.VERCEL_URL;
     const redeem = require(path.join(API, 'redeem.js'));
     const GET = (address) => call(redeem, { method: 'GET', url: '/api/redeem?address=' + address });
@@ -511,7 +511,7 @@ async function main() {
     const purchasesBeforeReplay = fake.purchases();
     const replay = await POST(signed(RICH_KEY, 'fixed_5GB_30D_EUROPE', 0));
     check('redeeming slot n=0 again mints nothing new: the same order comes back, flagged replayed', [replay.status, replay.body.replayed, replay.body.order.iccid, replay.body.remainingUsd], [200, true, europe.body.order.iccid, 292.02]);
-    check('nadanada was not asked again and the wallet did not pay again', [fake.purchases() - purchasesBeforeReplay, mockPayer._state.log.length], [0, 2]);
+    check('wholesale was not asked again and the wallet did not pay again', [fake.purchases() - purchasesBeforeReplay, mockPayer._state.log.length], [0, 2]);
 
     const poorerOrder = await POST(signed(POORER_KEY, 'fixed_1GB_7D_DE', 0));
     check('POORER, a different holder with a different share, redeems from its OWN $200 allowance: $198.01 left', [poorerOrder.status, poorerOrder.body.order.n, poorerOrder.body.remainingUsd], [200, 0, 198.01]);
@@ -525,9 +525,9 @@ async function main() {
     // -------------------------------------------------------------------------------------
     console.log('\nMONEY CONSERVATION — follow one dollar through every stage');
     // -------------------------------------------------------------------------------------
-    // What the pool actually paid nadanada is read from the wallet's own ledger, not
-    // recomputed by hand: nadanada charges 95% of the catalogue price in sats (see
-    // site/api/lib/providers/nadanada.js's header comment), and hand-predicting the sat
+    // What the pool actually paid wholesale is read from the wallet's own ledger, not
+    // recomputed by hand: wholesale charges 95% of the catalogue price in sats (see
+    // site/api/lib/providers/wholesale.js's header comment), and hand-predicting the sat
     // rounding would just be re-deriving the same arithmetic the real code already did. The
     // wallet's own before/after balance is the ground truth.
     const paidSats = mockPayer._state.log.reduce((s, l) => s + l.sats, 0);
@@ -536,12 +536,12 @@ async function main() {
     console.log(`  tax collected last week:  ${usd(500)}`);
     console.log(`  claimed by claim.js:      ${usd(claimedUsd)}`);
     console.log(`  moved to Lightning:       ${usd(fundedUsd)} (${fundResult.sats} sats)`);
-    console.log(`  actually paid nadanada:   ${usd(paidUsd)} (${paidSats} sats, for ${mockPayer._state.log.length} eSIMs)`);
+    console.log(`  actually paid wholesale:   ${usd(paidUsd)} (${paidSats} sats, for ${mockPayer._state.log.length} eSIMs)`);
     console.log(`  catalogue credit charged: ${usd(creditSpentUsd)} (what the holders' allowances were debited)`);
     checkThat('the wallet\'s own bookkeeping is exact: sats before minus sats after equals sats actually paid', poolSatsAfterFund - mockPayer._state.sats === paidSats, `${poolSatsAfterFund} - ${mockPayer._state.sats} != ${paidSats}`);
-    checkThat('what was actually paid to nadanada is covered by what was funded', paidUsd <= fundedUsd, `paid ${paidUsd} > funded ${fundedUsd}`);
+    checkThat('what was actually paid to wholesale is covered by what was funded', paidUsd <= fundedUsd, `paid ${paidUsd} > funded ${fundedUsd}`);
     checkThat('what was funded is covered by what was claimed', fundedUsd <= claimedUsd, `funded ${fundedUsd} > claimed ${claimedUsd}`);
-    checkThat('nadanada\'s 5% Lightning discount means the pool paid less than the credit it charged holders', paidUsd < creditSpentUsd, `paid ${paidUsd} >= charged ${creditSpentUsd}`);
+    checkThat('wholesale\'s 5% Lightning discount means the pool paid less than the credit it charged holders', paidUsd < creditSpentUsd, `paid ${paidUsd} >= charged ${creditSpentUsd}`);
     checkThat('no stage lost or invented money: nothing here is negative', escrowBeforeClaim >= 0n && world.treasuryUsdgUnits >= 0n && mockPayer._state.sats >= 0, 'a balance went negative');
 
     // -------------------------------------------------------------------------------------
@@ -576,9 +576,9 @@ async function main() {
     // -------------------------------------------------------------------------------------
     console.log('\nSTAGE 8 — scripts/treasury.js reports the pool');
     // -------------------------------------------------------------------------------------
-    const nadanadaProvider = providers.provider();   // ESIM_PROVIDER=nadanada, still set from STAGE 5/6/7
+    const wholesaleProvider = providers.provider();   // ESIM_PROVIDER=wholesale, still set from STAGE 5/6/7
     const claimsWritten = JSON.parse(fs.readFileSync(OUT.claims, 'utf8'));
-    const treasuryResult = await T.run({ rpc: rawRpc, config: CONFIG, addresses: ADDRESSES, provider: nadanadaProvider, claims: claimsWritten, out: OUT.treasury, log: (m) => console.log('  ' + m) });
+    const treasuryResult = await T.run({ rpc: rawRpc, config: CONFIG, addresses: ADDRESSES, provider: wholesaleProvider, claims: claimsWritten, out: OUT.treasury, log: (m) => console.log('  ' + m) });
     const td = treasuryResult.data;
     console.log(`  treasury: ${td.status}, wallet ${usd(td.walletUsd)}, escrow ${usd(td.escrowClaimableUsd)}, pool ${usd(td.reseller.balanceUsd)} (${td.reseller.sats} sats), ${td.redemptions30d} redemption(s) / ${usd(td.spend30dUsd)}`);
     check('the still-unclaimed week-WEEK tax shows up as claimable escrow: exactly $210.00', td.escrowClaimableUsd, 210);

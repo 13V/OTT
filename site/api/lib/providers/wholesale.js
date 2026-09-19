@@ -1,9 +1,8 @@
 'use strict';
 /**
- * nadanada — the eSIM provider. nadanada.me, paid by Lightning, no account, no API key.
+ * wholesale — the private eSIM provider, paid by Lightning, with no customer-facing account.
  *
- * Verified against the live API (https://nadanada.me/api/v2, OpenAPI at /api/v2/openapi.json) on
- * 15 Sep 2026:
+ * The endpoint is intentionally absent from the repository and supplied at deploy time. Its API:
  *   - GET  /esim/bundles?country=DE and /esim/portfolio list bundles by name (fixed_1GB_7D_DE) with
  *     a dollar price. scripts/catalogue.js turns that into site/config/esim.json.
  *   - POST /esim/purchase { bundleName, slug, paymentMethod: "lightning" } answers a checkoutId, a
@@ -23,7 +22,7 @@
  * already" is answered by the wallet (payer.sent) before any invoice is paid a second time.
  *
  * Before paying, the invoice is decoded (lib/bolt11.js) and refused unless it carries the payment
- * hash nadanada quoted, an amount, and an amount that is the quoted price at the wallet's own
+ * hash wholesale quoted, an amount, and an amount that is the quoted price at the wallet's own
  * BTC price to within a tenth; and the quoted price is refused if it is above the catalogue's.
  * The credit charged to the trader is the catalogue (list) price; the pool pays the Lightning
  * price, and the difference is what covers routing fees and the swap into sats.
@@ -37,10 +36,14 @@ const bolt11 = require('../bolt11');
 const { store: chooseStore } = require('../store');
 const { payer: choosePayer } = require('../payers');
 
-const BASE = () => (process.env.NADANADA_BASE_URL || 'https://nadanada.me/api/v2').replace(/\/$/, '');
+function BASE() {
+  const value = String(process.env.WHOLESALE_BASE_URL || '').trim();
+  if (!value) throw fail('the private provider endpoint is not configured', 503);
+  return value.replace(/\/$/, '');
+}
 // How long order() waits for the profile after paying. Read per call: it is the one knob a
 // deployment tunes to its function's wall-clock budget.
-const COMPLETE_WAIT_MS = () => Number(process.env.NADANADA_COMPLETE_WAIT_MS || 12000);
+const COMPLETE_WAIT_MS = () => Number(process.env.WHOLESALE_COMPLETE_WAIT_MS || 12000);
 const COMPLETE_POLL_MS = 1500;
 const FETCH_TIMEOUT_MS = 15000;
 const MIN_GAP_MS = 100;
@@ -56,14 +59,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(message, status) { const e = new Error(message); if (status) e.status = status; return e; }
 
-/** A URL we are willing to put behind a link, or nothing. Both install links nadanada sends are https. */
+/** A URL we are willing to put behind a link, or nothing. Both install links wholesale sends are https. */
 const httpsOnly = (u) => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
 
 /** The store, refusing the forgetful one unless a test says so in the environment. */
 function storeFor() {
   const s = chooseStore();
-  if (s.name === 'memory' && process.env.NADANADA_ALLOW_MEMORY_STORE !== '1') {
-    throw fail('nadanada needs a durable store (KV_REST_API_URL + KV_REST_API_TOKEN); an in-memory one would forget paid orders', 503);
+  if (s.name === 'memory' && process.env.WHOLESALE_ALLOW_MEMORY_STORE !== '1') {
+    throw fail('wholesale needs a durable store (KV_REST_API_URL + KV_REST_API_TOKEN); an in-memory one would forget paid orders', 503);
   }
   return s;
 }
@@ -100,14 +103,14 @@ async function api(method, path, body) {
 
 const errorOf = (r, what) => (r.json && (r.json.error || r.json.message))
   ? String(r.json.error || r.json.message)
-  : 'nadanada answered HTTP ' + r.status + (r.json ? '' : ' with no JSON') + ' on ' + what;
+  : 'wholesale answered HTTP ' + r.status + (r.json ? '' : ' with no JSON') + ' on ' + what;
 
 async function purchase({ bundleName, slug, iccid }) {
   const path = iccid ? '/esim/' + encodeURIComponent(iccid) + '/purchase' : '/esim/purchase';
   const r = await api('POST', path, { bundleName, slug, paymentMethod: 'lightning' });
   if (r.status !== 200 || !r.json || !r.json.success || !r.json.data) {
-    const e = fail('nadanada refused the order: ' + errorOf(r, 'purchase'), 502);
-    // Marked so order() can fall back to a new eSIM: nadanada warns that not every bundle can
+    const e = fail('wholesale refused the order: ' + errorOf(r, 'purchase'), 502);
+    // Marked so order() can fall back to a new eSIM: wholesale warns that not every bundle can
     // join every profile. Nothing has been paid at this point, so the fallback costs a round trip.
     if (iccid) e.topupRefused = true;
     throw e;
@@ -135,7 +138,7 @@ async function complete(paymentHash, iccid) {
 // ---------------------------------------------------------------------------------------------
 // One eSIM per wallet, topped up.
 //
-// nadanada's bundles run consecutively on a profile, not concurrently: a top-up queues behind
+// wholesale's bundles run consecutively on a profile, not concurrently: a top-up queues behind
 // whatever is running and starts the moment that one ends, and a bundle's validity does not begin
 // until the phone first connects to a network in its region. So the right thing to give a holder
 // every week is another bundle on the SIM they already have — not another SIM. Ten weekly claims
@@ -215,7 +218,7 @@ function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote,
   return {
     transactionId, attempt, address: String(address || '').toLowerCase(), packageCode, slug,
     // The profile this bundle joins, empty when it is a new eSIM. It decides which pair of
-    // nadanada endpoints completes the order, so it is written before the invoice is ever paid.
+    // wholesale endpoints completes the order, so it is written before the invoice is ever paid.
     topupOf: String(topupOf || ''),
     checkoutId: quote.checkoutId || '', paymentHash: inv.paymentHash, paymentRequest: quote.paymentRequest,
     providerBundleName: quote.providerBundleName || '',
@@ -295,14 +298,14 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
   if (c.done) return finish(store, rec, c.data);
   if (c.gone) {
     // Unpaid and gone: the order never happened. Paid and gone: money out and no eSIM — stays
-    // visible, with the reason, for a person to take up with nadanada.
-    if (rec.step === 'paid') { rec.error = 'paid, but nadanada no longer knows the checkout: ' + c.error; await save(store, rec); return rec; }
+    // visible, with the reason, for a person to take up with wholesale.
+    if (rec.step === 'paid') { rec.error = 'paid, but wholesale no longer knows the checkout: ' + c.error; await save(store, rec); return rec; }
     rec.step = 'failed'; rec.error = c.error; await save(store, rec);
     return null;
   }
   if (!c.unpaid) {
     if (rec.step === 'paid') { rec.error = c.error; await save(store, rec); return rec; }
-    throw fail('nadanada could not confirm the order: ' + c.error, 502);
+    throw fail('wholesale could not confirm the order: ' + c.error, 502);
   }
 
   // 2. Not settled on their side. What does our wallet say?
@@ -364,7 +367,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
 }
 
 module.exports = {
-  name: 'nadanada',
+  name: 'wholesale',
 
   async find(transactionId) {
     const store = storeFor();
@@ -374,11 +377,11 @@ module.exports = {
   },
 
   /**
-   * A new eSIM for this redemption id, or the one already under way. `packageCode` is nadanada's
+   * A new eSIM for this redemption id, or the one already under way. `packageCode` is wholesale's
    * bundle name, `slug` the place it is priced for, `priceUsd` the catalogue price the trader is
-   * being charged, `address` the wallet (recorded for support; nadanada is never told).
+   * being charged, `address` the wallet (recorded for support; wholesale is never told).
    *
-   * The id is claimed in the store BEFORE nadanada is asked for a quote, so two requests racing
+   * The id is claimed in the store BEFORE wholesale is asked for a quote, so two requests racing
    * for the same redemption produce one invoice: the loser waits for the winner's record and
    * carries that. A claim whose owner died before quoting goes stale after a minute and is
    * replaced; nothing was paid on it.
@@ -446,20 +449,20 @@ module.exports = {
         topupOf = '';
         quote = await purchase({ bundleName: packageCode, slug });
       }
-      if (!quote.paymentRequest || !quote.paymentHash) throw fail('nadanada returned no Lightning invoice', 502);
+      if (!quote.paymentRequest || !quote.paymentHash) throw fail('wholesale returned no Lightning invoice', 502);
       // A top-up quote names the profile it is for. If that is not the profile we asked to top up,
       // paying this invoice would put a holder's data on someone else's SIM — refuse before the
       // money moves rather than rely on their 403 at completion, when it is already spent.
       if (topupOf && quote.iccid && String(quote.iccid) !== topupOf) {
-        throw fail('nadanada quoted a top-up for a different eSIM than the one asked for', 502);
+        throw fail('wholesale quoted a top-up for a different eSIM than the one asked for', 502);
       }
-      try { inv = bolt11.decode(quote.paymentRequest); } catch (e) { throw fail('nadanada returned an invoice that does not decode: ' + e.message, 502); }
-      if (inv.paymentHash !== String(quote.paymentHash).toLowerCase()) throw fail('nadanada\'s invoice does not carry the payment hash it quoted', 502);
-      if (inv.sats === null) throw fail('nadanada returned an invoice with no amount', 502);
+      try { inv = bolt11.decode(quote.paymentRequest); } catch (e) { throw fail('wholesale returned an invoice that does not decode: ' + e.message, 502); }
+      if (inv.paymentHash !== String(quote.paymentHash).toLowerCase()) throw fail('wholesale\'s invoice does not carry the payment hash it quoted', 502);
+      if (inv.sats === null) throw fail('wholesale returned an invoice with no amount', 502);
       const price = Number(quote.price);
-      if (!(price > 0)) throw fail('nadanada quoted no price', 502);
+      if (!(price > 0)) throw fail('wholesale quoted no price', 502);
       if (price > Number(priceUsd) * (1 + PRICE_TOLERANCE) + 1e-9) {
-        throw fail('the catalogue is stale: ' + packageCode + ' is $' + price.toFixed(2) + ' at nadanada and $' + Number(priceUsd).toFixed(2) + ' here', 503);
+        throw fail('the catalogue is stale: ' + packageCode + ' is $' + price.toFixed(2) + ' at wholesale and $' + Number(priceUsd).toFixed(2) + ' here', 503);
       }
       const rate = await payer.usdPerSat();
       const invUsd = inv.sats * rate;
@@ -509,10 +512,10 @@ module.exports = {
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   },
 
-  /** Profile status and usage for an issued eSIM, straight from nadanada. */
+  /** Profile status and usage for an issued eSIM, straight from wholesale. */
   async status(iccid) {
     const r = await api('GET', '/esim/' + encodeURIComponent(iccid));
-    if (r.status !== 200 || !r.json || !r.json.success) throw fail('nadanada could not report on ' + iccid + ': ' + errorOf(r, 'status'), 502);
+    if (r.status !== 200 || !r.json || !r.json.success) throw fail('wholesale could not report on ' + iccid + ': ' + errorOf(r, 'status'), 502);
     return r.json.data;
   },
 

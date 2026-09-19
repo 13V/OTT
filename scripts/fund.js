@@ -3,7 +3,7 @@
 /**
  * fund.js — move the creator tax from the treasury wallet into the Lightning wallet that pays for eSIMs.
  *
- * The tax arrives as USDG on Robinhood Chain (scripts/claim.js sweeps it there). nadanada wants
+ * The tax arrives as USDG on Robinhood Chain (scripts/claim.js sweeps it there). wholesale wants
  * sats over Lightning. Three hops, each with an API, none needing a person:
  *
  *   1. Blink: an invoice on the pool's wallet for the sats to receive.

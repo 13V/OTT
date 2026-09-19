@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * The nadanada provider, against a fake of nadanada that behaves the way the real API was observed
+ * The wholesale provider, against a fake of wholesale that behaves the way the real API was observed
  * to on 15 Sep 2026 (purchase → bolt11 invoice + payment hash; complete → 402 until the invoice
  * is paid, 404 for a checkout it does not know, 200 with the installation details once paid), the
  * mock Lightning payer standing in for Blink, and the in-memory store standing in for Upstash.
@@ -13,14 +13,14 @@
  * a step can be interrupted (a wallet that is broke, pending, or down; a profile that is slow; an
  * invoice that dies) resumes from where it stopped.
  *
- *   node test/nadanada.test.js
+ *   node test/wholesale.test.js
  */
 const path = require('path');
 
 const LIB = path.join(__dirname, '..', 'site', 'api', 'lib');
 const mockPayer = require(path.join(LIB, 'payers', 'mock.js'));
 const S = require(path.join(LIB, 'store.js'));
-const fakeNadanada = require(path.join(__dirname, 'support', 'fake-nadanada.js'));
+const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -41,27 +41,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const round2 = (x) => Math.round(x * 100) / 100;
 
 // --------------------------------------------------------------------------- fixtures
-// The fake nadanada itself lives in test/support/fake-nadanada.js, shared with
-// test/redeem-nadanada.test.js so there is exactly one fake to keep faithful to the real API.
+// The fake wholesale itself lives in test/support/fake-wholesale.js, shared with
+// test/redeem-wholesale.test.js so there is exactly one fake to keep faithful to the real API.
 const DE = { packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99, address: '0xAbCd000000000000000000000000000000000001' };
 const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99, address: DE.address };
 
 (async () => {
-  const fake = await fakeNadanada.start({ mockPayer });
-  process.env.NADANADA_BASE_URL = fake.base;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  const fake = await fakeWholesale.start({ mockPayer });
+  process.env.WHOLESALE_BASE_URL = fake.base;
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
   process.env.LN_PAYER = 'mock';
   process.env.STORE = 'memory';
-  delete process.env.NADANADA_ALLOW_MEMORY_STORE;
+  delete process.env.WHOLESALE_ALLOW_MEMORY_STORE;
   const state = fake.state;
   const purchases = fake.purchases;
   const completes = fake.completes;
-  const prov = require(path.join(LIB, 'providers', 'nadanada.js'));
+  const prov = require(path.join(LIB, 'providers', 'wholesale.js'));
   const store = () => S.store();
 
   console.log('the store guard');
   await rejects('an in-memory store is refused unless a test says so', prov.find('wf-x'), /durable store/, 503);
-  process.env.NADANADA_ALLOW_MEMORY_STORE = '1';
+  process.env.WHOLESALE_ALLOW_MEMORY_STORE = '1';
   check('with the flag, an unknown id is null', await prov.find('wf-x'), null);
 
   console.log('\nan order, start to finish');
@@ -69,7 +69,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   check('the purchase named the bundle, its place and Lightning', state.log.find((l) => l.path === '/esim/purchase').body, { bundleName: 'fixed_1GB_7D_DE', slug: 'germany', paymentMethod: 'lightning' });
   check('the invoice was paid once, with a memo naming the order', mockPayer._state.log.map((l) => [l.sats, l.memo]), [[Math.round(1.89 / 0.0008), 'OT+T wf-aaaa0001']]);
   check('the order is done, with the profile', [o1.step, o1.stage, o1.pending, o1.iccid.length, o1.qrCodeUrl, o1.ac, o1.smdpAddress, o1.matchingId],
-    ['done', 'done', false, 19, 'https://nadanada.me/qr/' + o1.iccid + '.png', 'LPA:1$rsp.example.com$' + o1.iccid.slice(-6), 'rsp.example.com', o1.iccid.slice(-6)]);
+    ['done', 'done', false, 19, 'https://provider.example/qr/' + o1.iccid + '.png', 'LPA:1$rsp.example.com$' + o1.iccid.slice(-6), 'rsp.example.com', o1.iccid.slice(-6)]);
   checkThat('and the install links', /^https:\/\/esimsetup\.apple\.com/.test(o1.appleInstallUrl) && /android/.test(o1.androidInstallUrl), JSON.stringify([o1.appleInstallUrl, o1.androidInstallUrl]));
   check('it charged the catalogue price and paid the Lightning price', [o1.priceUsd, o1.paidUsd, o1.sats, o1.packageCode], [1.99, 1.89, Math.round(1.89 / 0.0008), 'fixed_1GB_7D_DE']);
   check('the wallet is recorded, lower-cased, for support', o1.address, DE.address.toLowerCase());
@@ -95,7 +95,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   state.tamper = 'sats';
   await rejects('an invoice for three times the price in sats is refused', prov.order(Object.assign({ transactionId: 'wf-bbbb0003' }, DE)), /against a price/, 502);
   state.tamper = '';
-  await rejects('a bundle nadanada does not price for that place is refused with their words', prov.order({ transactionId: 'wf-bbbb0004', packageCode: 'fixed_1GB_7D_DE', slug: 'france', priceUsd: 1.99 }), /does not match slug/, 502);
+  await rejects('a bundle wholesale does not price for that place is refused with their words', prov.order({ transactionId: 'wf-bbbb0004', packageCode: 'fixed_1GB_7D_DE', slug: 'france', priceUsd: 1.99 }), /does not match slug/, 502);
   check('three quotes were asked for, none paid, none recorded', [purchases() - p, mockPayer._state.log.length - paid, await prov.find('wf-bbbb0001'), await prov.find('wf-bbbb0002'), await prov.find('wf-bbbb0003')], [4, 0, null, null, null]);
 
   console.log('\na wallet that cannot pay');
@@ -143,7 +143,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   mockPayer._state.mode = 'success';
 
   console.log('\na profile slower than the function will wait');
-  process.env.NADANADA_COMPLETE_WAIT_MS = '0';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '0';
   state.settleAfterCalls = 2;
   const o6 = await prov.order(Object.assign({ transactionId: 'wf-0000a001' }, DE));
   check('order() returns it paid and pending', [o6.pending, o6.stage, typeof o6.paidAt], [true, 'paid', 'string']);
@@ -152,7 +152,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   const f6b = await prov.find('wf-0000a001');
   check('a later look finds the profile', [f6b.pending, f6b.stage, f6b.iccid.length], [false, 'done', 19]);
   state.settleAfterCalls = 1;
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
   const t0 = Date.now();
   const o7 = await prov.order(Object.assign({ transactionId: 'wf-0000a002' }, DE));
   check('with patience, order() waits it out', [o7.stage, Date.now() - t0 >= 1000], ['done', true]);
@@ -169,7 +169,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   check('and nothing was paid', mockPayer._state.log.length - paid, 0);
   mockPayer._state.mode = 'success';
 
-  console.log('\na checkout nadanada has forgotten');
+  console.log('\na checkout wholesale has forgotten');
   mockPayer._state.mode = 'broke';
   await rejects('an unpaid invoice', prov.order(Object.assign({ transactionId: 'wf-0000c001' }, DE)), /could not pay/);
   mockPayer._state.mode = 'success';
@@ -178,7 +178,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   check('unpaid and gone is not a redemption', [await prov.find('wf-0000c001'), (await store().get('order:wf-0000c001')).step], [null, 'failed']);
   rec = await store().get('order:wf-0000a002');
   state.checkouts.get(rec.paymentHash).gone = true;
-  check('but a paid, done order is untouched by nadanada forgetting it', (await prov.find('wf-0000a002')).stage, 'done');
+  check('but a paid, done order is untouched by wholesale forgetting it', (await prov.find('wf-0000a002')).stage, 'done');
 
   console.log('\ntwo requests racing for one fresh id');
   p = purchases(); paid = mockPayer._state.log.length;
@@ -187,7 +187,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
     prov.order(Object.assign({ transactionId: 'wf-0000d001' }, DE)),
   ]);
   check('both get the same done order', [ra.stage, rb.stage, ra.iccid === rb.iccid, ra.paymentHash === rb.paymentHash], ['done', 'done', true, true]);
-  check('one quote at nadanada, one payment from the wallet', [purchases() - p, mockPayer._state.log.length - paid], [1, 1]);
+  check('one quote at wholesale, one payment from the wallet', [purchases() - p, mockPayer._state.log.length - paid], [1, 1]);
 
   console.log('\na claim whose owner died before quoting');
   await store().set('order:wf-0000e001', { transactionId: 'wf-0000e001', attempt: 'gone', packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99, step: 'claiming', createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), error: '' });
@@ -196,7 +196,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   const o9 = await prov.order(Object.assign({ transactionId: 'wf-0000e001' }, DE));
   check('a stale claim is replaced and the order goes through', [o9.stage, purchases() - p], ['done', 1]);
   await store().set('order:wf-0000e002', { transactionId: 'wf-0000e002', attempt: 'busy', packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99, step: 'claiming', createdAt: new Date().toISOString(), error: '' });
-  process.env.NADANADA_COMPLETE_WAIT_MS = '0';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '0';
   const t9 = Date.now();
   // With no patience to wait, a fresh claim held by someone else is a 503 after a minute at most;
   // here the claim goes stale in the store first, which is the same answer sooner.
@@ -207,7 +207,7 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   await store().set('order:wf-0000e002', held);
   await rejects('a fresh claim held by another request is waited on, then given up', stalePromise, /still being placed/, 503);
   checkThat('without minting anything', Date.now() - t9 < 5000);
-  process.env.NADANADA_COMPLETE_WAIT_MS = '3000';
+  process.env.WHOLESALE_COMPLETE_WAIT_MS = '3000';
 
   console.log('\nthe recent index');
   const recent = await prov.listOrders({ sinceIso: new Date(Date.now() - 60000).toISOString() });

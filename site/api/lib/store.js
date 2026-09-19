@@ -1,9 +1,9 @@
 'use strict';
 /**
- * store — the one piece of state the nadanada provider needs, and the only database this site has.
+ * store — the one piece of state the wholesale provider needs, and the only database this site has.
  *
  * The eSIM Access provider needed none: its own order history could be paged and matched by
- * transactionId, so the reseller was the ledger. nadanada has no listing endpoint and no account —
+ * transactionId, so the reseller was the ledger. wholesale has no listing endpoint and no account —
  * an order is a Lightning invoice, a payment, and a completion call, and nothing on their side
  * says which wallet any of it belonged to. So the redeem function keeps that record itself, in a
  * Redis it reaches over HTTPS (Upstash, which Vercel's marketplace provisions and configures with
@@ -12,7 +12,7 @@
  * instances), ZADD and ZRANGEBYSCORE for a recent-orders index the treasury monitor reads.
  *
  * The in-memory store behind STORE=memory is for tests and for a keyless deploy with the mock
- * provider. It forgets on every cold start, which is why the nadanada provider will not run on it
+ * provider. It forgets on every cold start, which is why the wholesale provider will not run on it
  * unless told to in so many words: a paid order that is forgotten is money gone and no eSIM.
  */
 const FETCH_TIMEOUT_MS = 5000;

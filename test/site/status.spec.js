@@ -34,7 +34,7 @@ const CUR_WEEK = weekOf(Math.floor(Date.now() / 1000));
 const CUR_WEEK_START = weekStartOf(CUR_WEEK);
 const fmtDate = (s) => new Date(s * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-// Three places across five nadanada packages — the same catalogue shape test/site/data.spec.js
+// Three places across five wholesale packages — the same catalogue shape test/site/data.spec.js
 // uses, so the arithmetic below is the same arithmetic that file already proves correct: Germany's
 // 10 GB for $7.99 is 80c/GB (cheapest per gigabyte), Global's 1 GB for $8.99 is $8.99/GB (dearest
 // per gigabyte), and Europe's 1 GB for $1.19 is the cheapest package to just buy.
@@ -45,7 +45,7 @@ const PACKAGES = [
   { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 5, days: 30, priceUsd: 4.99, regions: 'DE' },
   { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE' },
 ];
-const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'nadanada', catalogueAt: '2026-09-01', packages: PACKAGES, brand: BRAND };
+const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'wholesale', catalogueAt: '2026-09-01', packages: PACKAGES, brand: BRAND };
 const NOT_LAUNCHED = Object.assign({ coin: '', curve: '', treasury: '' }, base);
 const LAUNCHED = Object.assign({ coin: COIN, curve: CURVE, treasury: TREASURY }, base);
 
@@ -66,13 +66,13 @@ const TXHASH = '0x' + 'ab'.repeat(32);
 // A fully healthy /api/status: every check ok, the pool reading present, the coin launched.
 const API_OK = {
   ok: true, asOf: NOW, brand: BRAND,
-  config: { launched: true, coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'nadanada', packages: 5, places: 3, catalogueAt: '2026-09-01', budgetBps: 10000, taxBps: 1000 },
-  wiring: { provider: 'nadanada', payer: 'blink', store: 'vercel-kv' },
+  config: { launched: true, coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'wholesale', packages: 5, places: 3, catalogueAt: '2026-09-01', budgetBps: 10000, taxBps: 1000 },
+  wiring: { provider: 'wholesale', payer: 'blink', store: 'vercel-kv' },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
   checks: {
     store: { ok: true, detail: 'vercel-kv reachable' },
     payer: { ok: true, detail: 'blink wallet reachable, balance readable' },
-    provider: { ok: true, detail: 'nadanada reachable' },
+    provider: { ok: true, detail: 'catalogue reachable' },
     allowances: { ok: true, detail: 'allowances.json is fresh' },
   },
   pool: { usd: 812.34, sats: 1500000 },
@@ -101,7 +101,7 @@ const ALLOWANCES_FRESH = {
 // status.js uses (2h for the indexer, 48h for the two daily keepers), so every health row reads ok.
 const TREASURY_FRESH = {
   asOf: NOW - 60, treasury: TREASURY, escrowClaimableUsd: 88.10, walletUsd: 15.00,
-  reseller: { name: 'nadanada', balanceUsd: 812.34, sats: 1500000, asOf: NOW - 60 },
+  reseller: { name: 'wholesale', balanceUsd: 812.34, sats: 1500000, asOf: NOW - 60 },
   spend30dUsd: 55.20, redemptions30d: 9, perDayUsd: 1.84, runwayDays: 240,
   lastClaim: { at: NOW - 3600, kind: 'usdg', amount: 41.70, txHash: TXHASH }, status: 'funded',
 };
@@ -155,8 +155,8 @@ test('fully wired and launched: every health row is ok, and every section shows 
   await expect(page.locator('.status-dot.warn')).toHaveCount(0);
   await expect(page.locator('.status-dot.off')).toHaveCount(0);
   await expect(rowByName(page, 'The coin')).toContainText('launched');
-  await expect(rowByName(page, 'Provider')).toContainText('Provider · nadanada');
-  await expect(rowByName(page, 'Provider')).toContainText('nadanada reachable');
+  await expect(rowByName(page, 'Network partner')).toContainText('Network partner');
+  await expect(rowByName(page, 'Network partner')).toContainText('catalogue reachable');
   await expect(rowByName(page, 'Lightning wallet')).toContainText('Lightning wallet · blink');
   await expect(rowByName(page, 'Store')).toContainText('Store · vercel-kv');
   await expect(rowByName(page, 'Indexer')).toContainText(/updated .*ago/);
@@ -216,7 +216,7 @@ test('fully wired and launched: every health row is ok, and every section shows 
   // The catalogue: from config/esim.json — 3 places, 5 packages, cheapest $1.19 (Europe), per
   // gigabyte $0.80 (Germany) to $8.99 (Global), catalogue dated Sep 1, 2026.
   const catalogue = cardByTitle(page, 'The catalogue');
-  await expect(catalogue).toContainText('nadanada');
+  await expect(catalogue).toContainText('Connected');
   await expect(catalogue).toContainText('$1.19');
   await expect(catalogue).toContainText('Europe · 1 GB');
   await expect(catalogue).toContainText('$0.80 – $8.99');
@@ -238,7 +238,7 @@ test('nothing configured: the store and payer checks fail, and the page shows th
 
   await page.goto('/index.html#/status');
   // The store is load-bearing (nothing can be recorded without it) so a failing check is off; the
-  // payer only blocks the last step of a redeem (paying nadanada) so a failing check is a narrower
+  // payer only blocks the last step of a redeem (paying wholesale) so a failing check is a narrower
   // warn — the two rows are deliberately not the same state.
   const payerRow = rowByName(page, 'Lightning wallet');
   await expect(payerRow.locator('.status-dot')).toHaveClass(/warn/);
@@ -280,7 +280,7 @@ test('the health endpoint is absent (404): the page still renders every section,
   await expect(cardByTitle(page, 'The coin')).toContainText('$6,500.00');
   await expect(cardByTitle(page, 'The treasury')).toContainText('$88.10');
   await expect(cardByTitle(page, 'The programme')).toContainText('$400.00');
-  await expect(cardByTitle(page, 'The catalogue')).toContainText('nadanada');
+  await expect(cardByTitle(page, 'The catalogue')).toContainText('Connected');
   const pool = cardByTitle(page, 'The pool');
   await expect(pool).toContainText('the health check could not be reached');
   await expect(pool).toContainText('240 days');   // runway still comes from treasury.json
@@ -325,7 +325,7 @@ test('not launched: the coin section is the honest line plus a link out to the l
   await expect(rowByName(page, 'Funding keeper')).toContainText('nothing to fund yet');
 
   // The catalogue does not gate on launch state — it is read straight from config/esim.json.
-  await expect(cardByTitle(page, 'The catalogue')).toContainText('nadanada');
+  await expect(cardByTitle(page, 'The catalogue')).toContainText('Connected');
   await expect(cardByTitle(page, 'The catalogue')).toContainText('Sep 1, 2026');
 
   expect(chainCallMade).toBe(false);

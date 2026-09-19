@@ -5,7 +5,7 @@
  *
  * The one promise the Data page makes that a trader cannot check on chain is that the balance
  * behind the redeem button is real. So this writes it down, in public, every half hour:
- * site/data/treasury.json carries the pool's balance (the Lightning wallet that pays nadanada, or
+ * site/data/treasury.json carries the pool's balance (the Lightning wallet that pays wholesale, or
  * the reseller account for eSIM Access), what the last thirty days of redemptions
  * cost, the runway those two numbers imply, what is still claimable in Pons's escrow, what the
  * treasury wallet holds, and when it was last paid. The page shows it as a card; the workflow
@@ -13,7 +13,7 @@
  * number.
  *
  *   node scripts/treasury.js                       # writes site/data/treasury.json
- *   ESIM_PROVIDER=nadanada BLINK_API_KEY=… KV_REST_API_URL=… KV_REST_API_TOKEN=… node scripts/treasury.js
+ *   ESIM_PROVIDER=wholesale BLINK_API_KEY=… KV_REST_API_URL=… KV_REST_API_TOKEN=… node scripts/treasury.js
  *   ESIM_PROVIDER=esimaccess ESIMACCESS_ACCESS_CODE=… node scripts/treasury.js
  *
  * Without a provider the pool side is null and the status is "unknown" — the chain side is still
@@ -53,7 +53,7 @@ function priceOf(order, config) {
 
 /**
  * Spend over the trailing window, from the provider's order records. A record that says what the
- * pool actually paid (nadanada's `paidUsd`, the Lightning price) is counted at that; one that does
+ * pool actually paid (wholesale's `paidUsd`, the Lightning price) is counted at that; one that does
  * not (eSIM Access) is counted at the catalogue price.
  */
 function summarise({ orders, config, now, days = DAYS }) {
@@ -111,7 +111,7 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     log('  no treasury in esim.json yet; chain side skipped');
   }
 
-  // Provider side: only with a provider that can answer. For nadanada the balance is the Lightning
+  // Provider side: only with a provider that can answer. For wholesale the balance is the Lightning
   // wallet's (Blink), in sats at its own price, and the sats are written down beside the dollars.
   let reseller = null, spend = { spendUsd: 0, count: 0, perDayUsd: 0, days: DAYS };
   if (provider && typeof provider.balanceUsd === 'function') {
@@ -124,7 +124,7 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
       spend = summarise({ orders, config, now: now() });
       reseller = { name: provider.name, balanceUsd, asOf };
       if (Number.isFinite(Number(bal.sats))) reseller.sats = Math.round(Number(bal.sats));
-      if (provider.name === 'nadanada') reseller.wallet = process.env.LN_PAYER || 'blink';
+      if (provider.name === 'wholesale') reseller.wallet = process.env.LN_PAYER || 'blink';
     } catch (e) {
       log(`  reseller read failed: ${e.message}`);
       reseller = { name: provider.name, balanceUsd: null, asOf, error: String(e.message || e).slice(0, 120) };
@@ -165,7 +165,7 @@ if (require.main === module) {
   const A = require(path.join(__dirname, 'allowances.js'));
   const addresses = readJson(ADDRESSES_PATH, {});
   const endpoints = addresses.rpcs && addresses.rpcs.length ? addresses.rpcs : [addresses.rpc];
-  // Which provider: ESIM_PROVIDER names it (nadanada needs BLINK_API_KEY and the store's
+  // Which provider: ESIM_PROVIDER names it (wholesale needs BLINK_API_KEY and the store's
   // KV_REST_API_* pair; esimaccess needs ESIMACCESS_ACCESS_CODE). Without one the reseller side is
   // left unknown rather than guessed.
   let provider = null;

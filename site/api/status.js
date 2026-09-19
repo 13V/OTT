@@ -18,7 +18,7 @@
  * ("Blink answered HTTP 401") never contain a key, but nothing here assumes that stays true.
  *
  * It also never orders anything, never spends anything, and never signs in as anyone. The provider
- * check is a plain catalogue GET (nadanada's own bundle listing), never purchase or complete; the
+ * check is a plain catalogue GET (wholesale's own bundle listing), never purchase or complete; the
  * payer check is a balance read, never a payment; the store check writes and deletes one throwaway
  * key of its own rather than touching an order record.
  *
@@ -27,7 +27,7 @@
  * up the response nor take another check down with it. The endpoint always answers 200 once the
  * method checks out: a failing check is data for the dashboard to show in red, not a reason for
  * this endpoint to fail too. A 20-second in-memory cache (bypassed with ?fresh=1) keeps a dashboard
- * left open, or a refresh loop, from hammering Blink or nadanada on every tick.
+ * left open, or a refresh loop, from hammering Blink or wholesale on every tick.
  *
  * Same file-tracing constraint as redeem.js: Vercel's bundler only follows a literal
  * readFileSync(path.join(__dirname, …)), so esim.json is read that way here too, with the same
@@ -48,7 +48,6 @@ const CHECK_TIMEOUT_MS = 5000;     // how long any one check may take before it 
 const RESPONSE_CACHE_MS = 20 * 1000;
 const PROBE_KEY = 'status:probe';
 const DETAIL_MAX = 200;
-const NADANADA_DEFAULT_BASE = 'https://nadanada.me/api/v2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the deployment's own files, the same way redeem.js does.
@@ -165,7 +164,7 @@ function tryChoose(choose) {
 async function checkStore() {
   const chosen = tryChoose(chooseProvider);
   if (chosen.error) return { ok: false, detail: messageOf(chosen.error) };
-  if (chosen.name !== 'nadanada') return { ok: true, detail: 'not needed by the ' + chosen.name + ' provider' };
+  if (chosen.name !== 'wholesale') return { ok: true, detail: 'not needed by the ' + chosen.name + ' provider' };
   try {
     return await withTimeout((async () => {
       const s = chooseStore();
@@ -188,7 +187,7 @@ async function checkPayer() {
   } catch (e) { return { ok: false, detail: messageOf(e), pool: null }; }
 }
 
-/** How many bundles came back, whichever of the plausible response shapes nadanada used. */
+/** How many bundles came back, whichever of the plausible response shapes wholesale used. */
 function countBundles(json) {
   const data = json && json.data;
   if (Array.isArray(data)) return data.length;
@@ -201,11 +200,12 @@ async function checkProvider() {
   const chosen = tryChoose(chooseProvider);
   if (chosen.error) return { ok: false, detail: messageOf(chosen.error) };
   if (chosen.name === 'mock') return { ok: true, detail: 'the mock provider: nothing to check' };
-  if (chosen.name !== 'nadanada') return { ok: true, detail: chosen.name + ': no liveness probe defined for this provider' };
+  if (chosen.name !== 'wholesale') return { ok: true, detail: chosen.name + ': no liveness probe defined for this provider' };
   try {
-    const base = String(process.env.NADANADA_BASE_URL || NADANADA_DEFAULT_BASE).replace(/\/$/, '');
+    const base = String(process.env.WHOLESALE_BASE_URL || '').trim().replace(/\/$/, '');
+    if (!base) throw new Error('the private provider endpoint is not configured');
     const json = await withTimeout(fetchJson(base + '/esim/bundles?country=DE', { timeoutMs: CHECK_TIMEOUT_MS }), CHECK_TIMEOUT_MS, 'provider');
-    if (!json || json.success === false) throw new Error('nadanada answered with no data');
+    if (!json || json.success === false) throw new Error('the network partner answered with no data');
     return { ok: true, detail: 'catalogue answered, ' + countBundles(json) + ' bundles for germany' };
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
 }

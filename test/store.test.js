@@ -3,7 +3,7 @@
 /**
  * The store: the in-memory one, and the Upstash REST one against a fake that speaks Upstash's
  * wire shape (a JSON array in, { result } out, a bearer token, an { error } when it goes wrong).
- * The properties that matter are the ones the nadanada provider builds on: SET NX claims a key
+ * The properties that matter are the ones the wholesale provider builds on: SET NX claims a key
  * exactly once, values survive a JSON round trip, the recent index comes back in score order, and
  * every key wears the prefix so two deployments can share one database.
  *

@@ -1,7 +1,7 @@
 # Refresh the generated files the site reads: site/data/allowances.json (who has earned how much
 # data credit — scripts/allowances.js, from USDG Transfer logs) and site/data/treasury.json (is the
 # pool funded — scripts/treasury.js, from chain and the pool itself). The first is read-only against
-# a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet nadanada is
+# a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet the provider is
 # paid from, which needs BLINK_API_KEY — and the last 30 days of orders from the store, which needs
 # KV_REST_API_URL and KV_REST_API_TOKEN; with any of them unset it still writes the chain side and
 # marks the pool "unknown". GITHUB_TOKEN is for the commit, and for the issue the alert step opens
@@ -51,7 +51,8 @@ jobs:
       - name: Refresh treasury
         continue-on-error: true
         env:
-          ESIM_PROVIDER: nadanada
+          ESIM_PROVIDER: wholesale
+          WHOLESALE_BASE_URL: ${{ secrets.WHOLESALE_BASE_URL }}
           BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}

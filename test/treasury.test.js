@@ -135,7 +135,7 @@ const SEL = {
     throw new Error('unexpected ' + sel);
   };
   const provider = { name: 'fake', async balanceUsd() { return 412; }, async listOrders() { return orders; } };
-  const lightning = { name: 'nadanada', async balanceUsd() { return 412; }, async balance() { return { sats: 515000, usd: 412, usdPerSat: 0.0008 }; }, async listOrders() { return orders; } };
+  const lightning = { name: 'wholesale', async balanceUsd() { return 412; }, async balance() { return { sats: 515000, usd: 412, usdPerSat: 0.0008 }; }, async listOrders() { return orders; } };
   const claims = [{ at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }];
   r = await T.run({ rpc, config, addresses, provider, claims, now: () => now, out: path.join(tmp, 't1.json') });
   check('the file has every number the card needs', r.data, {
@@ -146,7 +146,7 @@ const SEL = {
   });
   process.env.LN_PAYER = 'blink';
   r = await T.run({ rpc, config, addresses, provider: lightning, claims, now: () => now, out: path.join(tmp, 't1b.json') });
-  check('a Lightning-paid provider also writes the sats and the wallet', r.data.reseller, { name: 'nadanada', balanceUsd: 412, asOf: Math.floor(now / 1000), sats: 515000, wallet: 'blink' });
+  check('a Lightning-paid provider also writes the sats and the wallet', r.data.reseller, { name: 'wholesale', balanceUsd: 412, asOf: Math.floor(now / 1000), sats: 515000, wallet: 'blink' });
   r = await T.run({ rpc, config, addresses, provider: null, claims: [], now: () => now, out: path.join(tmp, 't2.json') });
   check('without a provider the reseller side is null and the status unknown', [r.data.reseller, r.data.status, r.data.escrowClaimableUsd], [null, 'unknown', 123.45]);
   const broken = { name: 'fake', async balanceUsd() { throw new Error('HTTP 503'); } };

@@ -5,7 +5,7 @@
  *
  * OT+T is a phone carrier built out of several moving parts that either work or do not: a coin
  * with a creator tax, an indexer that turns last week's tax and this week's holders into a data
- * budget, a Lightning wallet that pays nadanada for eSIMs, a store that remembers what was ordered,
+ * budget, a Lightning wallet that pays wholesale for eSIMs, a store that remembers what was ordered,
  * and two keepers — one that sweeps the tax out of Pons's escrow, one that tops the Lightning
  * wallet up from it. Nothing here is marketing copy; it is the same six files and one HTTP call
  * every other route reads, laid out so an operator (or a holder wondering why a redeem failed) can
@@ -215,11 +215,13 @@
    * One of the four rows the health endpoint answers for. `critical` decides what "not ok" means:
    * the store and the provider are load-bearing — without a store nothing an order does can be
    * remembered, without the provider no eSIM can be fetched at all — so a failing check there is
-   * off. The payer only blocks the last step (paying nadanada for a profile the provider has
+   * off. The payer only blocks the last step (paying wholesale for a profile the provider has
    * already agreed to issue), which is real but narrower, so a failing check there is a warn.
    */
   function checkRow(ctx, label, wiringName, check, critical) {
-    const name = wiringName ? label + ' · ' + wiringName : label;
+    // Keep the network partner private on the public status page. Wallet and store implementation
+    // names are harmless operational detail, but the fulfilment source is intentionally unnamed.
+    const name = label === 'Provider' ? 'Network partner' : (wiringName ? label + ' · ' + wiringName : label);
     const state = !check || check.ok === undefined || check.ok === null ? 'warn' : (check.ok ? 'ok' : (critical ? 'off' : 'warn'));
     const detail = (check && check.detail) ? String(check.detail) : 'the health check reported nothing for this';
     return statusRow(ctx, state, name, detail);
@@ -335,7 +337,7 @@
     const sats = pool ? numOr(pool.sats) : NaN;
     card.appendChild(h('div', { class: 'stat-grid' },
       fmtTile(ctx, 'Pool balance', balanceUsd, fmtMoney,
-        Number.isFinite(sats) ? sats.toLocaleString('en-US') + ' sats' : 'in the Lightning wallet that pays nadanada',
+        Number.isFinite(sats) ? sats.toLocaleString('en-US') + ' sats' : 'in the Lightning wallet that pays our network partner',
         apiErr ? 'the health check could not be reached (' + apiErr + ')' : 'the health check reported no pool reading', 'wallet'),
       fmtTile(ctx, 'Runway', numOr(t.runwayDays), (n) => n.toLocaleString('en-US') + ' days', 'at the last 30 days’ rate',
         treasErr ? 'data/treasury.json: ' + treasErr : 'no spend yet to measure a rate from', 'clock'),
@@ -424,6 +426,14 @@
     card.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'status-table' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Wallet'), h('th', { class: 'num' }, 'Holds'), h('th', { class: 'num' }, 'Share'), h('th', { class: 'num' }, 'Allowance'))),
       tbody)));
+    // Five rows is a sample, not the ledger. The whole of it lives on its own route rather than
+    // growing this card, because concentration and a search over every wallet are a page's worth of
+    // page and this one already carries five other readings.
+    if (entries.length > top.length) {
+      card.appendChild(h('p', { class: 'small' },
+        h('a', { class: 'status-more-link', href: '#/holders' },
+          'See all ' + entries.length + ' holders →')));
+    }
     return card;
   }
 
@@ -439,13 +449,13 @@
     const lo = cheapest(cfg), hi = dearest(cfg);
     const catDate = cfg.catalogueAt ? fmtCatalogueDate(cfg.catalogueAt) : null;
     card.appendChild(h('div', { class: 'stat-grid' },
-      ctx.tile('Provider', cfg.provider || '—', 'the eSIM reseller', 'shield'),
+      ctx.tile('Network partner', list.length ? 'Connected' : '—', 'private eSIM fulfilment', 'shield'),
       ctx.tile('Places', String(placeCount), placeCount === 1 ? 'place on the menu' : 'places on the menu', 'chart'),
       ctx.tile('Packages', String(list.length), 'fixed-size eSIM packages', 'coins'),
       ctx.tile('Cheapest', cheap ? fmtPrice(cheap.priceUsd) : '—', cheap ? cheap.name + ' · ' + (Number(cheap.gb) || 1) + ' GB' : 'no packages configured', 'wallet'),
       ctx.tile('Per gigabyte', lo ? fmtPrice(perGb(lo)) + (hi && hi !== lo ? ' – ' + fmtPrice(perGb(hi)) : '') : '—',
         lo ? (hi && hi !== lo ? lo.name + ' to ' + hi.name : lo.name) : 'no packages configured', 'flame'),
-      ctx.tile('Catalogue date', catDate || '—', catDate ? 'when ' + (cfg.provider || 'the provider') + ' was last read' : 'not recorded in config/esim.json', 'clock')));
+      ctx.tile('Catalogue date', catDate || '—', catDate ? 'when the provider catalogue was last read' : 'not recorded in config/esim.json', 'clock')));
     return card;
   }
 
