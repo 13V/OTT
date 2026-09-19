@@ -71,6 +71,7 @@ const SEL = {
   claimToken1: chainLib.selector('claimToken(address)'),
   claimToken2: chainLib.selector('claimToken(address,uint256)'),
   claim0: chainLib.selector('claim()'),
+  claim1: chainLib.selector('claim(uint256)'),
 };
 
 (async () => {
@@ -92,6 +93,19 @@ const SEL = {
   r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c2.json'), now: () => 1_800_000_000_000 });
   check('the one-argument claim is simulated first, then sent', [chain.log.simulated, chain.log.sent.map((s) => s.sel)], [[SEL.claimToken1], [SEL.claimToken1]]);
   check('and logged with its hash', JSON.parse(fs.readFileSync(path.join(tmp, 'c2.json'), 'utf8')), [{ at: 1800000000, kind: 'usdg', amount: 41.7, call: 'claimToken(address)', txHash: '0x' + 'ab'.repeat(32), dryRun: false }]);
+
+  // A claim already sent, mined and confirmed must survive a LATER item failing in the same run.
+  // `todo` puts USDG before ether, and the loop throws when every call shape for one of them
+  // reverts — which the escrow's selectors being read off its bytecode rather than its source
+  // makes a live possibility. Writing the log once at the end meant a real, on-chain transaction
+  // vanished from the record because the thing after it went wrong.
+  chain = fakeChain({ usd: 41.7, eth: 1.5, revert: [SEL.claim0, SEL.claim1] });
+  const partial = path.join(tmp, 'c-partial.json');
+  await rejects('a run whose second claim cannot be made fails', C.run({ chain, config, addresses, treasury: TREASURY, out: partial, now: () => 1_800_000_000_000 }), /every claim shape reverts/);
+  check('and the first claim, which really happened, is still in the log',
+    JSON.parse(fs.readFileSync(partial, 'utf8')).map((c) => [c.kind, c.amount, c.txHash]),
+    [['usdg', 41.7, '0x' + 'ab'.repeat(32)]]);
+  check('the ether claim was attempted and is not in the log', chain.log.sent.map((x) => x.sel), [SEL.claimToken1]);
 
   chain = fakeChain({ usd: 41.7, eth: 0, revert: [SEL.claimToken1] });
   r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c3.json') });
@@ -126,6 +140,15 @@ const SEL = {
   check('status: under two weeks', T.statusOf({ balanceUsd: 200, runwayDays: 9 }), 'low');
   check('status: fine', T.statusOf({ balanceUsd: 200, runwayDays: 90 }), 'funded');
   check('status: fine with no spend yet', T.statusOf({ balanceUsd: 200, runwayDays: null }), 'funded');
+  // A pool can be comfortably full by every backward-looking measure and still be unable to pay
+  // what this week has already promised — which is the shape a good week takes, not a bad one.
+  check('status: full by the old measure, short of what this week promised',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 4000 }), 'behind');
+  check('status: enough of the promise covered to be getting on with',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 300 }), 'funded');
+  check('status: nothing promised yet is not behind',
+    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 0 }), 'funded');
+  check('status: empty still beats behind', T.statusOf({ balanceUsd: 0, runwayDays: null, owedUsd: 4000 }), 'empty');
 
   console.log('\ntreasury: the run');
   const rpc = async (method, params) => {
@@ -142,6 +165,7 @@ const SEL = {
     asOf: Math.floor(now / 1000), treasury: TREASURY, escrowClaimableUsd: 123.45, walletUsd: 67.89,
     reseller: { name: 'fake', balanceUsd: 412, asOf: Math.floor(now / 1000) },
     spend30dUsd: 10.44, redemptions30d: 4, perDayUsd: 0.35, runwayDays: 1177,
+    weekBudgetUsd: 0, weekRedeemedUsd: 0, owedUsd: 0,
     lastClaim: { at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }, status: 'funded',
   });
   process.env.LN_PAYER = 'blink';

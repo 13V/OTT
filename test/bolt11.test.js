@@ -52,5 +52,32 @@ check('a testnet invoice names its network', bolt11.decode(bolt11.encode({ sats:
 check('the default expiry is an hour', bolt11.decode(bolt11.encode({ sats: 5, paymentHash: hash, timestamp: 100, expiry: 3600 })).expiresAt, 3700);
 check('a large amount survives', bolt11.decode(bolt11.encode({ sats: 123456789, paymentHash: hash, timestamp: 1 })).sats, 123456789);
 
+console.log('\na duplicate tagged field resolves first-wins, not last');
+// Built by hand rather than through encode() (which only ever writes one of each field): decode
+// a normal invoice back into words, then splice in a second, decoy p/x/d field — equal to nothing
+// in particular except being obviously different from the real one — after the real fields but
+// still before the signature. The attack this defends against: an invoice with the real payment
+// hash AND a decoy equal to whatever hash the payee quoted elsewhere, so a naive last-wins reader
+// checks out the real hash but the decoy is what actually gets paid.
+{
+  const realHash = 'aa'.repeat(32);
+  const decoyHash = 'bb'.repeat(32);
+  const base = bolt11.encode({ sats: 100, paymentHash: realHash, timestamp: 1789400000, expiry: 600, description: 'real' });
+  const { hrp, words } = bolt11.bech32Decode(base);
+  const SIG_WORDS = 104;
+  const head = words.slice(0, words.length - SIG_WORDS);
+  const sig = words.slice(words.length - SIG_WORDS);
+  const fieldWords = (type, data) => [type, Math.floor(data.length / 32), data.length % 32].concat(data);
+  const decoyFields = []
+    .concat(fieldWords(1, bolt11.bytesToWords(Buffer.from(decoyHash, 'hex'))))
+    .concat(fieldWords(6, [9, 9, 9]))                                           // a decoy expiry, nowhere near 600
+    .concat(fieldWords(13, bolt11.bytesToWords(Buffer.from('decoy', 'utf8'))));
+  const tampered = bolt11.bech32Encode(hrp, head.concat(decoyFields, sig));
+  const d = bolt11.decode(tampered);
+  check('payment hash: the first one wins, not a decoy appended after it', d.paymentHash, realHash);
+  check('expiry: first wins too', d.expiry, 600);
+  check('description: first wins too', d.description, 'real');
+}
+
 console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
 process.exit(failures ? 1 : 0);

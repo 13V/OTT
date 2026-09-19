@@ -71,9 +71,28 @@ function flagValue(name) {
 // ---------------------------------------------------------------------------
 
 let rpcId = 1;
+const FETCH_TIMEOUT_MS = 20000;
+
+/**
+ * fetch with a deadline. Every network call in the API layer has had one of these from the start;
+ * the scheduled scripts did not, and a keeper has no user to give up on it — an endpoint that
+ * accepts the connection and then says nothing hangs the step until the job's own wall clock
+ * kills it, which skips the commit and throws away whatever the run had already written. A
+ * retry loop is no help either: it retries around a thrown error, not a hung await.
+ */
+async function timedFetch(url, init = {}, ms = FETCH_TIMEOUT_MS) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, Object.assign({}, init, { signal: ctl.signal }));
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('no answer from ' + String(url).replace(/\?.*$/, '') + ' within ' + Math.round(ms / 1000) + 's');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
 
 async function rpc(method, params = []) {
-  const res = await fetch(CONFIG.rpcUrl, {
+  const res = await timedFetch(CONFIG.rpcUrl, {
     method: 'POST',
     // The Robinhood Chain public RPC sits behind something that 403s a bare script UA.
     headers: { 'content-type': 'application/json', 'user-agent': BROWSER_UA },
@@ -681,6 +700,8 @@ function capUnitsFromUsd(capUsd, feed, tokenDecimals = 18) {
 }
 
 module.exports = {
+  // Shared so every script that reaches the network does so with a deadline; see timedFetch().
+  timedFetch,
   // rpc / env
   rpc,
   env,

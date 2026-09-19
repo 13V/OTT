@@ -47,6 +47,7 @@
 const fs = require('fs');
 const path = require('path');
 const chain = require(path.join(__dirname, 'chain.js'));
+const { timedFetch } = chain;
 
 const SITE = path.join(__dirname, '..', 'site');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
@@ -148,6 +149,19 @@ function foldBalances(logs) {
   for (const [addr, bal] of balances) {
     if (bal === 0n) balances.delete(addr);
   }
+  // A balance cannot be negative, so one that is proves a Transfer INTO that address was never
+  // seen — the only way a token can be sent that was never received. That matters far past the one
+  // wallet: a negative balance is added into `circulating` like any other, shrinking the
+  // denominator every share is divided by, so one missing log inflates every OTHER holder's
+  // allowance in the same run. It is caught here because the alternative is a ledger that looks
+  // entirely plausible and is wrong for everyone.
+  const negative = [...balances].filter(([, bal]) => bal < 0n);
+  if (negative.length) {
+    const e = new Error(`${negative.length} address(es) fold to a negative balance, starting with ${negative[0][0]} at ${negative[0][1]}; `
+      + 'a Transfer was missed, so this scan is incomplete and the shares computed from it would be wrong for everyone');
+    e.incompleteScan = true;
+    throw e;
+  }
   return balances;
 }
 
@@ -218,9 +232,26 @@ function emptyAllowances({ asOf, block = 0, week }) {
   };
 }
 
+/**
+ * The two fields that move on every run whether or not anything happened: when the run was, and
+ * where the chain head was. Both workflows commit only when a data file actually changed — that is
+ * what their own comments promise — and stamping these unconditionally made the guard a no-op, so
+ * every half-hourly run pushed a commit and triggered a full redeploy, forty-eight times a day,
+ * for a file whose contents were identical. Comparing without them is what makes the promise true.
+ */
+function sameButForTheClock(a, b) {
+  if (!a || !b) return false;
+  const strip = (o) => JSON.stringify(o, (k, v) => (k === 'asOf' || k === 'block' ? undefined : v));
+  return strip(a) === strip(b);
+}
+
 function writeAllowances(out, data) {
+  let existing = null;
+  try { existing = JSON.parse(fs.readFileSync(out, 'utf8')); } catch (e) { existing = null; }
+  if (sameButForTheClock(existing, data)) return false;
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +270,7 @@ function makeRpc(endpoints, { pause = PAUSE_MS, log = () => {} } = {}) {
   return async function rpc(method, params, attempt = 0) {
     const url = endpoints[turn++ % endpoints.length];
     try {
-      const res = await fetch(url, {
+      const res = await timedFetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
@@ -308,6 +339,25 @@ async function firstBlockAtOrAfter(rpc, ts, head) {
  * binary-searched against block timestamps instead (firstBlockAtOrAfter), so there is no range
  * limit to argue with, just about 20-something eth_getBlockByNumber calls.
  */
+/*
+ * There is no totalSupply() cross-check here, and the reason is worth writing down because it is
+ * the obvious next guard and it does not work on this chain.
+ *
+ * The fold covers blocks launch..snapshot, so the number to compare it against is the supply AT
+ * the snapshot block — and these endpoints do not honour a historical block tag, which is the very
+ * reason this file reconstructs balances from logs instead of asking balanceOf at a past block in
+ * the first place. A totalSupply() call tagged at the snapshot quietly answers with the supply as
+ * it stands now, so any mint or burn since the boundary would read as a mismatch and refuse to
+ * publish a ledger that is perfectly correct. A guard that fails on healthy input is worse than
+ * no guard: it would be turned off within a week and the real check would go with it.
+ *
+ * What the fold can prove about itself, it proves — see foldBalances(), where a negative balance
+ * is caught. That catches the case that actually corrupts everyone's share: a missed mint makes
+ * one address negative, and a negative balance shrinks `circulating`, which is the denominator
+ * every holder's allowance is divided by. A missed transfer BETWEEN two holders leaves the total
+ * untouched and only those two wallets wrong, which is bad but is not systemic.
+ */
+
 async function launchBlock({ rpc, factory, coin, curve, head, log = () => {} }) {
   try {
     const logs = await rpc('eth_getLogs', [{ address: factory, topics: [LAUNCHED, pad(coin)], fromBlock: '0x0', toBlock: hex(head) }]);
@@ -444,6 +494,14 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
 
   // The snapshot: the last block at or before this week's start, i.e. one block before the first
   // block whose timestamp is past it.
+  // No confirmation-depth margin here, deliberately. The snapshot is the last block at or before
+  // the week boundary — a wall-clock instant, not a distance behind head — so a run starting
+  // seconds after the boundary picks a block only seconds old, and on a chain making one every
+  // tenth of a second a reorg there would invalidate what was read. The mitigation costs more than
+  // the risk: requiring real depth would refuse the first run after every boundary and leave
+  // holders unable to spend for another half hour, every Monday, to guard against a reorg on an
+  // Arbitrum Nitro chain with a single sequencer. The scan itself takes minutes, so the snapshot
+  // is thousands of blocks deep by the time anything is written; what is exposed is only the read.
   const snapshotBlock = (await firstBlockAtOrAfter(rpc, weekStart(wk) + 1, head)) - 1;
   const launchBlk = fromBlock != null ? Number(fromBlock) : await launchBlock({ rpc, factory, coin, curve, head, log });
 

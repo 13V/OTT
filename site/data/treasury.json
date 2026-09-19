@@ -1,18 +1,21 @@
 {
- "asOf": 1789545055,
+ "asOf": 1789558918,
  "treasury": "",
  "escrowClaimableUsd": null,
  "walletUsd": null,
  "reseller": {
   "name": "wholesale",
   "balanceUsd": null,
-  "asOf": 1789545055,
+  "asOf": 1789558918,
   "error": "BLINK_API_KEY is not set"
  },
  "spend30dUsd": 0,
  "redemptions30d": 0,
  "perDayUsd": 0,
  "runwayDays": null,
+ "weekBudgetUsd": 0,
+ "weekRedeemedUsd": 0,
+ "owedUsd": 0,
  "lastClaim": null,
  "status": "unknown"
 }

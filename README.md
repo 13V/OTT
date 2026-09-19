@@ -194,11 +194,39 @@ ledger and an "unknown" pool rather than fail, which is what a fresh clone actua
 
 In Vercel's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
 `KV_REST_API_URL` and `KV_REST_API_TOKEN` (Upstash for Redis, provisioned from the Vercel
-Marketplace, sets the last two itself). Keep `WHOLESALE_BASE_URL` private—it is deliberately not
-present in the source tree. As repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
-`KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`. Until the
-coin is launched — `site/config/esim.json`'s `coin` field is empty — the deploy answers with the
-rules and "coin not launched yet", and the workflows say what they skipped rather than failing.
+Marketplace, sets the last two itself). Keep `WHOLESALE_BASE_URL` private — it is deliberately not
+present in the source tree. Optionally `SIGNIN_HOST`, the domain holders will sign for, if the site is served from a
+custom domain rather than the Vercel one — a deployment that can name its own host refuses a
+signature made for somewhere else, and one that cannot does not enforce the line at all. As
+repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
+`KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`.
+
+Then `site/config/esim.json`, in this order, because the order matters:
+
+1. **`treasury`** — the wallet whose key is in `TREASURY_PRIVATE_KEY`. Both keepers refuse to run if
+   the two disagree, which is the right behaviour and also a silent one: `claim.js` reports "nothing
+   above the floor" every day whether the escrow is genuinely empty or the address is simply wrong.
+   Nothing in this repo can tell those apart, because the fee recipient was chosen outside it when
+   the coin was created. **Check by hand on launch day, and again a week in**, against what Pons
+   says the coin's fee recipient is — a treasury that has never claimed anything looks exactly like
+   a quiet week.
+2. **`coin` and `curve`, together.** The indexer needs only `coin` — the factory tells it the curve —
+   but the site treats "launched" as both, so filling one in and not the other publishes a real
+   ledger, with real holders and real dollar allowances, that every one of those holders is then
+   told they cannot spend. `scripts/allowances.js` now says so, loudly, with the address to paste;
+   it is still easier not to do it.
+
+Until then the deploy answers with the rules and "coin not launched yet", and the workflows say what
+they skipped rather than failing. Week one publishes a budget of zero, honestly and without
+crashing: there is no previous week's tax to make one from.
+
+Two things to know about how it runs once it is on. The funding keeper aims at what the week still
+owes its holders — the published budget less what has been redeemed — rather than a flat target, so
+a big week pulls more across; it is bounded by a ceiling on the standing Lightning balance
+(`--max-pool`), a per-run cap on a single FixedFloat order (`--max`), and the treasury's own
+balance, and it says which of the three stopped it. And `site/data/treasury.json` carries a
+`behind` status, for a pool that is not low by any backward-looking measure and still cannot cover
+what this week has already promised.
 
 ## What v1 doesn't do
 

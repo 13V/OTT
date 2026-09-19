@@ -51,5 +51,20 @@ for (const dir of JSON_DIRS) {
   }
 }
 
+// The scripts read config/addresses.json and the site reads site/config/addresses.json, and the
+// duplication is deliberate — the deploy ships only site/, so it cannot reach up out of it. What
+// was missing was anything to notice them drifting apart, which would have the keepers and the
+// page quietly working against different contracts or different RPC endpoints. Byte-for-byte,
+// because a difference in either direction is a mistake and neither copy is the authority.
+const ADDR_PAIR = ['config/addresses.json', 'site/config/addresses.json'];
+const addrFiles = ADDR_PAIR.map((rel) => path.join(root, rel));
+if (addrFiles.every((f) => fs.existsSync(f))) {
+  const [a, b] = addrFiles.map((f) => fs.readFileSync(f, 'utf8'));
+  if (a !== b) problems.push(`${ADDR_PAIR[0]} and ${ADDR_PAIR[1]} have drifted apart; they are meant to be identical copies`);
+  else checked++;
+} else {
+  problems.push(`one of ${ADDR_PAIR.join(' / ')} is missing; both are meant to exist`);
+}
+
 if (problems.length) { problems.forEach((p) => console.error('  ' + p)); console.error(`lint: ${problems.length} problem(s)`); process.exit(1); }
 console.log(`lint: ${checked} file(s) OK (syntax and config JSON only — no style rules, no new dependency)`);

@@ -45,6 +45,11 @@ const round2 = (x) => Math.round(x * 100) / 100;
 // test/redeem-wholesale.test.js so there is exactly one fake to keep faithful to the real API.
 const DE = { packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99, address: '0xAbCd000000000000000000000000000000000001' };
 const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99, address: DE.address };
+// A wallet of its own, never used for Germany anywhere else in this file: the pay race below needs
+// a FRESH eSIM (full installation details written by finish()) rather than a top-up of whatever
+// DE.address already holds by that point, or "installation details intact" would be checking fields
+// a top-up leaves blank on purpose.
+const RACER = '0x' + 'ace'.padStart(40, '0');
 
 (async () => {
   const fake = await fakeWholesale.start({ mockPayer });
@@ -189,6 +194,67 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   check('both get the same done order', [ra.stage, rb.stage, ra.iccid === rb.iccid, ra.paymentHash === rb.paymentHash], ['done', 'done', true, true]);
   check('one quote at wholesale, one payment from the wallet', [purchases() - p, mockPayer._state.log.length - paid], [1, 1]);
 
+  console.log('\ntwo requests racing to PAY the same already-invoiced order — the window the claim above never opens');
+  // The race just above never actually puts two callers inside "has this been paid, then pay it"
+  // at once: only the winner of the id claim ever quotes or pays; the loser just waits for that
+  // record to stop being 'claiming' and carries whatever it finds. To open the real window, start
+  // from a record that is ALREADY sitting at 'invoiced', genuinely unpaid — exactly what
+  // order()'s own `existing.step === 'invoiced' && live` fast path hands straight to carry(),
+  // with no claim at all — and send two callers at it together.
+  mockPayer._state.mode = 'broke';
+  await rejects('first, a real unpaid invoice, minted and quoted against the fake wholesale', prov.order(Object.assign({ transactionId: 'wf-race0001' }, DE, { address: RACER })), /could not pay/);
+  const seeded = await store().get('order:wf-race0001');
+  const seededPaid = mockPayer._state.paid.get(seeded && seeded.paymentHash);
+  check('sitting in the store at "invoiced", genuinely unpaid (the broke attempt logged a try but nothing settled)', [seeded.step, !seededPaid || seededPaid.status !== 'SUCCESS'], ['invoiced', true]);
+  mockPayer._state.mode = 'success';
+
+  // A fake this fast is exactly what lets the window close itself: pacing between wholesale calls
+  // (MIN_GAP_MS) means the SECOND caller's own "is it paid?" check would normally land only after
+  // the FIRST caller's (instant, unpaced) payer.pay() has already landed — so it never even sees
+  // the invoice as unpaid. A real wallet call is a network round trip, not instant, so slow this
+  // one down deliberately: now BOTH callers can genuinely observe the invoice unpaid before either
+  // commits to paying it, which is the actual gap the audit describes.
+  const realPay = mockPayer.pay;
+  mockPayer.pay = async (args) => { await sleep(300); return realPay(args); };
+  // And watch every write this transaction makes: a save that steps the record BACKWARDS — 'done'
+  // regressing to 'paid', the exact shape of the bug — must never happen, even for an instant, even
+  // if a later write in the same race quietly papers back over it (as finish() being idempotent
+  // would, if that were the only thing checked here).
+  const RANK = { claiming: 0, invoiced: 1, paid: 2, done: 3, failed: 3 };
+  const rawSet = store().set.bind(store());
+  const stepsWritten = [];
+  let regression = null;
+  store().set = async (key, value, opts) => {
+    if (key === 'order:wf-race0001') {
+      const prevStep = stepsWritten[stepsWritten.length - 1];
+      if (prevStep !== undefined && RANK[value.step] < RANK[prevStep]) regression = { from: prevStep, to: value.step };
+      stepsWritten.push(value.step);
+    }
+    return rawSet(key, value, opts);
+  };
+  const purchasesBeforeRace = purchases(), paidBeforeRace = mockPayer._state.log.length;
+  let race1, race2;
+  try {
+    [race1, race2] = await Promise.all([
+      prov.order(Object.assign({ transactionId: 'wf-race0001' }, DE, { address: RACER })),
+      prov.order(Object.assign({ transactionId: 'wf-race0001' }, DE, { address: RACER })),
+    ]);
+  } finally {
+    mockPayer.pay = realPay;
+    store().set = rawSet;
+  }
+  check('both callers land on the identical done order', [race1.stage, race2.stage, race1.iccid === race2.iccid, race1.paymentHash === race2.paymentHash], ['done', 'done', true, true]);
+  check('done, on the one pre-existing invoice, with no new purchase', [race1.stage, race2.stage, purchases() - purchasesBeforeRace], ['done', 'done', 0]);
+  checkThat('exactly one payment reached the wallet — the other caller never even tried',
+    mockPayer._state.log.length - paidBeforeRace === 1, JSON.stringify(mockPayer._state.log.slice(paidBeforeRace)));
+  checkThat('no save ever stepped the record backwards (e.g. "done" regressed to "paid")',
+    !regression, JSON.stringify({ regression, stepsWritten }));
+  const settled = await store().get('order:wf-race0001');
+  check('the record left in the store is done, not regressed to paid or invoiced',
+    [settled.step, settled.iccid, settled.iccid.length], ['done', race1.iccid, 19]);
+  checkThat('and its installation details are intact — not wiped by a stale save from the loser',
+    !!settled.qrCodeUrl && settled.ac.startsWith('LPA:1$') && !!settled.smdpAddress && !!settled.matchingId, JSON.stringify(settled));
+
   console.log('\na claim whose owner died before quoting');
   await store().set('order:wf-0000e001', { transactionId: 'wf-0000e001', attempt: 'gone', packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99, step: 'claiming', createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), error: '' });
   check('find() does not count a bare claim', await prov.find('wf-0000e001'), null);
@@ -212,8 +278,8 @@ const EU = { packageCode: 'fixed_5GB_30D_EUROPE', slug: 'europe', priceUsd: 5.99
   console.log('\nthe recent index');
   const recent = await prov.listOrders({ sinceIso: new Date(Date.now() - 60000).toISOString() });
   check('lists what cost money, in order, and nothing that did not', recent.map((o) => [o.transactionId, o.stage]),
-    [['wf-aaaa0001', 'done'], ['wf-cccc0001', 'done'], ['wf-dddd0001', 'done'], ['wf-eeee0001', 'done'], ['wf-ffff0001', 'done'], ['wf-0000a001', 'done'], ['wf-0000a002', 'done'], ['wf-0000d001', 'done'], ['wf-0000e001', 'done']]);
-  check('the paid records carry what the pool paid', recent.map((o) => o.paidUsd), [1.89, 1.89, 5.69, 1.89, 1.89, 1.89, 1.89, 1.89, 1.89]);
+    [['wf-aaaa0001', 'done'], ['wf-cccc0001', 'done'], ['wf-dddd0001', 'done'], ['wf-eeee0001', 'done'], ['wf-ffff0001', 'done'], ['wf-0000a001', 'done'], ['wf-0000a002', 'done'], ['wf-0000d001', 'done'], ['wf-race0001', 'done'], ['wf-0000e001', 'done']]);
+  check('the paid records carry what the pool paid', recent.map((o) => o.paidUsd), [1.89, 1.89, 5.69, 1.89, 1.89, 1.89, 1.89, 1.89, 1.89, 1.89]);
 
   await fake.close();
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);

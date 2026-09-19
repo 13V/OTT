@@ -58,6 +58,7 @@ const WALLET_D = mkAddr('d4');   // a top-up paid but interrupted before complet
 const WALLET_E = mkAddr('e5');   // a top-up that cannot pay, then can
 const WALLET_F = mkAddr('f6');   // never ordered anything
 const WALLET_G = mkAddr('9a9a'); // wholesale quotes a top-up for the wrong ICCID
+const WALLET_H = mkAddr('8b8b'); // wholesale quotes a top-up with no ICCID named at all
 
 const noCodesOfItsOwn = (o) => !o.ac && !o.qrCodeUrl && !o.manualCode && !o.smdpAddress && !o.matchingId && !o.appleInstallUrl && !o.androidInstallUrl;
 const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('LPA:1$') && o.smdpAddress && o.matchingId && o.appleInstallUrl && o.androidInstallUrl;
@@ -127,6 +128,17 @@ const hasInstallDetails = (o) => /^https/.test(o.qrCodeUrl) && o.ac.startsWith('
   check('the wallet was never even asked to pay', mockPayer._state.log.length - paidBeforeMismatch, 0);
   check('and it is not a redemption', await prov.find('sim-g-002'), null);
   state.wrongTopupIccid = '';
+
+  console.log('\nwholesale omitting the top-up ICCID entirely is refused just the same — silence is not a match');
+  const h1 = await prov.order(Object.assign({ transactionId: 'sim-h-001', address: WALLET_H }, DE));
+  state.omitTopupIccid = true;
+  const paidBeforeOmitted = mockPayer._state.log.length;
+  await rejects('the order is refused, not silently accepted', prov.order(Object.assign({ transactionId: 'sim-h-002', address: WALLET_H }, DE)), /different eSIM/, 502);
+  check('the wallet was never even asked to pay', mockPayer._state.log.length - paidBeforeOmitted, 0);
+  check('and it is not a redemption', await prov.find('sim-h-002'), null);
+  const simsH = await prov.sims(WALLET_H);
+  check('the wallet still shows only the original eSIM — nothing was minted for the refused top-up', simsH.map((c) => c.iccid), [h1.iccid]);
+  state.omitTopupIccid = false;
 
   console.log('\na top-up that is paid but interrupted resumes on the next find()');
   const d1 = await prov.order(Object.assign({ transactionId: 'sim-d-001', address: WALLET_D }, DE));

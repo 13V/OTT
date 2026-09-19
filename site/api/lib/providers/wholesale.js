@@ -18,8 +18,13 @@
  * this provider keeps its own record in the store (lib/store.js): one document per transactionId,
  * claimed with SET NX so two function instances cannot both invoice the same redemption, and moved
  * through invoiced → paid → done as each step lands. Every step is resumable: a function that dies
- * between paying and completing leaves a record the next request finishes, and "did we pay this
- * already" is answered by the wallet (payer.sent) before any invoice is paid a second time.
+ * between paying and completing leaves a record the next request finishes. "Did we pay this
+ * already" is answered by the wallet (payer.sent) before any invoice is paid a second time — but
+ * asking and then paying is itself a race between whichever callers reach an unpaid invoice at
+ * once (the original placer's own retry, a second racer, an ordinary retried POST), so that whole
+ * sequence runs under its own SET NX lease (see withPayLease/saveIfStep) with at most one caller
+ * paying at a time and every write after it landing on the record as it stands in the store, never
+ * on a stale copy taken before the wait for the wallet.
  *
  * Before paying, the invoice is decoded (lib/bolt11.js) and refused unless it carries the payment
  * hash wholesale quoted, an amount, and an amount that is the quoted price at the wallet's own
@@ -52,9 +57,15 @@ const RATE_TOLERANCE = 0.10;     // sats in the invoice vs dollars at the wallet
 const EXPIRY_GRACE_S = 120;      // an invoice is treated as dead this long after it says it is
 const CLAIM_TTL_MS = 60 * 1000;  // a claim older than this belongs to an instance that died before quoting
 const CLAIM_POLL_MS = 250;
+// A pay lease older than this belongs to a caller that died between "is this paid?" and "pay it"
+// — mid a wallet call that will itself have given up by then (Blink's own timeout is 25s; the
+// mock pays instantly). Comfortably above that, the same margin CLAIM_TTL_MS keeps over how long
+// quoting can take.
+const PAY_LEASE_TTL_MS = 45 * 1000;
 const RECENT = 'orders:recent';
 const keyOf = (tx) => 'order:' + tx;
 const simKeyOf = (address) => 'sim:' + String(address || '').toLowerCase();
+const payLeaseKeyOf = (tx) => 'paylease:' + tx;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(message, status) { const e = new Error(message); if (status) e.status = status; return e; }
@@ -214,6 +225,48 @@ const save = (store, rec) => store.set(keyOf(rec.transactionId), rec);
 /** The record as the API sees it: pending until done, and the step named. */
 const publicOf = (rec) => (rec ? Object.assign({}, rec, { pending: rec.step !== 'done', stage: rec.step }) : null);
 
+/**
+ * At most one caller inside `fn` at a time for this transactionId — the mutual exclusion that
+ * "has this been paid? then pay it" needs and, on its own, never had: two callers can each observe
+ * an invoice unpaid and each go on to pay it. Built from the one primitive this store has, the same
+ * way the id claim in order() is: SET NX claims the lease, a plain SET steals one that has sat
+ * unreleased past PAY_LEASE_TTL_MS (an instance that died mid-payment), and it is always released
+ * in a finally so a caller that throws — the wallet refusing, timing out, or the process dying —
+ * can never wedge every later attempt out forever.
+ */
+async function withPayLease(store, transactionId, fn) {
+  const key = payLeaseKeyOf(transactionId);
+  const mine = { attempt: attemptId(), at: Date.now() };
+  for (;;) {
+    if (await store.set(key, mine, { nx: true })) break;
+    const held = await store.get(key);
+    if (held && Date.now() - Number(held.at || 0) < PAY_LEASE_TTL_MS) { await sleep(CLAIM_POLL_MS); continue; }
+    await store.set(key, mine);   // stale, or unreadable: steal it
+    const check = await store.get(key);
+    if (!check || check.attempt !== mine.attempt) { await sleep(CLAIM_POLL_MS); continue; }   // lost the steal race
+    break;
+  }
+  try { return await fn(); } finally { await store.del(key); }
+}
+
+/**
+ * Apply `patch` (an object, or a function of the current record to one) to the record as it
+ * stands in the store RIGHT NOW — never to a possibly-stale local copy — and only while it is
+ * still at `fromStep`. If another caller has already carried it further (paid it, or even
+ * finished it, while this call was off asking the wallet something), the patch is dropped rather
+ * than regressing whatever they wrote: an already-issued eSIM's installation details, most of all.
+ * `applied` says which happened, so the caller can tell "I moved it forward" from "it had already
+ * moved"; `record` is the record either way, fresh from the store.
+ */
+async function saveIfStep(store, transactionId, fromStep, patch) {
+  const current = await store.get(keyOf(transactionId));
+  if (!current) return { applied: false, record: null };
+  if (current.step !== fromStep) return { applied: false, record: current };
+  const next = Object.assign({}, current, typeof patch === 'function' ? patch(current) : patch);
+  await save(store, next);
+  return { applied: true, record: next };
+}
+
 function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote, inv, attempt, topupOf }) {
   return {
     transactionId, attempt, address: String(address || '').toLowerCase(), packageCode, slug,
@@ -235,52 +288,59 @@ function newRecord({ transactionId, packageCode, slug, priceUsd, address, quote,
  * The completion payload onto the record. The activation code is whichever field carries an LPA
  * string. A top-up carries none — its bundle queues on a profile already installed — so it keeps
  * the fields blank and the dashboard shows it under the SIM it joined.
+ *
+ * Written onto the record as it stands in the store right now, not onto the possibly-stale `rec`
+ * this call was handed: `rec` may predate fields another caller already set (paidAt, attempts, or
+ * — calling complete() is safe to repeat — this very completion, written a moment ago by whoever
+ * got there first). Re-reading here means a slow caller can only ever repeat the same write, never
+ * undo one that happened after its own copy was taken.
  */
 async function finish(store, rec, data) {
-  if (rec.topupOf) {
-    rec.step = 'done';
-    rec.iccid = String(data.iccid || rec.topupOf);
-    rec.bundleName = String(data.bundleName || '');
-    rec.toppedUp = true;
-    rec.completedAt = new Date().toISOString();
-    rec.error = '';
-    await save(store, rec);
-    return rec;
+  const current = (await store.get(keyOf(rec.transactionId))) || rec;
+  if (current.topupOf) {
+    current.step = 'done';
+    current.iccid = String(data.iccid || current.topupOf);
+    current.bundleName = String(data.bundleName || '');
+    current.toppedUp = true;
+    current.completedAt = new Date().toISOString();
+    current.error = '';
+    await save(store, current);
+    return current;
   }
   const inst = data.installationDetails || {};
   const qr = String(inst.qrCode || '');
   const manual = String(inst.manualCode || '');
-  rec.step = 'done';
-  rec.iccid = String(data.iccid || '');
-  rec.orderReference = String(data.orderReference || '');
-  rec.bundleName = String(data.bundleName || '');
-  rec.smdpAddress = String(inst.smdpAddress || '');
-  rec.matchingId = String(inst.matchingId || '');
-  rec.qrCodeUrl = /^(data:|https?:\/\/)/i.test(qr) ? qr : '';
-  rec.manualCode = manual;
-  rec.ac = /^LPA:/i.test(manual) ? manual
+  current.step = 'done';
+  current.iccid = String(data.iccid || '');
+  current.orderReference = String(data.orderReference || '');
+  current.bundleName = String(data.bundleName || '');
+  current.smdpAddress = String(inst.smdpAddress || '');
+  current.matchingId = String(inst.matchingId || '');
+  current.qrCodeUrl = /^(data:|https?:\/\/)/i.test(qr) ? qr : '';
+  current.manualCode = manual;
+  current.ac = /^LPA:/i.test(manual) ? manual
     : /^LPA:/i.test(qr) ? qr
-      : (rec.smdpAddress && rec.matchingId ? 'LPA:1$' + rec.smdpAddress + '$' + rec.matchingId : manual);
+      : (current.smdpAddress && current.matchingId ? 'LPA:1$' + current.smdpAddress + '$' + current.matchingId : manual);
   // Scheme-checked for the same reason the QR above is: these become the href of a button the
   // holder is invited to press, on the page that is showing their activation code. A "javascript:"
   // in either field would run in that page's origin. We already decline to trust this response
   // enough to put it in an <img>; an <a> deserves no more trust.
-  rec.appleInstallUrl = httpsOnly(inst.appleInstallUrl);
-  rec.androidInstallUrl = httpsOnly(inst.androidInstallUrl);
-  rec.completedAt = new Date().toISOString();
-  rec.error = '';
-  await save(store, rec);
+  current.appleInstallUrl = httpsOnly(inst.appleInstallUrl);
+  current.androidInstallUrl = httpsOnly(inst.androidInstallUrl);
+  current.completedAt = new Date().toISOString();
+  current.error = '';
+  await save(store, current);
   // From here on this wallet is topped up rather than re-issued. Recorded after the order is
   // saved: a failure to index costs a duplicate SIM next week, a failure to save costs the eSIM.
   try {
-    await recordSim(store, rec.address, rec.slug, {
-      iccid: rec.iccid, slug: rec.slug, ac: rec.ac, qrCodeUrl: rec.qrCodeUrl, manualCode: rec.manualCode,
-      smdpAddress: rec.smdpAddress, matchingId: rec.matchingId,
-      appleInstallUrl: rec.appleInstallUrl, androidInstallUrl: rec.androidInstallUrl,
-      createdAt: rec.completedAt,
+    await recordSim(store, current.address, current.slug, {
+      iccid: current.iccid, slug: current.slug, ac: current.ac, qrCodeUrl: current.qrCodeUrl, manualCode: current.manualCode,
+      smdpAddress: current.smdpAddress, matchingId: current.matchingId,
+      appleInstallUrl: current.appleInstallUrl, androidInstallUrl: current.androidInstallUrl,
+      createdAt: current.completedAt,
     });
   } catch (e) { /* indexed next time; the eSIM is issued either way */ }
-  return rec;
+  return current;
 }
 
 /**
@@ -318,37 +378,60 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
       if (pay) throw fail('the Lightning wallet could not be reached: ' + e.message, 503);
       return rec;
     }
-    if (s.status === 'SUCCESS') {
-      rec.step = 'paid'; rec.paidAt = rec.paidAt || new Date().toISOString(); rec.error = '';
-      await save(store, rec);
-    } else if (s.status === 'PENDING') {
+    if (s.status === 'PENDING') {
       return rec;   // money in flight: it counts, and a later completion will find it settled
-    } else {
+    } else if (s.status !== 'SUCCESS') {
       // NONE or FAILURE: nothing has left the wallet.
-      if (isExpired(rec, Date.now())) { rec.step = 'failed'; rec.error = 'invoice expired unpaid'; await save(store, rec); return null; }
+      if (isExpired(rec, Date.now())) {
+        const r = await saveIfStep(store, rec.transactionId, 'invoiced', { step: 'failed', error: 'invoice expired unpaid' });
+        return r.applied ? null : (r.record ? resume(store, r.record, { pay, waitMs }) : null);
+      }
       if (!pay) return null;
-      // Re-read before paying: if this id was replaced under us (another request superseded the
-      // invoice), the record on file is the one to carry, not this copy of an older one.
+    }
+
+    // From here on we either already know it is paid (sent() just said so) or are about to try
+    // paying it ourselves — "has this been paid, then pay it", which may run for at most one
+    // caller at a time or two callers can each see it unpaid and each pay it. A store-backed
+    // lease, claimed with SET NX and released in a finally, in keeping with how order() already
+    // claims a fresh id the same way.
+    const outcome = await withPayLease(store, rec.transactionId, async () => {
+      if (s.status === 'SUCCESS') {
+        // Onto the order as it stands now: another caller may already have carried it past
+        // 'invoiced' — paid it, or even finished it — while we were asking the wallet.
+        const r = await saveIfStep(store, rec.transactionId, 'invoiced', (cur) => ({ step: 'paid', paidAt: cur.paidAt || new Date().toISOString(), error: '' }));
+        return { applied: r.applied, record: r.record, justPaid: false };
+      }
+      // Re-read now the lease is ours: another caller may have paid this (or replaced the
+      // invoice, or finished the order) while we waited for the lease, or even before we asked
+      // for it — the record on file is the one to act on, not this call's copy of an older one.
       const current = await store.get(keyOf(rec.transactionId));
-      if (!current) return null;
-      if (current.paymentHash !== rec.paymentHash || current.step !== rec.step) return resume(store, current, { pay, waitMs });
+      if (!current) return { applied: false, record: null, justPaid: false };
+      if (current.paymentHash !== rec.paymentHash || current.step !== 'invoiced') return { applied: false, record: current, justPaid: false };
       let r;
-      try { r = await payer.pay({ paymentRequest: rec.paymentRequest, memo: 'OT+T ' + rec.transactionId }); } catch (e) {
-        rec.attempts = (rec.attempts || 0) + 1; rec.error = 'wallet did not answer: ' + e.message; await save(store, rec);
+      try { r = await payer.pay({ paymentRequest: current.paymentRequest, memo: 'OT+T ' + current.transactionId }); } catch (e) {
+        await saveIfStep(store, rec.transactionId, 'invoiced', (cur) => ({ attempts: (cur.attempts || 0) + 1, error: 'wallet did not answer: ' + e.message }));
         throw fail('the Lightning wallet did not answer; try again in a minute', 503);
       }
-      rec.attempts = (rec.attempts || 0) + 1;
+      const attempts = (current.attempts || 0) + 1;
       if (r.status === 'SUCCESS' || r.status === 'ALREADY_PAID') {
-        rec.step = 'paid'; rec.paidAt = new Date().toISOString(); rec.error = ''; justPaid = true;
-        await save(store, rec);
+        const saved = await saveIfStep(store, rec.transactionId, 'invoiced', { step: 'paid', paidAt: new Date().toISOString(), error: '', attempts });
+        return { applied: saved.applied, record: saved.record, justPaid: true };
       } else if (r.status === 'PENDING') {
-        rec.error = ''; await save(store, rec);
-        return rec;
+        const saved = await saveIfStep(store, rec.transactionId, 'invoiced', { error: '', attempts });
+        return { applied: saved.applied, record: saved.record, justPaid: false, pending: true };
       } else {
-        rec.error = r.error || 'payment failed'; await save(store, rec);
-        throw fail('the pool could not pay for this eSIM: ' + rec.error, /balance|insufficient/i.test(rec.error) ? 503 : 502);
+        await saveIfStep(store, rec.transactionId, 'invoiced', { error: r.error || 'payment failed', attempts });
+        throw fail('the pool could not pay for this eSIM: ' + (r.error || 'payment failed'), /balance|insufficient/i.test(r.error || '') ? 503 : 502);
       }
-    }
+    });
+    if (!outcome.record) return null;
+    // Someone else already carried this past 'invoiced' before our own write landed (they held
+    // the lease before us, or stole a stale one from us) — carry the record as it now stands
+    // rather than what we just tried to write.
+    if (!outcome.applied) return resume(store, outcome.record, { pay, waitMs });
+    if (outcome.pending) return outcome.record;
+    rec = outcome.record;
+    justPaid = outcome.justPaid;
   }
 
   // 3. Paid. Complete, with whatever patience the caller has.
@@ -417,9 +500,15 @@ module.exports = {
         let s;
         try { s = await choosePayer().sent(existing.paymentHash); } catch (e) { throw fail('the Lightning wallet could not be reached: ' + e.message, 503); }
         if (s.status === 'SUCCESS' || s.status === 'PENDING') return carry(existing);
-        existing.step = 'failed';
-        existing.error = existing.packageCode === packageCode ? 'invoice expired unpaid' : 'superseded by an order for ' + packageCode;
-        await save(store, existing);
+        // Marked failed onto the record as it stands now, and only while it is still 'invoiced': a
+        // concurrent caller may have paid this very invoice (or even finished it) between our
+        // sent() check above and this write landing, and we must not fail out from under a payment
+        // that actually went through — carry it instead of orphaning it.
+        const marked = await saveIfStep(store, existing.transactionId, 'invoiced', {
+          step: 'failed',
+          error: existing.packageCode === packageCode ? 'invoice expired unpaid' : 'superseded by an order for ' + packageCode,
+        });
+        if (!marked.applied && marked.record) return carry(marked.record);
       }
     }
     if (!packageCode || !slug) throw fail('order needs the bundle name and its place');
@@ -450,10 +539,13 @@ module.exports = {
         quote = await purchase({ bundleName: packageCode, slug });
       }
       if (!quote.paymentRequest || !quote.paymentHash) throw fail('wholesale returned no Lightning invoice', 502);
-      // A top-up quote names the profile it is for. If that is not the profile we asked to top up,
-      // paying this invoice would put a holder's data on someone else's SIM — refuse before the
-      // money moves rather than rely on their 403 at completion, when it is already spent.
-      if (topupOf && quote.iccid && String(quote.iccid) !== topupOf) {
+      // A top-up quote names the profile it is for. If that is missing, or is not the profile we
+      // asked to top up, paying this invoice would put a holder's data on someone else's SIM (or
+      // on no identified SIM at all) — refuse before the money moves rather than rely on their 403
+      // at completion, when it is already spent. A missing iccid is refused rather than let
+      // through: the provider silently omitting the field it is supposed to always send is not
+      // evidence the checkout is for the right profile.
+      if (topupOf && String(quote.iccid || '') !== topupOf) {
         throw fail('wholesale quoted a top-up for a different eSIM than the one asked for', 502);
       }
       try { inv = bolt11.decode(quote.paymentRequest); } catch (e) { throw fail('wholesale returned an invoice that does not decode: ' + e.message, 502); }

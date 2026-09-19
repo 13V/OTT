@@ -125,7 +125,23 @@ function fakeChain({ usd }) {
   check('a pool under target is filled from the treasury, capped', F.plan({ walletUsd: 500, poolUsd: 10 }).amountUsd, 90);
   check('a poor treasury moves what it has', F.plan({ walletUsd: 35.5, poolUsd: 0 }).amountUsd, 35.5);
   check('under the floor moves nothing', F.plan({ walletUsd: 12, poolUsd: 0 }).amountUsd, 0);
-  check('never more than the cap', F.plan({ walletUsd: 5000, poolUsd: 0, targetUsd: 1000 }).amountUsd, 200);
+  check('never more than the cap in one run', F.plan({ walletUsd: 5000, poolUsd: 0, targetUsd: 1000 }).amountUsd, 500);
+
+  // The target follows what the week has actually promised. A flat target against an unbounded
+  // published budget is what let a good week promise thousands of dollars of data against a
+  // hundred-dollar wallet, with every holder past the first few getting a 503 on the button.
+  const owed = (o, over) => F.plan(Object.assign({ walletUsd: 5000, poolUsd: 0, owedUsd: o }, over));
+  check('nothing promised: the flat floor still applies', owed(0).targetUsd, 100);
+  check('less promised than the floor: still the floor', owed(40).targetUsd, 100);
+  check('more promised than the floor: aim at the promise', owed(420).targetUsd, 420);
+  check('and move toward it, within one run\'s cap', owed(420).amountUsd, 420);
+  check('a promise past the ceiling is held there on purpose', owed(9000).targetUsd, 1000);
+  checkThat('and the reason says it was the ceiling that stopped it', /ceiling/.test(owed(9000).reason), owed(9000).reason);
+  check('a big promise still moves only one run\'s worth', owed(9000).amountUsd, 500);
+  checkThat('and says it is short, and why', /short of the aim this run, capped per run/.test(owed(9000).reason), owed(9000).reason);
+  checkThat('a treasury too poor to cover the promise says that instead',
+    /short of the aim this run, all the treasury has/.test(owed(900, { walletUsd: 300 }).reason), owed(900, { walletUsd: 300 }).reason);
+  check('an unreadable treasury file falls back to the flat target', [F.owedFrom(null), F.owedFrom({}), F.owedFrom({ owedUsd: 12.5 })], [null, null, 12.5]);
   check('the log keeps the newest hundred', F.appendLog(Array.from({ length: 120 }, (_, i) => ({ i })), { i: 'new' }).length, 100);
 
   console.log('\nrefusals before anything moves');
@@ -134,7 +150,7 @@ function fakeChain({ usd }) {
   await rejects('no treasury configured is refused', F.run(base({ config: { treasury: '' } })), /no treasury/);
   mockPayer._state.sats = 200000;   // $160 at $0.0008/sat
   let r = await F.run(base({}));
-  check('a pool over target moves nothing', [r.action, /pool holds \$160\.00/.test(r.reason)], ['none', true]);
+  check('a pool over target moves nothing', [r.action, /pool \$160\.00, aiming at \$100\.00/.test(r.reason)], ['none', true]);
   mockPayer._state.sats = 0;
   r = await F.run(base({ chain: fakeChain({ usd: 7 }) }));
   check('a treasury under the floor moves nothing', [r.action, /treasury holds \$7\.00/.test(r.reason)], ['none', true]);

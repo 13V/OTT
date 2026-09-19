@@ -4,8 +4,8 @@
 # a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet the provider is
 # paid from, which needs BLINK_API_KEY — and the last 30 days of orders from the store, which needs
 # KV_REST_API_URL and KV_REST_API_TOKEN; with any of them unset it still writes the chain side and
-# marks the pool "unknown". GITHUB_TOKEN is for the commit, and for the issue the alert step opens
-# when the pool runs low.
+# marks the pool "unknown". GITHUB_TOKEN is for the commit, and for the issues the alert steps open
+# when the pool runs low or a keeper step fails.
 #
 # A commit is made only when a file actually changed (the git diff --quiet guard), and every push
 # to main triggers the Vercel deploy, so a refresh that finds nothing new costs nothing downstream.
@@ -14,6 +14,12 @@ name: data
 on:
   schedule:
     - cron: '*/30 * * * *'
+    # Holders can't spend the new week until this ledger is rebuilt, and GitHub's own docs warn
+    # that scheduled runs are likeliest to be delayed right at the top of the hour — exactly when
+    # the Monday 00:00 UTC week boundary run is due. This is a cheap backstop for that one run a
+    # week: the concurrency group below queues it safely behind a late-running 00:00 fire instead
+    # of racing it. The rest of the schedule has no equivalent gap, so it is left untouched.
+    - cron: '5 0 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -41,14 +47,23 @@ jobs:
         with:
           node-version: '22'
 
+      # The cheapest check there is (scripts/lint.js): every script parses, every config is JSON.
+      # No continue-on-error here on purpose — a syntactically broken script should stop the run
+      # before anything below it does real work, not get logged and quietly ignored like the
+      # keeper steps that follow.
+      - name: Lint
+        run: node scripts/lint.js
+
       # Read-only against a public RPC endpoint; failing here (every RPC busy) must not withhold
       # the treasury refresh below. The script writes its file only on success, so a failed step
       # leaves the previous ledger in place rather than a broken one.
       - name: Refresh allowances
+        id: allowances
         continue-on-error: true
         run: node scripts/allowances.js
 
       - name: Refresh treasury
+        id: treasury
         continue-on-error: true
         env:
           ESIM_PROVIDER: wholesale
@@ -62,6 +77,7 @@ jobs:
       # balance is topped up. The reseller also fires its own low-balance webhooks at 25% and 10%;
       # this is the one that needs no endpoint to receive them.
       - name: Alert if the pool is low
+        id: pool_alert
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,9 +95,16 @@ jobs:
           # so a pool that cannot be read is treated as a pool in trouble.
           unreadable=$(node -e "try{const t=require('./site/data/treasury.json');const r=t.reseller||{};console.log(t.status==='unknown'&&r.error?'yes':'no')}catch(e){console.log('no')}")
           if [ "$status" != "low" ] && [ "$status" != "empty" ] && [ "$unreadable" != "yes" ]; then exit 0; fi
+
+          # A crude severity so a reopened conversation can tell better from worse: low < empty,
+          # and "cannot be read at all" outranks both — the comment above already treats it as the
+          # one failure the pool cannot survive quietly, so it is never scored milder than "empty".
+          if [ "$unreadable" = "yes" ]; then severity=3
+          elif [ "$status" = "empty" ]; then severity=2
+          else severity=1
+          fi
+
           gh label create treasury --color D93F0B --description "the data pool needs topping up" --force >/dev/null 2>&1 || true
-          open=$(gh issue list --label treasury --state open --json number --jq 'length')
-          if [ "$open" != "0" ]; then echo "an issue is already open"; exit 0; fi
           body=$(node -e "
             const t = require('./site/data/treasury.json');
             const r = t.reseller || {};
@@ -99,7 +122,128 @@ jobs:
           ")
           title="Treasury: the data pool is $status"
           if [ "$unreadable" = "yes" ]; then title="Treasury: the data pool cannot be read"; fi
+
+          open=$(gh issue list --label treasury --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then
+            # Already open. Silent every run would deprioritise an issue a human has already seen;
+            # noisy every run would train everyone to ignore it. So: comment only on a transition
+            # to something worse. The marker is an HTML comment (invisible when rendered) left in
+            # the issue body and in every escalation comment; because we only ever post on the way
+            # up, the highest marker anywhere in the thread is exactly the severity of the last
+            # thing we said — cheaper than tracking state anywhere else, and it survives the issue
+            # being closed and reopened.
+            number=$(gh issue list --label treasury --state open --json number --jq '.[0].number')
+            history=$(gh issue view "$number" --json body,comments --jq '[.body] + [.comments[].body] | join("\n")' 2>/dev/null || echo "")
+            last=$(printf '%s\n' "$history" | grep -oE '<!-- pool-severity: [0-9]+ -->' | grep -oE '[0-9]+' | sort -n | tail -1 || true)
+            last=${last:-0}
+            if [ "$severity" -gt "$last" ]; then
+              echo "pool has gotten materially worse since #$number was opened (severity $last -> $severity)"
+              comment="**This has gotten worse since this issue was opened.**"$'\n\n'"$body"$'\n\n<!-- pool-severity: '"$severity"' -->'
+              gh issue comment "$number" --body "$comment"
+            else
+              echo "an issue is already open (#$number) and the pool has not gotten materially worse (severity $severity, already at $last)"
+            fi
+            exit 0
+          fi
+
+          body="$body"$'\n\n<!-- pool-severity: '"$severity"' -->'
           gh issue create --title "$title" --label treasury --body "$body"
+
+      # Every step above (bar Lint) is continue-on-error, so the job goes green whatever actually
+      # happened — a claim that reverts, a swap that never lands, a bad-curve refusal, none of that
+      # raises anything on its own. steps.<id>.outcome is each step's real result from before
+      # continue-on-error rewrote its conclusion to "success"; that is what this reads, never
+      # .conclusion, which is exactly the field continue-on-error overwrites to hide the failure.
+      #
+      # This still cannot see everything: a job killed by timeout-minutes is a hard cancellation
+      # that skips every later step, this one included, so that failure mode still only shows up
+      # as a red run rather than an issue — there is no step-level hook that runs after a timeout.
+      # The keepers above can all succeed while the thing holders actually touch is broken: wholesale
+      # refusing orders, the store unreachable, the Lightning wallet's key revoked. /api/status
+      # already notices every one of those — it probes the store, the payer, the provider and the
+      # freshness of the ledger on each call — and until now nothing ever read it. A holder finding
+      # out by pressing a button and getting a 502 is not a monitoring strategy.
+      - name: Alert if the live site is unhealthy
+        id: health
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_URL: ${{ vars.SITE_URL || 'https://ott-one-virid.vercel.app' }}
+        run: |
+          coin=$(node -e "try{console.log(require('./site/config/esim.json').coin||'')}catch(e){console.log('')}")
+          # Before launch there is nothing to be unhealthy about: the endpoint answers "not launched".
+          if [ -z "$coin" ]; then echo "not launched yet; nothing to check"; exit 0; fi
+          body=$(curl -sS --max-time 25 "$SITE_URL/api/status" || echo '')
+          if [ -z "$body" ]; then
+            echo "could not reach $SITE_URL/api/status"
+            summary="the health endpoint could not be reached at all"
+          else
+            summary=$(printf '%s' "$body" | node -e "
+              let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{
+                let j=null; try{ j=JSON.parse(b) }catch(e){ console.log('the health endpoint answered something that is not JSON'); return }
+                if (j.ok) { console.log(''); return }
+                const bad=Object.entries(j.checks||{}).filter(([,c])=>c&&!c.ok)
+                  .map(([k,c])=>'- **'+k+'**: '+String(c.detail||'(no detail)').slice(0,200));
+                console.log(bad.length ? bad.join('\n') : 'the endpoint reports itself unhealthy without naming a check');
+              })" || echo 'the health endpoint could not be parsed')
+          fi
+          if [ -z "$summary" ]; then echo "the site reports itself healthy"; exit 0; fi
+          echo "unhealthy:"; echo "$summary"
+          gh label create health --color D93F0B --description "the live site reports itself unhealthy" --force >/dev/null 2>&1 || true
+          open=$(gh issue list --label health --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then echo "an issue is already open"; exit 0; fi
+          gh issue create --label health --title "Site: holders cannot redeem" --body "$(printf '%s\n' \
+            "\`$SITE_URL/api/status\` is reporting itself unhealthy as of $(date -u '+%Y-%m-%d %H:%M UTC')." \
+            "" \
+            "$summary" \
+            "" \
+            "The keepers in this workflow may all be green: this is the half of the system they do not touch. A holder hitting the redeem button right now most likely gets an error." \
+            "" \
+            "[This run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) · [the endpoint]($SITE_URL/api/status)")"
+
+      - name: Alert if a keeper failed
+        id: keeper_alert
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME_ALLOWANCES: ${{ steps.allowances.outcome }}
+          OUTCOME_TREASURY: ${{ steps.treasury.outcome }}
+          OUTCOME_POOL_ALERT: ${{ steps.pool_alert.outcome }}
+        run: |
+          names=("Refresh allowances" "Refresh treasury" "Alert if the pool is low")
+          outcomes=("$OUTCOME_ALLOWANCES" "$OUTCOME_TREASURY" "$OUTCOME_POOL_ALERT")
+          frozen=(
+            "site/data/allowances.json was not rebuilt this run — holders still see the balances, shares and allowances from the last run that succeeded."
+            "site/data/treasury.json was not refreshed this run — the pool card can show a stale balance, runway and status."
+            "the low-pool alert did not finish — a pool that crossed into low, empty, or became unreadable this run may go unreported this cycle."
+          )
+          failed=()
+          detail=""
+          for i in "${!names[@]}"; do
+            if [ "${outcomes[$i]}" = "failure" ]; then
+              failed+=("${names[$i]}")
+              detail="$detail- **${names[$i]}**: ${frozen[$i]}"$'\n'
+            fi
+          done
+          if [ ${#failed[@]} -eq 0 ]; then
+            echo "no keeper step failed this run"
+            exit 0
+          fi
+          list=""
+          for n in "${failed[@]}"; do
+            if [ -z "$list" ]; then list="$n"; else list="$list, $n"; fi
+          done
+          echo "failed step(s): $list"
+          gh label create keeper --color B60205 --description "a keeper step failed behind continue-on-error" --force >/dev/null 2>&1 || true
+          open=$(gh issue list --label keeper --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then
+            echo "an issue is already open"
+            exit 0
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="This run of **data** had step(s) fail: $list."$'\n\n'"$detail"$'\n'"Run: $run_url"$'\n\n'"Every step above is \`continue-on-error: true\`, so the job itself still finished green — this issue is the only signal that something did not actually complete. Close it once the cause is fixed; the next failure opens a new one."
+          gh issue create --title "Keeper: $list failed in data" --label keeper --body "$body"
 
       - name: Commit if anything changed
         run: |
@@ -111,4 +255,40 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "data: refresh allowances + treasury"
-          git push
+
+          # No fetch/rebase before this commit means a PR merging to main between checkout and here
+          # leaves the remote moved by the time we get here, and a bare `git push` just fails. Fetch,
+          # rebase onto the remote and retry with backoff instead. site/data/*.json are all generated
+          # by this same run, so on a rebase conflict there the side worth keeping is this run's own
+          # output — which, during a rebase, git calls "theirs" (the branch being replayed), not
+          # "ours" (the upstream tip being replayed onto); see the NOTES section of git-rebase(1).
+          branch="${GITHUB_REF_NAME:-main}"
+          pushed=0
+          for attempt in 1 2 3 4 5; do
+            echo "push attempt $attempt/5"
+            if ! git fetch origin "$branch"; then
+              echo "fetch failed, will retry"
+            elif ! git rebase "origin/$branch"; then
+              conflicts=$(git diff --name-only --diff-filter=U)
+              other=$(printf '%s\n' "$conflicts" | grep -v -E '^site/data/.*\.json$' || true)
+              if [ -n "$conflicts" ] && [ -z "$other" ]; then
+                echo "$conflicts" | xargs -r git checkout --theirs --
+                git add site/data/*.json
+                GIT_EDITOR=true git rebase --continue
+              else
+                echo "rebase conflict outside site/data/*.json, not auto-resolving:"
+                printf '%s\n' "$conflicts"
+                git rebase --abort || true
+              fi
+            fi
+            if git push origin "HEAD:$branch"; then
+              pushed=1
+              break
+            fi
+            echo "push rejected, will retry"
+            sleep $((attempt * 10))
+          done
+          if [ "$pushed" != "1" ]; then
+            echo "could not push after 5 attempts"
+            exit 1
+          fi

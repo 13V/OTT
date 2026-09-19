@@ -175,6 +175,7 @@ const addresses = { usdg: USDG, usdgDecimals: 6, pons: { factory: FACTORY, feeEs
 const GET_LAUNCHED = chain.selector('getLaunchedToken(address)');
 const LAUNCHED_AT = chain.selector('launchedAt()');
 const DECIMALS_SEL = chain.selector('decimals()');
+const SUPPLY_SEL = chain.selector('totalSupply()');
 const wordOf = (v) => (typeof v === 'string' ? A.pad(v).slice(2) : BigInt(v).toString(16).padStart(64, '0'));
 /** getLaunchedToken's fifteen words for a coin the factory knows. */
 const launchedRow = (pair) => '0x' + [COIN, CURVE, ALICE, ALICE, pair, 500000000000n, 0, 200, 1000, 0, 0, 0, 0, 0, 1].map(wordOf).join('');
@@ -187,7 +188,7 @@ const launchLog = (block) => ({
  *  whole chain for the factory's TokenLaunched log, which the official endpoint does and the
  *  others do not; the CHUNK limit applies to every other query regardless, as it does on every
  *  real endpoint. */
-function fakeNode({ head, launchBlockNum = 900, pair = USDG, coinDecimals = 9, coinTransfers = [], taxTransfers = [], factoryKnows = true, archive = true }) {
+function fakeNode({ head, launchBlockNum = 900, pair = USDG, coinDecimals = 9, coinTransfers = [], taxTransfers = [], factoryKnows = true, archive = true, totalSupply = 'from-transfers' }) {
   const calls = [];
   const rpc = async (method, params) => {
     calls.push({ method, params });
@@ -202,6 +203,19 @@ function fakeNode({ head, launchBlockNum = 900, pair = USDG, coinDecimals = 9, c
       if (toL === FACTORY && data.startsWith(GET_LAUNCHED)) return factoryKnows ? launchedRow(pair) : '0x' + '0'.repeat(15 * 64);
       if (toL === CURVE.toLowerCase() && data.startsWith(LAUNCHED_AT)) return '0x' + wordOf(T0 + BLOCK_S * launchBlockNum);
       if (toL === COIN.toLowerCase() && data.startsWith(DECIMALS_SEL)) return '0x' + wordOf(coinDecimals);
+      // The coin's own account of how much of it exists: mints less burns, unless a test says
+      // otherwise. 'silent' stands for a node that will not answer the call at all.
+      if (toL === COIN.toLowerCase() && data.startsWith(SUPPLY_SEL)) {
+        if (totalSupply === 'silent') throw new Error('fake node: totalSupply() not supported here');
+        if (totalSupply !== 'from-transfers') return '0x' + BigInt(totalSupply).toString(16).padStart(64, '0');
+        let supply = 0n;
+        for (const l of coinTransfers) {
+          const from = '0x' + l.topics[1].slice(26), to = '0x' + l.topics[2].slice(26);
+          if (from === ZERO) supply += BigInt(l.data);
+          if (to === ZERO) supply -= BigInt(l.data);
+        }
+        return '0x' + supply.toString(16).padStart(64, '0');
+      }
       throw new Error(`fake node: unexpected eth_call ${to} ${data.slice(0, 10)}`);
     }
     if (method === 'eth_getLogs') {
@@ -394,6 +408,24 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: outB, week: 10, now: () => 1700000000000 });
   check('the two runs\' files are byte-identical', fs.readFileSync(outA, 'utf8'), fs.readFileSync(outB, 'utf8'));
 
+  // Both workflows commit only when a data file actually changed, which is what makes a quiet
+  // half-hour cost nothing downstream. asOf and block move every run regardless, so writing them
+  // unconditionally made that guard a no-op: every run pushed a commit and triggered a redeploy,
+  // forty-eight times a day, for a file whose contents had not changed.
+  console.log('\na run that finds nothing new leaves the file alone');
+  const quiet = path.join(tmp, 'quiet.json');
+  const args = (at) => ({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: quiet, week: 10, now: () => at });
+  await A.run(args(1700000000000));
+  const firstBytes = fs.readFileSync(quiet, 'utf8');
+  const firstMtime = fs.statSync(quiet).mtimeMs;
+  await new Promise((r) => setTimeout(r, 20));
+  await A.run(args(1700003600000));   // an hour later; every figure the same
+  check('the file is untouched, clock and all', fs.readFileSync(quiet, 'utf8'), firstBytes);
+  check('and was not rewritten at all', fs.statSync(quiet).mtimeMs, firstMtime);
+  // A real change still lands, clock included — the guard skips noise, not news.
+  await A.run(Object.assign(args(1700007200000), { rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: coinTransfers.concat([xfer(ZERO, DAVE, 250, 1500)]), taxTransfers }).rpc }));
+  checkThat('a week whose balances moved is written', fs.readFileSync(quiet, 'utf8') !== firstBytes, 'unchanged');
+
   console.log('\n--from-block and --to-block still work: they skip the launch lookup and pin the head');
   const explicitNode = fakeNode({ head: 999999, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers });
   const rExplicit = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: explicitNode.rpc, out: path.join(tmp, 'explicit.json'), week: 10, fromBlock: '900', toBlock: String(HEAD) });
@@ -403,6 +435,24 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   checkThat('no eth_blockNumber call was needed since --to-block was given',
     !explicitNode.calls.some((c) => c.method === 'eth_blockNumber'));
   check('block is pinned to --to-block (999999 was on the node but never asked for)', rExplicit.data.block, HEAD);
+
+  // An endpoint can answer eth_getLogs with a short list and HTTP 200 — no error for the retry
+  // loop to catch, nothing for the chunk-width heuristic to notice. The tell is arithmetic: a
+  // token can only be sent by someone who received it, so an address folding to a negative
+  // balance proves a Transfer INTO it was never seen. That matters far past the one wallet,
+  // because a negative balance is summed into `circulating` like any other and shrinks the
+  // denominator every share is divided by — one missing log would inflate every OTHER holder's
+  // allowance, in a file that otherwise looks entirely reasonable.
+  console.log('\na scan that came back short is caught by the arithmetic, not trusted');
+  const missedMint = [
+    xfer(ZERO, ALICE, 1000, 950),
+    xfer(ALICE, BOB, 400, 1100),
+    xfer(BOB, CAROL, 900, 1200),   // bob only ever received 400: his mint of 500 was not in the answer
+  ];
+  await rejects('a fold with a negative balance is refused rather than published',
+    A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: missedMint, taxTransfers }).rpc, out: path.join(tmp, 'short.json'), week: 10, now: () => 1700000000000 }),
+    /negative balance/);
+  check('and nothing was written', fs.existsSync(path.join(tmp, 'short.json')), false);
 
   console.log('\nrun() still refuses what it cannot index rather than write a ledger that lies');
   await rejects('a coin the factory does not know',

@@ -129,14 +129,20 @@ function decode(invoice) {
   const timestamp = wordsToNumber(words.slice(0, TIMESTAMP_WORDS));
   const tagged = words.slice(TIMESTAMP_WORDS, words.length - SIG_WORDS);
   let paymentHash = '', expiry = DEFAULT_EXPIRY_S, description = '';
+  let sawHash = false, sawExpiry = false, sawDescription = false;
   for (let i = 0; i + 3 <= tagged.length;) {
     const type = tagged[i];
     const len = tagged[i + 1] * 32 + tagged[i + 2];
     const data = tagged.slice(i + 3, i + 3 + len);
     if (data.length < len) throw new Error('invoice tagged field runs past the end');
-    if (type === 1 && len === 52) paymentHash = wordsToBytes(data).slice(0, 32).toString('hex');
-    else if (type === 6) expiry = wordsToNumber(data);
-    else if (type === 13) description = wordsToBytes(data).toString('utf8');
+    // BOLT 11: a reader that sees a tagged field more than once keeps the first and ignores the
+    // rest. Unconditionally overwriting here would make the LAST occurrence win instead — so an
+    // invoice carrying a real payment hash and, after it, a decoy equal to whatever hash the
+    // payee quoted separately would pass a hash check here while the payment settles under the
+    // other. First-wins closes that off for every tagged field this file reads, not just the hash.
+    if (type === 1 && len === 52 && !sawHash) { paymentHash = wordsToBytes(data).slice(0, 32).toString('hex'); sawHash = true; }
+    else if (type === 6 && !sawExpiry) { expiry = wordsToNumber(data); sawExpiry = true; }
+    else if (type === 13 && !sawDescription) { description = wordsToBytes(data).toString('utf8'); sawDescription = true; }
     i += 3 + len;
   }
   if (!paymentHash) throw new Error('invoice has no payment hash');

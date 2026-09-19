@@ -27,6 +27,7 @@ function portfolioUrl() {
   if (base) return base + '/esim/portfolio';
   throw new Error('set WHOLESALE_PORTFOLIO_URL or WHOLESALE_BASE_URL');
 }
+const { timedFetch } = require(path.join(__dirname, 'chain.js'));
 
 // Regions first (one eSIM for a whole trip), then the countries people actually fly to.
 const REGIONS = ['europe', 'north-america', 'oceania', 'south-east-asia', 'middle-east', 'asia', 'latam', 'global'];
@@ -69,7 +70,7 @@ function pick(portfolio, { regions = REGIONS, countries = COUNTRIES, sizes = SIZ
 
 async function fetchPortfolio(url) {
   url = url || portfolioUrl();
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const res = await timedFetch(url, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error('wholesale portfolio answered HTTP ' + res.status);
   const j = await res.json();
   if (!j || !j.success || !j.data) throw new Error('wholesale portfolio has no data');
