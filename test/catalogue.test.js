@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * The catalogue builder's choosing, against a portfolio shaped like nadanada's (15 Sep 2026):
+ * The catalogue builder's choosing, against a portfolio shaped like wholesale's (15 Sep 2026):
  * countries and regions with a slug, a name, and bundles named fixed_<GB>GB_<D>D_<CODE> with a
  * dollar price. What is asserted is the policy: the places asked for, in the order asked, regions
  * first; one bundle per size, the cheapest of that exact size; unlimited and unpriced bundles
@@ -48,7 +48,7 @@ check('unlimited and unpriced bundles are never chosen', out.some((p) => /unlimi
 check('a region entry: name, kind, days, price, and how many countries', out[0],
   { code: 'fixed_1GB_7D_EUROPE', slug: 'europe', name: 'Europe', flag: '', kind: 'region', gb: 1, days: 7, priceUsd: 1.19, regions: '38 countries' });
 check('a country entry carries its ISO code and its flag', out[3], { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', flag: '🇩🇪', kind: 'country', gb: 1, days: 7, priceUsd: 1.99, regions: 'DE' });
-// nadanada gives regions no flag of their own, so the field is present and empty rather than absent —
+// wholesale gives regions no flag of their own, so the field is present and empty rather than absent —
 // the coverage grid on the site falls back to the place's name when it is.
 check('a region has no flag, and says so with an empty string rather than nothing', out[0].flag, '');
 check('the defaults name the places the site sells', [C.REGIONS.length, C.COUNTRIES.length, C.SIZES_GB], [8, 20, [1, 5, 10]]);

@@ -483,6 +483,49 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .status-dot.warn { background: var(--warning); }
 .status-dot.off { background: var(--negative); }
 
+/* ============================================================ the Holders route (#/holders)
+   Rendered by site/holders.js. Everything structural here is borrowed — .card, .stat-grid,
+   .status-table, .table-wrap — so the ledger reads as the same instrument the status page is, and
+   only the four things that route genuinely adds are defined below. */
+.status-more-link { color: var(--accent); font-weight: 600; }
+.status-more-link:hover { text-decoration: underline; }
+
+.holders-tools {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 4px;
+}
+.holders-count { margin: 0; white-space: nowrap; }
+.holders-table td, .holders-table th { vertical-align: middle; }
+/* A rank column reads as an index, not a measurement: quiet, narrow, and never the widest thing in
+   the row even when the ledger runs to four figures. */
+.holders-rank { width: 1%; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.holders-none { color: var(--text-secondary); text-align: center; }
+.holders-more { display: flex; justify-content: center; margin-top: 14px; }
+.holders-more button[hidden] { display: none !important; }
+.holders-note {
+  max-width: 68ch; margin-top: 16px;
+  color: var(--text-secondary); font: 400 12.5px/1.55 var(--font-sans);
+}
+
+/* The connected wallet's own row. A tint and a left edge rather than a colour on the text, so the
+   row is findable while every figure in it still reads the same as the ones above and below. */
+.holder-you > td { background: var(--accent-tint); }
+.holder-you > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.holders-you-tag {
+  margin-left: 8px; padding: 2px 7px; border-radius: var(--radius-button);
+  background: var(--accent); color: #fff;
+  font: 600 10px/1.5 var(--font-sans); text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* ---- concentration: how tightly the supply is held */
+.conc-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 720px) { .conc-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+.conc-item { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.conc-label { font: 600 12px/1 var(--font-sans); color: var(--text); }
+.conc-bar { height: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.conc-bar i { display: block; height: 100%; background: var(--accent); }
+.conc-val { font: 400 12px/1 var(--font-sans); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
 /* ============================================================ responsive */
 @media (max-width: 900px) {
   .data-grid { grid-template-columns: 1fr; }

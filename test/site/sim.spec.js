@@ -3,7 +3,7 @@
  * The dashboard, once a wallet has an eSIM of its own.
  *
  * data.spec.js covers the states a wallet passes through before it holds anything, and it does so
- * with the order shape written before nadanada tracked a standing profile — no `sims`, no
+ * with the order shape written before wholesale tracked a standing profile — no `sims`, no
  * `topupOf` — which is exactly the fallback the page still has to honour for a provider that has
  * no notion of one. This file covers the shape the live site actually serves now: a wallet owns
  * eSIMs, and a week's claim is a BUNDLE QUEUED ON ONE, not another SIM to install.
@@ -42,7 +42,7 @@ const PACKAGES = [
 ];
 const LAUNCHED = {
   coin: COIN, curve: CURVE, treasury: TREASURY, pair: USDG, taxBps: 1000, budgetBps: 10000,
-  provider: 'nadanada', packages: PACKAGES,
+  provider: 'wholesale', packages: PACKAGES,
   brand: { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' },
 };
 const CALLS = {
@@ -83,10 +83,10 @@ const sim = (iccid, slug, extra) => Object.assign({
   appleInstallUrl: '', androidInstallUrl: '', codes: false,
 }, extra || {});
 const withCodes = (s) => Object.assign({}, s, {
-  qrCodeUrl: './qr-' + s.slug + '.png', ac: 'LPA:1$smdp.nadanada.me$' + s.slug.toUpperCase(),
-  smdpAddress: 'smdp.nadanada.me', matchingId: s.slug.toUpperCase(),
+  qrCodeUrl: './qr-' + s.slug + '.png', ac: 'LPA:1$smdp.provider.example$' + s.slug.toUpperCase(),
+  smdpAddress: 'smdp.provider.example', matchingId: s.slug.toUpperCase(),
   appleInstallUrl: 'https://esimsetup.apple.com/es?a=' + s.slug,
-  androidInstallUrl: 'https://nadanada.me/install/android/' + s.slug,
+  androidInstallUrl: 'https://provider.example/install/android/' + s.slug,
   codes: true,
 });
 /** A bundle. `topupOf` set means it queued on a profile already installed, so it has no code. */
@@ -183,7 +183,7 @@ test('the one code the holder scans belongs to the eSIM, and a top-up never carr
   const card = mine.locator('.data-sim');
   // Exactly one activation code on the page, on the SIM — not one per bundle.
   await expect(mine.locator('.data-ac')).toHaveCount(1);
-  await expect(card.locator('.data-ac')).toHaveText('LPA:1$smdp.nadanada.me$GERMANY');
+  await expect(card.locator('.data-ac')).toHaveText('LPA:1$smdp.provider.example$GERMANY');
   await expect(card.getByRole('link', { name: 'Install on iPhone' })).toHaveAttribute('href', 'https://esimsetup.apple.com/es?a=germany');
   // Two bundles, and neither of them shows a code, because neither of them has one.
   await expect(card.locator('.data-bundle')).toHaveCount(2);

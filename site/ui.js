@@ -71,15 +71,18 @@
    * text on a chip you can still see. Fixed rather than spun from a live hue rotation, so nothing
    * can land on the accent hue itself and start competing with it.
    */
+  /* Ten cool swatches, none of them anywhere near the brand's orange. That separation used to be
+     the hard part — the accent was itself a blue, so two of these had to be kept off it by hand;
+     with the accent now on the opposite side of the wheel, the whole set clears it by construction. */
   const AVATAR_PALETTE = [
     '#3E6CC4', // mid blue
-    '#08409E', // accent-hover
+    '#2B4E8C', // navy
     '#5C7093', // slate
     '#2F6690', // teal-blue
     '#5B6169', // text-secondary
     '#476582', // steel
     '#3E5C86', // denim
-    '#0B57D6', // accent
+    '#1F4E79', // deep ocean
     '#345F8C', // ocean
     '#4A5568', // graphite
   ];

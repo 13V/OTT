@@ -3,7 +3,7 @@
  * Every route renders, and does so with the heading and title app.js promises it. The whole site
  * is one page with a hash router, so "the route rendered" means the view has the heading that
  * route owns — not merely that navigation happened. Modelled on whatever.fun's own
- * test/site/routes.spec.js, cut down to the three routes this site actually has.
+ * test/site/routes.spec.js, covering this site's public and holder routes.
  */
 // package.json's devDependency is @playwright/test; a sandbox with no npm install instead has the
 // base `playwright` package on NODE_PATH, whose `playwright/test` subpath is the same test runner.
@@ -17,6 +17,7 @@ const PAGES = [
   { hash: '#/', heading: 'A memecoin with a data plan.', title: 'OT+T — a memecoin with a data plan' },
   { hash: '#/data', heading: 'My data', title: 'My data — OT+T' },
   { hash: '#/status', heading: 'Everything, and whether it is running.', title: 'Status — OT+T' },
+  { hash: '#/holders', heading: 'Who holds, and what it buys them.', title: 'Holders — OT+T' },
   { hash: '#/about', heading: 'How this works', title: 'How this works — OT+T' },
 ];
 

@@ -1,7 +1,7 @@
 # Refresh the generated files the site reads: site/data/allowances.json (who has earned how much
 # data credit — scripts/allowances.js, from USDG Transfer logs) and site/data/treasury.json (is the
 # pool funded — scripts/treasury.js, from chain and the pool itself). The first is read-only against
-# a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet nadanada is
+# a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet the provider is
 # paid from, which needs BLINK_API_KEY — and the last 30 days of orders from the store, which needs
 # KV_REST_API_URL and KV_REST_API_TOKEN; with any of them unset it still writes the chain side and
 # marks the pool "unknown". GITHUB_TOKEN is for the commit, and for the issues the alert steps open
@@ -66,7 +66,8 @@ jobs:
         id: treasury
         continue-on-error: true
         env:
-          ESIM_PROVIDER: nadanada
+          ESIM_PROVIDER: wholesale
+          WHOLESALE_BASE_URL: ${{ secrets.WHOLESALE_BASE_URL }}
           BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
@@ -157,7 +158,7 @@ jobs:
       # This still cannot see everything: a job killed by timeout-minutes is a hard cancellation
       # that skips every later step, this one included, so that failure mode still only shows up
       # as a red run rather than an issue — there is no step-level hook that runs after a timeout.
-      # The keepers above can all succeed while the thing holders actually touch is broken: nadanada
+      # The keepers above can all succeed while the thing holders actually touch is broken: wholesale
       # refusing orders, the store unreachable, the Lightning wallet's key revoked. /api/status
       # already notices every one of those — it probes the store, the payer, the provider and the
       # freshness of the ledger on each call — and until now nothing ever read it. A holder finding

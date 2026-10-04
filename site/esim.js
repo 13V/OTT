@@ -791,7 +791,7 @@
       try {
         const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n });
         clear(result);
-        result.appendChild(notice('Ordering your eSIM… the pool pays nadanada over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
+        result.appendChild(notice('Ordering your eSIM… the pool pays our network partner over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
         clear(result);
         // A preview of the eSIM this bundle just landed on — built the same way the repainted
@@ -1065,7 +1065,7 @@
     let pendingText = null;
     if (o.pending) {
       pendingText = o.stage === 'invoiced' ? 'Paying the invoice… open this page again in a minute.'
-        : o.stage === 'paid' ? 'Paid. nadanada is issuing this bundle — open this page again in a minute.'
+        : o.stage === 'paid' ? 'Paid. Our network partner is issuing this bundle — open this page again in a minute.'
         : 'Ordered. The provider is still issuing this bundle — open this page again in a minute.';
       if (o.note) pendingText += ' (' + o.note + ')';
     }

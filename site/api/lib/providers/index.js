@@ -9,7 +9,7 @@
 const PROVIDERS = {
   mock: () => require('./mock'),
   esimaccess: () => require('./esimaccess'),
-  nadanada: () => require('./nadanada'),
+  wholesale: () => require('./wholesale'),
 };
 
 function provider() {

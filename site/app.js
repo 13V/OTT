@@ -5,7 +5,7 @@
  * OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin: a
  * creator tax on every trade against the coin's bonding curve funds a treasury, and every week
  * last week's tax becomes that week's data budget — split among HOLDERS by their share of the
- * circulating supply, banked as dollars of credit, and spent on eSIMs from nadanada, paid for over
+ * circulating supply, banked as dollars of credit, and spent on eSIMs from the network partner, paid for over
  * a Blink Lightning wallet. This programme
  * used to be two routes (#/data, #/status) inside a bigger launchpad, whatever.fun; this file is
  * what makes it a site of its own. site/esim.js and site/status.js are the same files that lived
@@ -150,7 +150,7 @@
   }
 
   // ============================================================================ routes
-  const ROUTES = ['home', 'data', 'status', 'about'];
+  const ROUTES = ['home', 'data', 'status', 'holders', 'about'];
   // Full <title> strings, not just labels — the title bar says where you are. An empty or unknown
   // hash falls back to 'home', so TITLES.home also stands in whenever STATE.route somehow lands on
   // something this map does not name.
@@ -158,6 +158,7 @@
     home: 'OT+T — a memecoin with a data plan',
     data: 'My data — OT+T',
     status: 'Status — OT+T',
+    holders: 'Holders — OT+T',
     about: 'How this works — OT+T',
   };
 
@@ -262,7 +263,16 @@
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 
-  const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, about: renderAbout };
+  function renderHolders(view, isCurrent) {
+    const H = window.OTTHolders;
+    if (!H || typeof H.render !== 'function') { view.appendChild(notice('The holders module has not loaded.', 'warn')); return; }
+    H.render(view, {
+      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
+    });
+  }
+
+  const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, holders: renderHolders, about: renderAbout };
   let renderVersion = 0;
 
   function renderRoute() {

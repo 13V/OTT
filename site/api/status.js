@@ -18,7 +18,7 @@
  * ("Blink answered HTTP 401") never contain a key, but nothing here assumes that stays true.
  *
  * It also never orders anything, never spends anything, and never signs in as anyone. The provider
- * check is a plain catalogue GET (nadanada's own bundle listing), never purchase or complete; the
+ * check is a plain catalogue GET (wholesale's own bundle listing), never purchase or complete; the
  * payer check is a balance read, never a payment; the store check writes and deletes one throwaway
  * key of its own rather than touching an order record.
  *
@@ -27,7 +27,7 @@
  * up the response nor take another check down with it. The endpoint always answers 200 once the
  * method checks out: a failing check is data for the dashboard to show in red, not a reason for
  * this endpoint to fail too. A 20-second in-memory cache keeps a dashboard left open, or a refresh
- * loop, from hammering Blink or nadanada on every tick. ?fresh=1 is for an operator who wants past
+ * loop, from hammering Blink or wholesale on every tick. ?fresh=1 is for an operator who wants past
  * that cache right now; it is not authenticated, so it cannot be allowed to cost more than an
  * operator actually asking a few times in a row would. FRESH_MIN_MS is the floor under it: a real
  * computation happens at most that often, however many requests — fresh or not — arrive while one
@@ -55,13 +55,12 @@ const RESPONSE_CACHE_MS = 20 * 1000;
 // requests ask for one. Deliberately shorter than RESPONSE_CACHE_MS — an operator asking for a
 // fresh read should get one sooner than the passive cache would turn over — but the shipped
 // default is never zero, which is what let an unauthenticated ?fresh=1 loop cost the store, Blink
-// and nadanada a fresh hit each on every request. env-overridable, the same idea as e.g.
-// NADANADA_COMPLETE_WAIT_MS, so a test can shrink it rather than sleep through a production-sized
+// and wholesale a fresh hit each on every request. env-overridable, the same idea as e.g.
+// WHOLESALE_COMPLETE_WAIT_MS, so a test can shrink it rather than sleep through a production-sized
 // window — Number.isFinite rather than `|| 5000` so a test can set it to exactly 0, too.
 const FRESH_MIN_MS = () => { const n = Number(process.env.STATUS_FRESH_MIN_MS); return Number.isFinite(n) ? n : 5000; };
 const PROBE_KEY = 'status:probe';
 const DETAIL_MAX = 200;
-const NADANADA_DEFAULT_BASE = 'https://nadanada.me/api/v2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the deployment's own files, the same way redeem.js does.
@@ -178,7 +177,7 @@ function tryChoose(choose) {
 async function checkStore() {
   const chosen = tryChoose(chooseProvider);
   if (chosen.error) return { ok: false, detail: messageOf(chosen.error) };
-  if (chosen.name !== 'nadanada') return { ok: true, detail: 'not needed by the ' + chosen.name + ' provider' };
+  if (chosen.name !== 'wholesale') return { ok: true, detail: 'not needed by the ' + chosen.name + ' provider' };
   try {
     return await withTimeout((async () => {
       const s = chooseStore();
@@ -201,7 +200,7 @@ async function checkPayer() {
   } catch (e) { return { ok: false, detail: messageOf(e), pool: null }; }
 }
 
-/** How many bundles came back, whichever of the plausible response shapes nadanada used. */
+/** How many bundles came back, whichever of the plausible response shapes wholesale used. */
 function countBundles(json) {
   const data = json && json.data;
   if (Array.isArray(data)) return data.length;
@@ -214,11 +213,12 @@ async function checkProvider() {
   const chosen = tryChoose(chooseProvider);
   if (chosen.error) return { ok: false, detail: messageOf(chosen.error) };
   if (chosen.name === 'mock') return { ok: true, detail: 'the mock provider: nothing to check' };
-  if (chosen.name !== 'nadanada') return { ok: true, detail: chosen.name + ': no liveness probe defined for this provider' };
+  if (chosen.name !== 'wholesale') return { ok: true, detail: chosen.name + ': no liveness probe defined for this provider' };
   try {
-    const base = String(process.env.NADANADA_BASE_URL || NADANADA_DEFAULT_BASE).replace(/\/$/, '');
+    const base = String(process.env.WHOLESALE_BASE_URL || '').trim().replace(/\/$/, '');
+    if (!base) throw new Error('the private provider endpoint is not configured');
     const json = await withTimeout(fetchJson(base + '/esim/bundles?country=DE', { timeoutMs: CHECK_TIMEOUT_MS }), CHECK_TIMEOUT_MS, 'provider');
-    if (!json || json.success === false) throw new Error('nadanada answered with no data');
+    if (!json || json.success === false) throw new Error('the network partner answered with no data');
     return { ok: true, detail: 'catalogue answered, ' + countBundles(json) + ' bundles for germany' };
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
 }
@@ -331,7 +331,7 @@ module.exports = async (req, res) => {
     const age = cached ? Date.now() - cached.at : Infinity;
     // Ordinary traffic is happy with anything under RESPONSE_CACHE_MS old. ?fresh=1 asks for less
     // than that, but never for a computation that already happened within FRESH_MIN_MS — otherwise
-    // it would be an unauthenticated way to force the very fan-out to Blink and nadanada the cache
+    // it would be an unauthenticated way to force the very fan-out to Blink and wholesale the cache
     // exists to prevent, simply by asking twice.
     if (age < (fresh ? FRESH_MIN_MS() : RESPONSE_CACHE_MS)) return send(res, 200, cached.body);
     const body = await computeStatus();
