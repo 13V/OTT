@@ -1,0 +1,726 @@
+/* OT+T / Onchain Telephone + Telegraph. A service statement, a signal route,
+ * and warm field-paper surfaces connect the public story with the holder account. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #F4F0E7;
+  --surface: #EAE5DA;
+  --text: #16262B;
+  --text-secondary: #495B5B;
+  --border: #C9CEC6;
+
+  --accent: #B63C1C;
+  --accent-hover: #8D2F16;
+  --accent-tint: rgba(182, 60, 28, .10);
+
+  --positive: #1E8E3E;
+  --positive-tint: rgba(30, 142, 62, .10);
+  --warning: #B25E00;
+  --warning-tint: rgba(178, 94, 0, .10);
+  --negative: #C4281E;
+  --negative-tint: rgba(196, 40, 30, .10);
+
+  --font-sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --wrap-width: 1232px;
+  --radius-button: 4px;
+  --radius-card: 5px;
+  --radius-control: 4px;
+
+  /* Neutral black, never colored — the one shadow rule every site studied agrees on. Most surfaces
+     use a border instead; these two are for the handful of moments (a hovered plan card, a floating
+     toast) that actually need to lift off the page. */
+  --shadow-resting: 0 1px 2px rgba(16, 24, 32, .04);
+  --shadow-hover: 0 4px 16px rgba(16, 24, 32, .10);
+}
+
+/* ============================================================ reset and base */
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.55 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* .hero/.section legitimately render at 100vw so their background can reach the viewport edge
+     (see #view below) — this keeps that from ever forcing a horizontal scrollbar sliver. */
+  overflow-x: hidden;
+}
+h1, h2, h3, h4, p { margin: 0; }
+a { color: inherit; text-decoration: none; }
+img { max-width: 100%; display: block; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+/* Stroke/fill defaults only — no forced width/height. A small UI icon sizes itself via its own
+   class (.u-icon, .btn svg); an inline illustrative SVG (e.g. a .hero-visual diagram) needs its own
+   dimensions respected, not crushed to icon size. */
+svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+::selection { background: rgba(11, 87, 214, .18); }
+/* Never removed: a 2px accent ring, offset so it reads on both a pill button and a plain link. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+[hidden] { display: none !important; }
+
+/* The one content-well: 1232px, centred, with its own side gutter. Every band below (.hero,
+   .section) is full-width and expected to nest one of these around its actual content — that is
+   what lets a band's background reach the viewport edge while the words inside it still line up in
+   one column with the nav and the footer. */
+.wrap { max-width: var(--wrap-width); margin-inline: auto; padding-inline: 24px; }
+@media (max-width: 480px) { .wrap { padding-inline: 16px; } }
+
+.mono { font: 500 12px/1 var(--font-mono); letter-spacing: .04em; }
+.dim, .small { color: var(--text-secondary); }
+.small { font-size: .78rem; }
+.num {
+  text-align: right;
+  font: 500 13.5px/1.3 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.skip-link { position: fixed; top: -100px; left: 16px; z-index: 1000; background: var(--bg); border: 1px solid var(--border); padding: 10px 14px; border-radius: var(--radius-control); box-shadow: var(--shadow-hover); }
+.skip-link:focus { top: 12px; }
+
+/* ============================================================ the masthead
+   Sticky, solid, a single hairline underneath — the flat, not-glass masthead every carrier site
+   studied uses, not the blurred-panel "app" idiom. */
+#masthead {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.mh-top { display: flex; align-items: center; gap: 24px; height: 72px; }
+@media (max-width: 860px) { .mh-top { height: 56px; } }
+
+/* The plus is the brand's signal junction, repeated in the route diagram and section details. */
+.brand { font: 800 23px/1 var(--font-display); letter-spacing: -.05em; color: var(--text); flex: none; }
+.brand .dot-fun { color: var(--accent); }
+
+#nav { display: flex; gap: 24px; margin-left: 8px; }
+#nav a { font: 500 14px/1 var(--font-sans); color: var(--text-secondary); padding: 8px 2px; transition: color .15s ease; }
+#nav a:hover { color: var(--text); }
+#nav a.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.mh-right { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
+.nav-toggle { display: none; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--bg); }
+.nav-toggle span { display: block; width: 16px; height: 1.5px; background: var(--text); }
+
+.wallet-slot { display: flex; align-items: center; }
+/* Once connected, app.js swaps the Connect button for this — a quiet chip, not a second button
+   style: --surface fill, a hairline, the truncated address. Never a gradient, never a glow. */
+.wallet-addr {
+  display: inline-flex; align-items: center; height: 36px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-button);
+  background: var(--surface); color: var(--text);
+  font: 500 13px/1 var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .nav-toggle { display: flex; }
+  #nav {
+    display: none;
+    position: absolute; top: 56px; left: 0; right: 0; margin-left: 0;
+    flex-direction: column; gap: 0;
+    background: var(--bg); border-bottom: 1px solid var(--border); padding: 8px 0;
+    box-shadow: var(--shadow-hover);
+  }
+  #nav.open { display: flex; }
+  #nav a { padding: 12px 24px; font-size: 15px; }
+  #nav a.active { box-shadow: inset 3px 0 0 var(--accent); }
+}
+
+/* ============================================================ the page
+   #view itself is full-width and unpadded, on purpose: it is what lets a full-width .hero/.section
+   band's background reach the viewport edge. Anything rendered into it that is NOT one of those two
+   bands — every route this site had before the home page grew section furniture, and everything
+   status.js/esim.js still render the old way — gets the content-well treatment applied here instead,
+   so nothing regresses to full-bleed by accident. */
+#view { padding: 32px 0 64px; min-height: 55vh; }
+#view > *:not(.hero):not(.section) { max-width: var(--wrap-width); margin-inline: auto; padding-inline: 24px; }
+@media (max-width: 480px) {
+  #view > *:not(.hero):not(.section) { padding-inline: 16px; }
+}
+
+.page-head { margin-bottom: 24px; }
+.page-head h1 { font: 700 clamp(26px, 3.2vw, 34px)/1.15 var(--font-display); letter-spacing: -.025em; color: var(--text); }
+.page-lede { color: var(--text-secondary); font: 400 clamp(15px, 1.4vw, 17px)/1.6 var(--font-sans); max-width: 52ch; margin-top: 8px; }
+
+/* The eyebrow label: small uppercase text in --text-secondary, nothing else — no monospace, no
+   leading accent tick. Carriers use this exact convention (EE, T-Mobile) but never colour or
+   typeface it as a technical readout. */
+.label { display: block; margin: 0 0 12px; font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
+.label--accent { color: var(--accent); }
+
+/* ============================================================ the hero
+   .hero is a full-width band; .wrap inside it is what actually centres the copy. Light ground, one
+   headline, one sub-line, one CTA row — no bloom, no ruled-paper field, no mascot, no cycling word.
+   .hero-visual is optional and unopinionated: whatever sits in it (a device shot, a coverage map, an
+   illustration) is sized and centred here, never boxed in a card of its own. */
+/* The hero owns the top of the page, so it is taller above than below: the trust strip under it is
+   the hero's own supporting evidence and should read as attached to it, not as the next section. */
+.hero { background: var(--bg); padding: 56px 0 40px; }
+@media (min-width: 960px) { .hero { padding: 88px 0 48px; } }
+/* The trust strip is already fenced by its own hairlines and internal padding — a band's worth of
+   padding on top of that is what pushed it adrift from the hero. */
+.section.trust { padding: 0; }
+.hero .wrap { display: flex; flex-direction: column; gap: 40px; align-items: flex-start; }
+@media (min-width: 900px) {
+  .hero .wrap { flex-direction: row; align-items: center; gap: 56px; }
+  .hero-copy { flex: 1 1 55%; min-width: 0; }
+  .hero-visual { flex: 1 1 45%; }
+}
+.hero-visual { width: 100%; max-width: 480px; margin-inline: auto; display: flex; align-items: center; justify-content: center; }
+@media (min-width: 900px) { .hero-visual { margin-inline: 0; max-width: none; } }
+.hero-visual svg, .hero-visual img { max-width: 100%; height: auto; }
+
+/* Sized to read as one confident line at desktop and wrap to two on a phone, never five — every
+   carrier hero sampled is a short sentence or fragment, not a multi-clause claim. */
+.hero-title { font: 700 clamp(46px, 6.5vw, 86px)/.98 var(--font-sans); letter-spacing: -.075em; color: var(--text); }
+.hero-sub { margin-top: 20px; max-width: 56ch; font: 400 clamp(16px, 1.6vw, 18px)/1.55 var(--font-sans); color: var(--text-secondary); }
+.hero-actions { display: flex; align-items: center; gap: 12px; margin-top: 32px; flex-wrap: wrap; }
+
+/* ============================================================ the section vocabulary
+   .section is a full-width band, same rule as .hero: it owns the background, .wrap owns the column.
+   .section.alt is the one alternating tone this identity allows — --surface, never a gradient. */
+/* The band rhythm. Padding is deliberately not large: two adjacent bands each contribute their
+   own, so 96px a side became 192px of nothing between every section — the single biggest thing
+   that made the first cut of this page feel unfinished rather than airy. 56/72 reads generous and
+   still lets two sections of the same colour sit next to each other without a hole between them. */
+.section { padding: 56px 0; }
+@media (min-width: 960px) { .section { padding: 72px 0; } }
+/* A band that changes the background carries its own separation, so it can afford a little more. */
+.section.alt { padding: 64px 0; }
+@media (min-width: 960px) { .section.alt { padding: 88px 0; } }
+.section.alt { background: var(--surface); }
+.section-head { max-width: 640px; margin-bottom: 40px; }
+.section-title { font: 700 clamp(28px, 3.4vw, 40px)/1.15 var(--font-sans); letter-spacing: -.02em; color: var(--text); }
+.section-lede { margin-top: 12px; max-width: 60ch; font: 400 clamp(16px, 1.6vw, 18px)/1.6 var(--font-sans); color: var(--text-secondary); }
+
+/* ---- the plan picker: a place selector and a note, full width above the plan cards */
+.plan-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 32px; }
+.place-select {
+  min-width: 220px; height: 48px; padding: 0 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-control);
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235B6169' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") right 14px center / 16px no-repeat;
+  color: var(--text); font: 500 15px/1 var(--font-sans); appearance: none; -webkit-appearance: none;
+}
+.place-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); }
+.plan-note { color: var(--text-secondary); font-size: 13px; }
+
+/* ---- the plan grid: three cards at desktop, one column on a phone. One card, the featured tier,
+   gets the accent border and a badge — everything else is a plain white card on a hairline. */
+.plan-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+@media (min-width: 720px) { .plan-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: stretch; } }
+
+.plan-card {
+  display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-resting); padding: 28px 24px;
+  transition: box-shadow .15s ease;
+}
+.plan-card:hover { box-shadow: var(--shadow-hover); }
+/* 1px narrower padding so the 2px border does not grow the card a pixel taller than its neighbours. */
+.plan-card.featured { border: 2px solid var(--accent); padding: 27px 23px; }
+/* The badge is lifted out of the flow and hung on the card's top edge. In the flow it pushed the
+   featured card's price and button down by its own height, so the three cards' figures sat on
+   three different baselines — the detail that most gives away a price row as unconsidered. */
+.plan-card { position: relative; }
+.plan-badge {
+  position: absolute; top: 0; left: 24px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; white-space: nowrap;
+  padding: 4px 12px; border-radius: var(--radius-button);
+  background: var(--accent); color: #fff; font: 600 12px/1.4 var(--font-sans);
+}
+.plan-size { font: 700 clamp(44px, 5vw, 68px)/1 var(--font-sans); letter-spacing: -.05em; color: var(--text); }
+.plan-price {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 8px;
+  font: 700 23px/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.plan-term { font: 400 15px/1.3 var(--font-sans); color: var(--text-secondary); }
+.plan-meta { display: flex; flex-direction: column; gap: 8px; margin: 20px 0 0; padding: 0; list-style: none; font: 400 14px/1.4 var(--font-sans); color: var(--text-secondary); }
+.plan-meta > * { display: flex; align-items: baseline; gap: 8px; }
+/* The meta list takes the slack, so every button sits on the same line across the row even when
+   one place lists a country code and another lists a coverage count. */
+.plan-meta { flex: 1; }
+.plan-card .plan-cta { margin-top: 24px; }
+
+/* ---- the three-step row */
+.steps { display: grid; grid-template-columns: 1fr; gap: 32px; }
+@media (min-width: 700px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; } }
+.step-n {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  background: var(--accent); color: #fff; font: 700 16px/1 var(--font-sans); margin-bottom: 20px;
+}
+.step-title { font: 700 18px/1.3 var(--font-sans); color: var(--text); margin-bottom: 8px; }
+.step-body { font: 400 15px/1.6 var(--font-sans); color: var(--text-secondary); max-width: 42ch; }
+
+/* ---- the coverage grid: a dense hairline-ruled list, not a set of cards — the gap between cells is
+   drawn by the container's own --border background showing through a 1px grid gap. */
+.cov-grid {
+  /* One column on a phone. At two columns a cell is ~170px wide, and a place like "United Arab
+     Emirates" then truncates to "U." — a name clipped to one letter is worse than a taller list. */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-card);
+  overflow: hidden;
+}
+@media (min-width: 430px) { .cov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 640px) { .cov-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .cov-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.cov-item { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--bg); min-width: 0; }
+.cov-flag { font-size: 24px; line-height: 1; flex: none; }
+.cov-name { flex: 1; min-width: 0; font: 500 14px/1.3 var(--font-sans); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cov-price { flex: none; font: 600 14px/1 var(--font-sans); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ============================================================ buttons
+   Compact squared controls with a signal-orange primary action. */
+.btn, .plan-cta {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font: 600 14px/1 var(--font-sans); letter-spacing: 0;
+  padding: 13px 22px; border-radius: var(--radius-button);
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease;
+}
+.btn:hover { border-color: var(--text-secondary); }
+.btn:active { transform: translateY(1px); }
+.btn-primary, .plan-cta { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover, .plan-cta:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-ghost { background: transparent; border-color: var(--border); }
+.btn-ghost:hover { background: var(--surface); border-color: var(--text-secondary); }
+.btn-sm { padding: 9px 16px; font-size: 13px; }
+.btn-block, .plan-cta { width: 100%; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--border); background: var(--bg); }
+.btn-primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
+.btn svg { width: 16px; height: 16px; }
+
+/* ============================================================ surfaces
+   .card is a genuine card moment: white, a hairline, a resting shadow. .card-quiet is the same
+   shape without the lift, on --surface, for content that should read as grouped, not elevated. */
+.card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-resting); padding: 20px; }
+.card-quiet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: none; padding: 20px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.card-title { font: 600 20px/1.25 var(--font-sans); letter-spacing: -.01em; color: var(--text); }
+.divider { height: 1px; background: var(--border); margin: 16px 0; }
+
+.notice { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-card); padding: 16px 18px; color: var(--text-secondary); font-size: .9rem; }
+.notice.warn { border-color: var(--warning); background: var(--warning-tint); color: var(--text); }
+.notice.error { border-color: var(--negative); background: var(--negative-tint); color: var(--text); }
+
+.chip { font: 500 12.5px/1 var(--font-sans); padding: 8px 13px; border-radius: var(--radius-button); border: 1px solid var(--border); background: var(--bg); color: var(--text-secondary); }
+.chip.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+/* A quiet uppercase stamp, not a terminal readout — no monospace here either. */
+.badge { display: inline-block; font: 600 10px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px; border-radius: var(--radius-control); border: 1px solid var(--border); color: var(--text-secondary); vertical-align: 1px; }
+.badge-hold { border-color: var(--warning); background: var(--warning-tint); color: var(--warning); }
+.badge-off { border-color: var(--negative); background: var(--negative-tint); color: var(--negative); }
+
+.pos, .neg { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font: 600 12px/1.4 var(--font-sans); font-variant-numeric: tabular-nums; }
+.pos { background: var(--positive-tint); color: var(--positive); }
+.neg { background: var(--negative-tint); color: var(--negative); }
+.pos::before { content: '\2191'; }
+.neg::before { content: '\2193'; }
+
+/* ============================================================ forms */
+.field { margin-bottom: 16px; }
+.field label, .st-label { display: block; margin-bottom: 8px; font: 600 12px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); }
+.field input, .field select, .field textarea {
+  width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-control);
+  background: var(--bg); color: var(--text); font: 400 15px/1.4 var(--font-sans);
+}
+.field input::placeholder { color: var(--text-secondary); opacity: .8; }
+.field input:focus, .field select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.hint { font-size: .78rem; color: var(--text-secondary); min-height: 1.2em; }
+.hint.err { color: var(--negative); }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
+.page-tiles { margin-bottom: 28px; }
+.stat-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px; }
+.st-value { font: 700 22px/1.1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--text); margin-top: 6px; }
+.st-sub { font-size: .74rem; color: var(--text-secondary); margin-top: 5px; }
+
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.row:last-child { border-bottom: 0; }
+.row .k { font-size: .82rem; color: var(--text-secondary); }
+.row .v { font: 600 13.5px/1.3 var(--font-sans); font-variant-numeric: tabular-nums; text-align: right; color: var(--text); }
+.stack { display: flex; flex-direction: column; gap: 10px; }
+.col { min-width: 0; }
+
+/* ============================================================ the Status route (#/status) table
+   Rendered by site/status.js: a health strip and a small wallets table. Light ground, 1px row
+   dividers, no zebra striping — this is a short, dense, internal-facing table, not a marketing one. */
+.table-wrap { margin-top: 8px; }
+.status-table { width: 100%; border-collapse: collapse; }
+.status-table th, .status-table td { padding: 0 12px; height: 40px; border-bottom: 1px solid var(--border); text-align: left; }
+.status-table thead th {
+  font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary);
+  height: auto; padding-bottom: 8px;
+}
+
+/* the eSIM package label inside an order row (site/esim.js's .cc-sym) */
+.cc-sym { display: block; font: 600 14px/1.25 var(--font-sans); color: var(--text); }
+
+/* ============================================================ toasts
+   The one place that keeps a stronger shadow at rest, because a toast is a floating overlay layer,
+   not page content — still strictly neutral black, never a color. */
+#toasts { position: fixed; right: 16px; bottom: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; max-width: min(360px, calc(100% - 32px)); }
+.toast { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-hover); padding: 14px 16px; font-size: .84rem; color: var(--text); }
+.toast .t-title { font-weight: 600; margin-bottom: 3px; }
+.toast.success { border-color: var(--positive); }
+.toast.error { border-color: var(--negative); }
+.toast.pending { border-color: var(--accent); }
+
+/* ============================================================ the footer
+   Dense and quiet: a normal-scale wordmark, three short link columns, then the legal line — the
+   opposite of a 132px stroked wordmark and a pull-quote. */
+#site-footer { background: var(--surface); border-top: 1px solid var(--border); margin-top: 96px; }
+.footer-inner { padding: 48px 0 32px; }
+.foot-grid { display: grid; grid-template-columns: 1fr; gap: 32px; }
+@media (min-width: 640px) { .foot-grid { grid-template-columns: 1.4fr repeat(3, 1fr); gap: 24px; } }
+.foot-brand-col { display: flex; flex-direction: column; gap: 8px; }
+.foot-brand { font: 700 18px/1 var(--font-sans); letter-spacing: -.01em; color: var(--text); }
+.foot-tagline { font: 400 14px/1.5 var(--font-sans); color: var(--text-secondary); max-width: 32ch; }
+.foot-col { display: flex; flex-direction: column; gap: 10px; }
+.foot-col-title { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); margin: 0 0 4px; }
+.foot-col a { font: 400 14px/1.4 var(--font-sans); color: var(--text-secondary); }
+.foot-col a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+.foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); }
+.disclaimer { color: var(--text-secondary); font-size: 12.5px; line-height: 1.65; max-width: 74ch; }
+.foot-meta { margin-top: 10px; font-size: 12.5px; color: var(--text-secondary); }
+
+/* ============================================================ the Data route (#/data, home)
+   Rendered by site/esim.js: everything here reuses the page's own furniture — .card, .stat-grid
+   (via ui.css's .u-tile), .rows, .field, .btn, .sp-bar — plus the shapes only this page has: a QR
+   code, an activation code, and a two-column split between the programme's numbers and the
+   wallet's own. */
+.data-page { display: flex; flex-direction: column; gap: 24px; }
+.data-explainer p { color: var(--text-secondary); font-size: .95rem; line-height: 1.65; max-width: 78ch; }
+.data-explainer b { color: var(--text); font-weight: 600; }
+.data-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 24px; align-items: start; }
+.data-tiles { margin-bottom: 20px; }
+.data-page .col > .data-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Four supporting figures (used, left, share, resets) rather than the three this used to hold — an
+   auto-fit track, not a hard count, so it settles at 2 across on a phone and one row above that. */
+.data-mine .data-tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.data-mine .stat-tile, .data-mine .u-tile { padding: 12px; }
+.data-mine .st-value, .data-mine .u-tile-value { font-size: 17px; }
+/* The two headline figures — what a wallet holds, and what that buys this week — are what the
+   founder asked this screen show first, so they get the plan-card's own big-number treatment
+   rather than the compact stat-tile one every other figure on this page uses. No icon, same as
+   .plan-price: the number is the whole point. */
+.data-headline { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 20px; }
+@media (min-width: 560px) { .data-headline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dh-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 20px; }
+.dh-label { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); }
+.dh-value { margin-top: 10px; font: 700 clamp(30px, 4vw, 38px)/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
+.dh-sub { margin-top: 8px; font: 500 13px/1.45 var(--font-sans); color: var(--text-secondary); }
+.data-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.data-addr { color: var(--text-secondary); margin: -6px 0 14px; overflow-wrap: anywhere; }
+/* The curve's progress, in the same bar idiom as .sp-bar below, just taller. */
+.data-progress .dp-bar { height: 12px; border-radius: 6px; }
+.data-redeem { margin-top: 6px; }
+.data-redeem .hint { margin-top: 8px; }
+/* Buttons, not a second dropdown, so the price shows without a click to reveal it. */
+.data-sizes { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
+.data-sizes .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.data-sims .label { margin-top: 2px; }
+/* One eSIM: a card, the way an order used to be one — it is the thing that lifts off the page now,
+   because item 1 of the brief made the SIM the object and an order only ever a line underneath it. */
+.data-sim { padding: 16px; margin-top: 12px; }
+/* The eSIM a just-placed bundle minted gets a positive-tinted border, never a glow, to say "this is
+   new". A bundle that only topped up an eSIM the holder already has does not move this card at
+   all — it is not new, only what is queued on it is, and the bundle row below says so instead. */
+.data-sim.fresh { border-color: var(--positive); }
+.data-sim-head, .data-bundle-head { display: flex; align-items: center; gap: 10px; }
+.data-sim-head { justify-content: space-between; margin-bottom: 12px; }
+.data-bundle-head .small { margin-left: auto; }
+/* The QR sits on white no matter what — a phone camera reads dark-on-light, and a themed dark tile
+   is a real scan failure. Hardcoded #fff, not a token, so this never moves even if the page did. */
+.data-qr { width: 180px; height: 180px; background: #fff; border: 1px solid var(--border); padding: 8px; border-radius: var(--radius-control); margin-bottom: 12px; }
+.data-install { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.data-ac-row { display: flex; align-items: center; gap: 10px; }
+.data-ac {
+  flex: 1; min-width: 0; display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control);
+  background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.4; letter-spacing: .02em;
+  overflow-wrap: anywhere; user-select: all;
+}
+/* One queued bundle: a plain hairline-divided row, not a card — the SIM above it is the one thing
+   here that should lift off the page, and a list of what queues on it should read like a list. */
+.data-bundles { margin-top: 4px; }
+.data-bundle { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.data-bundle:last-child { border-bottom: 0; }
+
+/* The progress-bar idiom shared by the home programme card and the status route: a hairline track,
+   a flat accent fill that draws in once on load (never a loop; prefers-reduced-motion below cuts it
+   to a single frame regardless). */
+.sp-bar { height: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sp-bar i {
+  display: block; height: 100%; background: var(--accent);
+  width: calc(var(--w, 0) * 100%); transform-origin: left center;
+  animation: draw .5s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* ============================================================ the Status route (#/status)
+   Rendered by site/status.js. Reuses .data-page's column layout and .card/.stat-grid/.rows/.small
+   rather than opening a page of its own — a health strip and a small wallets table are the only
+   shapes here nothing else needs. */
+.status-strip .status-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.status-strip .status-row:last-child { border-bottom: 0; }
+/* Colour is never the only signal — each dot sits beside its own name and detail text — and the
+   dots are the real semantic set now: positive/warning/negative/neutral, not the brand accent. */
+.status-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; background: var(--text-secondary); }
+.status-dot.ok { background: var(--positive); }
+.status-dot.warn { background: var(--warning); }
+.status-dot.off { background: var(--negative); }
+
+/* ============================================================ the Holders route (#/holders)
+   Rendered by site/holders.js. Everything structural here is borrowed — .card, .stat-grid,
+   .status-table, .table-wrap — so the ledger reads as the same instrument the status page is, and
+   only the four things that route genuinely adds are defined below. */
+.status-more-link { color: var(--accent); font-weight: 600; }
+.status-more-link:hover { text-decoration: underline; }
+
+.holders-tools {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 4px;
+}
+.holders-count { margin: 0; white-space: nowrap; }
+.holders-table td, .holders-table th { vertical-align: middle; }
+/* A rank column reads as an index, not a measurement: quiet, narrow, and never the widest thing in
+   the row even when the ledger runs to four figures. */
+.holders-rank { width: 1%; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.holders-none { color: var(--text-secondary); text-align: center; }
+.holders-more { display: flex; justify-content: center; margin-top: 14px; }
+.holders-more button[hidden] { display: none !important; }
+.holders-note {
+  max-width: 68ch; margin-top: 16px;
+  color: var(--text-secondary); font: 400 12.5px/1.55 var(--font-sans);
+}
+
+/* The connected wallet's own row. A tint and a left edge rather than a colour on the text, so the
+   row is findable while every figure in it still reads the same as the ones above and below. */
+.holder-you > td { background: var(--accent-tint); }
+.holder-you > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.holders-you-tag {
+  margin-left: 8px; padding: 2px 7px; border-radius: var(--radius-button);
+  background: var(--accent); color: #fff;
+  font: 600 10px/1.5 var(--font-sans); text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* ---- concentration: how tightly the supply is held */
+.conc-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 720px) { .conc-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+.conc-item { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.conc-label { font: 600 12px/1 var(--font-sans); color: var(--text); }
+.conc-bar { height: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.conc-bar i { display: block; height: 100%; background: var(--accent); }
+.conc-val { font: 400 12px/1 var(--font-sans); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ============================================================ responsive */
+@media (max-width: 900px) {
+  .data-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}
+
+/* ============================================================ prose (#/about)
+ * An article, not a stack of cards. The measure is capped near 68 characters because a line of
+ * body text wider than that is measurably harder to track back to the start of — the reason every
+ * newspaper column and every carrier's support page is narrow even on a wide screen. Entries are
+ * separated by a hairline rather than boxed, so the page reads as one document.
+ */
+.prose { max-width: 68ch; }
+.prose-entry + .prose-entry { margin-top: 28px; padding-top: 28px; border-top: 1px solid var(--border); }
+.prose-title { margin: 0 0 8px; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+.prose-body { margin: 0; color: var(--text-secondary); line-height: 1.65; }
+.prose-note { max-width: 68ch; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 13px; }
+.page-lede { max-width: 60ch; }
+
+/* Brand direction: signal route, field paper, structured service statements. */
+#masthead { background: var(--bg); }
+#nav a { font-weight: 650; }
+#view { padding-top: 0; }
+#view > .page-head { padding-top: 64px; }
+.page-head h1 { max-width: 19ch; font-size: clamp(36px, 5vw, 58px); letter-spacing: -.055em; }
+.page-lede { max-width: 60ch; }
+.section-head { max-width: 760px; }
+.section-head h2 { font: 720 clamp(32px, 4.4vw, 56px)/1.04 var(--font-sans); letter-spacing: -.06em; }
+.label--accent { color: var(--accent); }
+.state-pill { display: inline-flex; align-items: center; min-height: 28px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 3px; color: var(--accent); font: 750 11px/1.2 var(--font-sans); letter-spacing: .085em; }
+.text-arrow, .hero-text-link { display: inline-block; border-bottom: 1px solid currentColor; padding: 4px 0; color: var(--accent); font-weight: 700; }
+.text-arrow:hover, .hero-text-link:hover { color: var(--accent-hover); }
+.hero { position: relative; overflow: hidden; padding: 74px 0 84px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.hero .wrap { gap: 40px; }
+@media (min-width: 900px) { .hero .wrap { gap: 6%; } }
+.hero-copy { position: relative; z-index: 1; }
+.hero-title { max-width: 10ch; margin-top: 26px; }
+.hero-kicker { max-width: 29ch; margin-top: 28px; font: 700 clamp(20px, 2vw, 27px)/1.15 var(--font-sans); letter-spacing: -.035em; }
+.hero-sub { max-width: 48ch; margin-top: 16px; font-size: 17px; color: var(--text-secondary); }
+.hero-actions { margin-top: 30px; }
+.hero-actions .btn { min-height: 50px; }
+.hero-text-link { margin-left: 8px; }
+.hero-foot { max-width: 52ch; margin-top: 26px; padding-left: 14px; border-left: 3px solid var(--accent); font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.hero-visual { position: relative; display: block; width: 100%; min-height: 450px; max-width: none; margin: 0; padding: 24px 34px; aspect-ratio: auto; color: var(--bg); background: var(--text); border-radius: 4px; }
+.hero-visual::before { content: '+'; position: absolute; right: -25px; bottom: -77px; font: 800 280px/.9 var(--font-sans); color: rgba(244,240,231,.05); pointer-events: none; }
+.route-heading, .statement-top { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid rgba(244,240,231,.3); font: 700 11px/1.3 var(--font-mono); letter-spacing: .06em; }
+.route-heading span:last-child { color: #A8B6B0; }
+.signal-route { position: relative; margin-top: 18px; }
+.signal-route::before { content: ''; position: absolute; left: 39px; top: 31px; bottom: 32px; width: 3px; background: var(--accent); }
+.route-station { position: relative; display: grid; grid-template-columns: 24px 32px minmax(0, 1fr); gap: 8px 17px; align-items: center; min-height: 83px; border-bottom: 1px solid rgba(244,240,231,.17); }
+.route-station:last-child { border-bottom: 0; }
+.route-number { font: 600 10px/1 var(--font-mono); color: #A8B6B0; }
+.route-node { position: relative; z-index: 1; width: 22px; height: 22px; border: 5px solid var(--text); border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.route-junction .route-node { display: flex; justify-content: center; align-items: center; width: 32px; height: 32px; margin-left: -5px; border: 0; border-radius: 3px; box-shadow: none; color: #fff; font: 600 25px/1 var(--font-sans); }
+.route-text strong, .route-text small { display: block; }
+.route-text strong { font: 650 clamp(19px, 2vw, 25px)/1.1 var(--font-sans); letter-spacing: -.04em; }
+.route-text small { margin-top: 5px; color: #B6C4BE; font-size: 12px; }
+.route-end { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: #B6C4BE; font: 700 10px/1 var(--font-mono); letter-spacing: .09em; }
+.route-end span { color: #F47C53; font: 700 22px/1 var(--font-sans); }
+.mechanism { background: var(--text); color: var(--bg); }
+.mechanism-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(42px, 7vw, 110px); }
+.mechanism .label, .mechanism .text-arrow { color: #FE9271; }
+.mechanism-intro h2 { max-width: 12ch; font: 720 clamp(38px, 5vw, 66px)/1.02 var(--font-sans); letter-spacing: -.065em; }
+.mechanism-intro p { max-width: 52ch; margin: 26px 0 22px; color: #D1DAD2; line-height: 1.65; }
+.mechanism-facts { border-top: 1px solid #657675; }
+.mechanism-fact { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 6px 18px; padding: 22px 0; border-bottom: 1px solid #657675; }
+.mechanism-fact > span { grid-row: span 2; color: #FE9271; font: 650 11px/1.4 var(--font-mono); }
+.mechanism-fact strong { font-size: 19px; line-height: 1.2; letter-spacing: -.025em; }
+.mechanism-fact p { color: #D1DAD2; font-size: 14px; }
+.mechanism-status { margin-top: 18px; font-size: 12px; color: #A8B6B0; }
+.usage { background: var(--surface); }
+.usage .section-head { margin-bottom: 42px; }
+.steps { gap: 0; border-top: 1px solid var(--border); }
+.step { position: relative; padding: 25px 30px 18px 0; border-bottom: 1px solid var(--border); }
+.step + .step { padding-left: 30px; border-left: 1px solid var(--border); }
+.step-n { width: auto; height: auto; margin-bottom: 20px; display: block; background: none; color: var(--accent); font: 700 13px/1 var(--font-mono); }
+.step-n::before { content: '+'; margin-right: 9px; font: 700 19px/1 var(--font-sans); }
+.step-title { font-size: 22px; letter-spacing: -.04em; }
+.discovery { background: var(--bg); }
+.search-shell { position: relative; max-width: 720px; margin: 0 0 38px; }
+.search-shell > label { display: block; margin-bottom: 9px; font-weight: 700; font-size: 13px; }
+.search-control { display: flex; gap: 10px; }
+.destination-search { flex: 1; min-width: 0; height: 56px; padding: 0 17px; border: 1px solid var(--border); border-radius: var(--radius-control); background: #fff; color: var(--text); font-size: 16px; }
+.destination-search::placeholder { color: #687977; }
+.destination-results { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; right: 75px; max-height: 280px; overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: #fff; box-shadow: var(--shadow-hover); }
+.destination-result { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 12px 14px; text-align: left; }
+.destination-result:hover, .destination-result:focus-visible { background: var(--surface); }
+.destination-result small { color: var(--text-secondary); }
+.destination-empty { padding: 12px; font-size: 14px; color: var(--text-secondary); }
+.plan-options, #plans, #coverage, #how-it-works, #using-it { scroll-margin-top: 90px; }
+.plan-picker { margin-bottom: 24px; }
+.plan-picker label { font-weight: 700; }
+.place-select { background-color: #fff; }
+.plan-card, .plan-card.featured { padding: 26px; background: #FAF8F2; border: 1px solid var(--border); border-top: 3px solid var(--text); border-radius: 3px; box-shadow: none; }
+.plan-card.featured { border-top-color: var(--accent); }
+.plan-card:hover { box-shadow: none; border-color: var(--text-secondary); }
+.plan-card.featured:hover { border-color: var(--accent); }
+.plan-badge { top: 15px; left: auto; right: 15px; transform: none; padding: 5px 8px; border-radius: 2px; background: var(--accent); color: #fff; font-size: 10px; }
+.plan-destination { min-height: 28px; padding-right: 100px; color: var(--text-secondary); font: 700 10px/1.3 var(--font-mono); letter-spacing: .02em; text-transform: uppercase; }
+.plan-size { margin-top: 12px; }
+.plan-term { margin-top: 6px; color: var(--text-secondary); font-size: 14px; }
+.plan-credit-label { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-secondary); font: 700 10px/1 var(--font-mono); letter-spacing: .06em; }
+.plan-price { margin-top: 8px; }
+.plan-meta { margin-top: 19px; gap: 7px; font-size: 12px; }
+.plan-disclaimer { margin-top: 22px; max-width: 76ch; color: var(--text-secondary); font-size: 13px; }
+.coverage-summary { padding: 0 0 72px; background: var(--bg); }
+.coverage-details { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.coverage-details summary { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 0; cursor: pointer; font-weight: 700; }
+.coverage-details summary span { color: var(--text-secondary); font: 650 10px/1 var(--font-mono); }
+.coverage-details[open] summary { border-bottom: 1px solid var(--border); }
+.cov-grid { margin: 18px 0; border-radius: 2px; }
+.cov-item { width: 100%; text-align: left; background: #FAF8F2; }
+.cov-item:hover, .cov-item:focus-visible { background: var(--surface); }
+.cov-name { white-space: normal; overflow: visible; }
+.cov-price { font-size: 12px; white-space: nowrap; }
+.account-preview { background: var(--surface); }
+.account-preview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 7vw, 110px); align-items: center; }
+.account-preview .section-head { margin-bottom: 0; }
+.account-preview .btn { margin-top: 28px; }
+.statement-preview { padding: 27px; background: #FAF8F2; border: 1px solid var(--border); border-top: 4px solid var(--accent); }
+.statement-top { color: var(--text); border-color: var(--border); }
+.statement-top span { color: var(--accent); }
+.statement-value { padding: 30px 0; border-bottom: 1px solid var(--border); }
+.statement-value span { display: block; color: var(--text-secondary); font: 700 10px/1 var(--font-mono); }
+.statement-value strong { display: block; margin-top: 8px; font: 700 56px/1 var(--font-sans); }
+.statement-line { display: flex; justify-content: space-between; gap: 20px; padding: 15px 0; border-bottom: 1px solid var(--border); }
+.statement-line span { color: var(--text-secondary); font: 700 10px/1.4 var(--font-mono); }
+.statement-line strong { text-align: right; font-size: 13px; }
+.statement-preview > p { margin-top: 17px; color: var(--text-secondary); font-size: 12px; }
+.faq-section { background: var(--bg) !important; }
+.faq-list { max-width: 850px; border-top: 1px solid var(--border); }
+.faq-item { border-bottom: 1px solid var(--border); }
+.faq-item summary { padding: 20px 4px; cursor: pointer; font-weight: 700; list-style-position: outside; }
+.faq-item p { max-width: 70ch; padding: 0 4px 22px; color: var(--text-secondary); line-height: 1.65; }
+.dashboard-head { margin-bottom: 28px; }
+.dashboard-panel, .dashboard-empty { max-width: 1100px; border-top: 4px solid var(--accent); }
+.dashboard-empty { max-width: 720px; padding: 34px; }
+.dashboard-empty h2 { margin: 20px 0 10px; font: 700 clamp(25px, 3vw, 38px)/1.1 var(--font-sans); letter-spacing: -.045em; }
+.dashboard-empty p { max-width: 58ch; margin-bottom: 24px; color: var(--text-secondary); }
+.dashboard-panel .data-headline { gap: 12px; }
+.dashboard-panel .dh-tile { background: var(--surface); }
+.credit-summary { display: flex; justify-content: space-between; gap: 28px; margin: 0 0 20px; padding: 27px 30px; border-radius: 3px; background: var(--text); color: var(--bg); }
+.credit-summary-label, .credit-summary-side span { display: block; color: #B9C8BF; font: 700 11px/1.3 var(--font-mono); }
+.credit-summary strong { display: block; margin: 9px 0; font-size: clamp(34px, 5vw, 54px); line-height: 1; letter-spacing: -.06em; }
+.credit-summary p { max-width: 53ch; color: #D4DED5; font-size: 13px; }
+.credit-summary-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 8px; flex: none; }
+.credit-summary-side b { font-size: 14px; }
+.status-summary { display: flex; align-items: center; gap: 20px; max-width: 840px; margin: 4px 0 30px; padding: 18px 22px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
+.status-summary p { line-height: 1.5; color: var(--text); }
+.prose-entry { scroll-margin-top: 100px; }
+.prose-title { font-size: 23px; }
+.prose-body { font-size: 16px; line-height: 1.75; }
+#site-footer { margin-top: 0; }
+@media (max-width: 900px) {
+  .mechanism-grid, .account-preview-grid { gap: 30px; }
+  .mechanism-fact { grid-template-columns: 82px minmax(0,1fr); }
+}
+@media (max-width: 700px) {
+  .hero { padding: 44px 0 48px; }
+  .hero .wrap { gap: 32px; }
+  .hero-title { font-size: clamp(43px, 10vw, 65px); }
+  .hero-kicker { margin-top: 22px; font-size: 20px; }
+  .hero-visual { min-height: 0; padding: 16px 20px; }
+  .route-heading { padding-bottom: 10px; }
+  .signal-route { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+  .signal-route::before { left: 9%; right: 9%; top: 32px; bottom: auto; width: auto; height: 2px; }
+  .route-station { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 0; padding: 9px 0; border: 0; }
+  .route-node { order: 1; margin: 0 0 5px 4px; width: 17px; height: 17px; border-width: 3px; }
+  .route-junction .route-node { margin-left: 0; width: 24px; height: 24px; font-size: 20px; }
+  .route-number { order: 0; }
+  .route-text { order: 2; }
+  .route-text strong { font-size: 12px; line-height: 1.2; }
+  .route-text small { display: none; }
+  .route-end { margin-top: 7px; }
+  .mechanism-grid, .account-preview-grid { grid-template-columns: 1fr; gap: 36px; }
+  .mechanism-intro h2 { max-width: 16ch; font-size: 40px; }
+  .step + .step { padding-left: 0; border-left: 0; }
+  .section { padding: 54px 0; }
+  .destination-results { right: 0; }
+  .cov-grid { grid-template-columns: 1fr; }
+  .status-summary, .credit-summary { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .credit-summary-side { align-items: flex-start; }
+  #view > .dashboard-empty, #view > .dashboard-panel { width: calc(100% - 32px); margin-inline: auto; }
+}
+@media (max-width: 390px) {
+  .mh-top { gap: 8px; }
+  .mh-right { gap: 6px; }
+  .wallet-slot .btn { padding-inline: 10px; font-size: 12px; }
+  .hero-title { font-size: 42px; }
+  .hero-actions .btn { width: 100%; }
+  .hero-text-link { margin-left: 0; }
+  .search-control .btn { padding-inline: 14px; }
+  .route-text strong { font-size: 11px; }
+}

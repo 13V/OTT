@@ -1,0 +1,16 @@
+{
+ "asOf": 1790560437,
+ "block": 74418989,
+ "week": 2960,
+ "weekStart": 1790553600,
+ "weekEnd": 1791158400,
+ "snapshotBlock": 0,
+ "coin": "",
+ "curve": "",
+ "budgetUsd": 0,
+ "budgetSource": "the coin is not launched yet",
+ "circulating": "0",
+ "decimals": 18,
+ "holders": 0,
+ "wallets": {}
+}
