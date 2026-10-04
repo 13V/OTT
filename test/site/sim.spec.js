@@ -113,7 +113,7 @@ const standing = (extra) => Object.assign({
 async function open(page, body) {
   await page.route('**/api/redeem**', (r) => r.fulfill(json(body)));
   await page.route('**/data/treasury.json', (r) => r.fulfill({ status: 404, body: 'no treasury reading' }));
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   return mine;
@@ -175,7 +175,7 @@ test('the one code the holder scans belongs to the eSIM, and a top-up never carr
   await page.route('**/data/treasury.json', (r) => r.fulfill({ status: 404, body: 'no treasury reading' }));
   await page.route('**/api/redeem**', (r) => r.fulfill(json(
     r.request().method() === 'GET' ? shape(sim(DE_ICCID, 'germany')) : shape(withCodes(sim(DE_ICCID, 'germany'))))));
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   await mine.getByRole('button', { name: 'Show my eSIM codes' }).click();
@@ -235,7 +235,7 @@ test('a pool that cannot cover the week says so before the button, not after', a
   // fact up front rather than a failed order.
   await page.route('**/data/treasury.json', (r) => r.fulfill({ status: 404, body: 'none' }));
   await page.route('**/api/redeem**', (r) => r.fulfill(json(standing({ poolUsd: 6.2 }))));
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   await expect(mine).toContainText('The data pool holds $6.20 just now, less than the $20.00 you have left this week');

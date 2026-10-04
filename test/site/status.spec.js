@@ -368,14 +368,14 @@ test('every data file is missing (404): each section names what is missing and t
   expect(errors).toEqual([]);
 });
 
-test('the nav lists exactly three routes, status second, and highlights the active one', async ({ page }) => {
+test('the nav includes the holder dashboard and highlights status', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED);
   await page.goto('/index.html#/status');
-  const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.dataset.route));
-  expect(links).toEqual(['home', 'status', 'about']);
+  const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
+  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status']);
   await expect(page.locator('#nav a[data-route="status"]')).toHaveClass(/active/);
   expect(errors).toEqual([]);
 });

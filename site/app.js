@@ -95,10 +95,10 @@
 
   // ============================================================================ wallet
   async function connect() {
-    if (!window.ethereum) { toast('No wallet found', 'Install a browser wallet to trade or redeem.'); return null; }
+    if (!window.ethereum) { toast('No wallet found', 'Install a browser wallet to view your data or redeem.'); return null; }
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-    STATE.account = accounts && accounts[0];
     await ensureChain();
+    STATE.account = accounts && accounts[0];
     paintWallet();
     return STATE.account;
   }
@@ -127,8 +127,8 @@
     const slot = $('wallet-slot');
     if (!slot) return;
     clear(slot);
-    if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: connect }, 'Connect wallet')); return; }
-    slot.appendChild(h('span', { class: 'wallet-addr' }, shortAddr(STATE.account)));
+    if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: async () => { const button = slot.querySelector('button'); button.disabled = true; button.textContent = 'Connecting…'; try { await connect(); if (STATE.route === 'data') renderRoute(); } catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); } }, 'aria-label': 'Connect wallet' }, 'Connect wallet')); return; }
+    slot.appendChild(h('a', { class: 'wallet-addr', href: '#/data', 'aria-label': 'My data, wallet ' + STATE.account }, shortAddr(STATE.account)));
   }
 
   function toast(title, body, kind) {
@@ -150,12 +150,13 @@
   }
 
   // ============================================================================ routes
-  const ROUTES = ['home', 'status', 'about'];
+  const ROUTES = ['home', 'data', 'status', 'about'];
   // Full <title> strings, not just labels — the title bar says where you are. An empty or unknown
   // hash falls back to 'home', so TITLES.home also stands in whenever STATE.route somehow lands on
   // something this map does not name.
   const TITLES = {
-    home: 'OT+T — hold the coin, fly with data',
+    home: 'OT+T — a memecoin with a data plan',
+    data: 'My data — OT+T',
     status: 'Status — OT+T',
     about: 'How this works — OT+T',
   };
@@ -166,12 +167,12 @@
    * exactly the page it always drew, just reached by a shorter hash. ctx is the one contract
    * site/esim.js was already written against, so nothing in that file changes for the move.
    */
-  function renderHome(view) {
-    const D = window.WhateverData;
+  function renderHome(view, isCurrent) {
+    const D = window.WhateverHome;
     if (!D || typeof D.render !== 'function') { view.appendChild(notice('The programme module has not loaded.', 'warn')); return; }
     D.render(view, {
       h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
     });
   }
 
@@ -180,12 +181,21 @@
    * hands it the same ctx renderHome does, so the two route modules can never see a different
    * picture of the wallet, the RPC rotation or the DOM helper.
    */
-  function renderStatus(view) {
+  function renderStatus(view, isCurrent) {
     const S = window.WhateverStatus;
     if (!S || typeof S.render !== 'function') { view.appendChild(notice('The status module has not loaded.', 'warn')); return; }
     S.render(view, {
       h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
+    });
+  }
+
+  function renderData(view, isCurrent) {
+    const D = window.WhateverData;
+    if (!D || typeof D.renderMyData !== 'function') { view.appendChild(notice('The data module has not loaded.', 'warn')); return; }
+    D.renderMyData(view, {
+      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
     });
   }
 
@@ -198,12 +208,12 @@
    * is still true without a number attached to it, so a figure that cannot be read is named as
    * unconfigured rather than guessed at.
    */
-  async function renderAbout(view) {
+  async function renderAbout(view, isCurrent) {
     view.appendChild(h('div', { class: 'page-head' },
       h('div', { class: 'label' }, 'HOW THIS WORKS'),
       h('h1', {}, 'How this works'),
-      h('p', { class: 'page-lede' }, 'What OT+T actually is, how holding turns into a gigabyte, and what this first version deliberately leaves out.')));
-    const body = h('div', {}, notice('Reading the numbers…', 'plain'));
+      h('p', { class: 'page-lede' }, 'Where the data comes from, how your credit is calculated and the limits to keep in mind.')));
+    const body = h('div', {}, notice('Loading the programme details…', 'plain'));
     view.appendChild(body);
 
     let cfg = {};
@@ -211,7 +221,9 @@
       const res = await fetch('./config/esim.json', { cache: 'no-store' });
       cfg = res.ok ? await res.json() : {};
     } catch (e) { cfg = {}; }
+    if (!isCurrent()) return;
     cfg = cfg || {};
+    const programmeLaunched = [cfg.coin, cfg.curve, cfg.treasury].every((a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || '')));
 
     // A percentage read from the config, or null — never a made-up figure. The two sentences below
     // that use these read naturally either way.
@@ -227,7 +239,7 @@
     const sizesText = sizes.length > 1 ? sizes.slice(0, -1).join(', ') + ' and ' + sizes[sizes.length - 1] : String(sizes[0] || '');
     const cheapest = list.length ? Math.min(...list.map((p) => Number(p.priceUsd))) : null;
     const catalogueText = list.length
-      ? places + ' places, ' + sizesText + ' GB packages, from $' + cheapest.toFixed(2) + ' — read live from config/esim.json.'
+      ? 'The current catalogue covers ' + places + ' ' + (places === 1 ? 'place' : 'places') + '. Packages come in ' + sizesText + ' GB sizes and require at least $' + cheapest.toFixed(2) + ' in data credit.'
       : 'The eSIM catalogue is not configured yet.';
 
     // Prose, not cards. Five bordered boxes stacked down a page is the "cards on cards" habit every
@@ -238,33 +250,42 @@
     clear(body);
     body.appendChild(h('div', { class: 'prose' },
       entry('What OT+T is',
-        'OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin. The coin trades on Robinhood Chain against a bonding curve, and its contract carries ' + taxPhrase + ' on every trade. That tax is the whole of the carrier’s revenue: it funds a treasury, and the treasury’s only job is buying mobile data.'),
-      entry('How holding becomes a gigabyte',
-        'Every Monday, last week’s creator tax becomes that week’s data budget — scaled down first if a reserve is held back — and a wallet’s allowance is simply its share of OTT’s circulating supply times that budget: banked as dollars of credit rather than a fixed number of gigabytes, because a gigabyte’s price depends on where you spend it and how much of it you buy at once. scripts/allowances.js reads the coin’s balances once a week and writes every wallet’s standing to site/data/allowances.json; /api/redeem is what turns that standing into an eSIM from nadanada. The allowance expires at the end of the week it was published for — use it or lose it, which is what keeps the promise affordable, since the pool never owes more than one week of tax it has already collected. The tax side runs on its own: a keeper sweeps it out of the curve’s fee escrow, converts it to sats, and keeps a Blink Lightning wallet funded — that wallet is what actually pays nadanada for every eSIM ordered. No person sits in either loop.'),
-      entry('Why holding, and not trading',
-        'The tax is paid by trading, but the budget it funds is split by holding: a wallet’s allowance is simply its share of the circulating supply, counted fresh once a week, with nothing to claim and nothing to stake. Trade as much as you like — it changes your balance, and next week’s count reads whatever that balance is then — but the trade itself earns nothing. Buy and hold, and every week you are owed the same share of that week’s budget for as long as you keep holding; sell, and next week simply owes you less.'),
-      entry('What v1 deliberately leaves out',
-        'Two limits are fixed for now, and both are named on the programme page itself rather than hidden. Balances are only snapshotted pre-graduation: the indexer reads the bonding curve’s own state, and once a coin graduates to a public pool, trading — and the tax that would fund a future budget — moves off the curve this script watches. And only a USDG-paired coin counts at all: the creator tax is read off the curve’s fee escrow in USDG, and a coin paired to native ETH collects its tax in ETH instead, so v1 cannot price a dollar budget from it.'),
-      entry('The coin is the receipt',
-        'OTT is a bonding-curve memecoin, not equity and not a claim on the treasury. What holding it earns is a weekly data allowance — spendable only on an eSIM, and only for the week it was published, never carried over and never paid out as anything else. That is not a dividend: a dividend is cash, and this is credit that expires. And it is not a claim on the treasury either: the treasury owes nothing beyond the one week already funded by tax it has already collected. Holding OTT and never redeeming anything is just a bet on its price, the same bet holding any memecoin is — and a memecoin can go to zero. Nothing on this site is financial advice.')));
+        'OT+T stands for Onchain Telephone + Telegraph. OTT is its memecoin, linking eligible holdings to mobile data. ' + (programmeLaunched ? 'The coin trades' : 'The coin has not launched. When active, it will trade') + ' on Robinhood Chain through a bonding curve, with ' + taxPhrase + ' on each trade. The collected tax goes into a treasury that pays for mobile data.'),
+      entry('How weekly data credit works',
+        'Each Monday, the previous week’s collected creator tax funds the new week’s data budget. Any reserve is held back first. Your eligible OTT balance is divided by the applicable circulating supply, then multiplied by that budget to calculate your credit. Credit is measured in dollars because data prices vary by country and package size. You can spend it on eSIM packages. Unused credit expires at the weekly reset, while a redeemed package follows its own validity rules.'),
+      entry('What decides your share',
+        'The weekly snapshot records OTT balances and determines which wallets are eligible. A trade itself does not earn data credit. Your allocation can change when your balance, the circulating supply or the funded budget changes. There is nothing to stake or claim in advance.'),
+      entry('Current limits',
+        'The current version supports USDG-paired coins before graduation. Once a coin graduates, trading moves from its bonding curve to a public pool. The current system does not track balances and creator tax from that pool, so it cannot calculate new weekly allocations from them. ETH-paired coins are also unsupported because their tax is collected in ETH and cannot currently be used to calculate the dollar budget.'),
+      entry('What holding OTT gives you',
+        'Eligible holders can receive data credit for the week already funded by collected tax. Credit can only be spent on eSIMs. It cannot be withdrawn as cash, paid out as another asset or carried into the next week. OTT is not equity, a dividend or a claim on the treasury. Buying it does not guarantee a fixed data allowance. Its price can fall to zero. Nothing on this site is financial advice.')));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 
-  const RENDERERS = { home: renderHome, status: renderStatus, about: renderAbout };
+  const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, about: renderAbout };
+  let renderVersion = 0;
 
   function renderRoute() {
+    const version = ++renderVersion;
     const view = $('view');
     clear(view);
     view.scrollTop = 0;
-    (RENDERERS[STATE.route] || renderHome)(view);
+    (RENDERERS[STATE.route] || renderHome)(view, () => version === renderVersion);
   }
 
   function navigate() {
+    const sectionId = location.hash.slice(1);
+    if (sectionId && !sectionId.startsWith('/') && STATE.route === 'home') {
+      const target = document.getElementById(sectionId);
+      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    }
     const raw = location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0];
     STATE.route = ROUTES.includes(raw) ? raw : 'home';
+    document.body.classList.toggle('home-active', STATE.route === 'home');
     document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === STATE.route));
     document.title = TITLES[STATE.route] || TITLES.home;
     renderRoute();
+    if (location.hash.startsWith('#/')) requestAnimationFrame(() => window.scrollTo(0, 0));
   }
 
   // ============================================================================ boot
@@ -284,7 +305,8 @@
       const open = nav.classList.toggle('open');
       toggle.setAttribute('aria-expanded', String(open));
     });
-    if (nav) nav.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => nav.classList.remove('open')));
+    if (nav) nav.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && nav && nav.classList.contains('open')) { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); } });
 
     paintWallet();
     window.addEventListener('hashchange', navigate);
@@ -293,10 +315,10 @@
     if (window.ethereum) {
       try {
         const accs = await window.ethereum.request({ method: 'eth_accounts' });
-        if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); }
+        if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); if (STATE.route === 'data') renderRoute(); }
       } catch { /* an unavailable wallet is not an error here */ }
       if (typeof window.ethereum.on === 'function') {
-        window.ethereum.on('accountsChanged', (accs) => { STATE.account = accs && accs[0]; paintWallet(); });
+        window.ethereum.on('accountsChanged', (accs) => { STATE.account = accs && accs[0]; paintWallet(); if (STATE.route === 'data') renderRoute(); });
         window.ethereum.on('chainChanged', () => location.reload());
       }
     }

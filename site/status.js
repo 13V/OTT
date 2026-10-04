@@ -270,8 +270,11 @@
   function healthStrip(ctx, d) {
     const { h } = ctx;
     const rows = h('div', {});
+    const preview = !!(d.cfg && d.cfg.brand && !isAddress(d.cfg.treasury));
     if (d.apiErr) {
-      rows.appendChild(statusRow(ctx, 'warn', 'Health check', './api/status could not be reached (' + d.apiErr + '); the coin, provider, wallet and store rows below depend on it.'));
+      rows.appendChild(preview
+        ? statusRow(ctx, '', 'Health check', 'Live service checks begin after launch; this preview is showing catalogue and programme information.')
+        : statusRow(ctx, 'warn', 'Health check', './api/status could not be reached (' + d.apiErr + '); the coin, provider, wallet and store rows below depend on it.'));
     } else {
       const api = d.api;
       const cfgReady = !!(api.ready && api.ready.config);
@@ -282,7 +285,9 @@
       rows.appendChild(checkRow(ctx, 'Store', api.wiring && api.wiring.store, api.checks && api.checks.store, true));
     }
     const launchedLocally = !!(d.cfg && isAddress(d.cfg.treasury));
-    rows.appendChild(indexerRow(ctx, d.allow, d.allowErr));
+    rows.appendChild(preview && !d.allowErr
+      ? statusRow(ctx, '', 'Indexer', 'not active until coin launch')
+      : indexerRow(ctx, d.allow, d.allowErr));
     rows.appendChild(claimKeeperRow(ctx, launchedLocally, d.claims, d.claimsErr));
     rows.appendChild(fundKeeperRow(ctx, launchedLocally, d.fund, d.fundErr));
     return h('div', { class: 'card status-strip' }, rows);
@@ -469,6 +474,7 @@
         loadJson('./data/funding.json'),
         fetchStatus(),
       ]);
+      if (ctx.isCurrent && !ctx.isCurrent()) return;
       const [cfgRaw, cfgErr] = settle(cfgR);
       const [allow, allowErr] = settle(allowR);
       const [treas, treasErr] = settle(treasR);
@@ -488,8 +494,14 @@
         try { chain = await readChain(ctx, cfg); }
         catch (e) { chainErr = errText(e); }
       }
+      if (ctx.isCurrent && !ctx.isCurrent()) return;
 
       clear(body);
+      body.appendChild(h('div', { class: 'status-summary' },
+        h('span', { class: 'state-pill' }, launched ? 'PROGRAMME CONFIGURED' : 'PRELAUNCH'),
+        h('p', {}, launched
+          ? 'The programme has launched. Check the health rows below for current funding and service availability.'
+          : 'OT+T has not launched. The destination catalogue is a preview; weekly credit and redemptions are not available yet.')));
       body.appendChild(section(ctx, 'Health', healthStrip(ctx, { cfg, api, apiErr, allow, allowErr, claims, claimsErr, fund, fundErr })));
       body.appendChild(section(ctx, 'The coin', coinSection(ctx, cfg, cfgErr, launched, chain, chainErr)));
       body.appendChild(section(ctx, 'The pool', poolSection(ctx, { treas, treasErr, api, apiErr })));

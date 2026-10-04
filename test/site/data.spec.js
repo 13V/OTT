@@ -138,7 +138,7 @@ function stubWallet(page) {
   }, ADDR);
 }
 
-test('before launch, #/ shows the rules and the launch link', async ({ page }) => {
+test('before launch, home explains the mechanism and availability', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
@@ -146,42 +146,23 @@ test('before launch, #/ shows the rules and the launch link', async ({ page }) =
   await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
 
   await page.goto('/index.html#/');
-  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, just for holding OTT.');
-  await expect(page.locator('.hero-sub')).toHaveText('Your share of OTT becomes a data allowance every week — spend it on an eSIM before it resets.');
-  await expect(page).toHaveTitle('OT+T — hold the coin, fly with data');
-  // No wallet in this browser context, so the hero's primary action offers to connect one rather
-  // than jumping straight to the plans.
-  await expect(page.locator('.hero-actions').getByRole('button', { name: 'Connect wallet' })).toBeVisible();
-  // Scoped to .hero-actions: the primary nav also has a "How it works" link, to #/about.
-  await expect(page.locator('.hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
-  // The brand, read from config, is named in the how-it-works band's second step — see the
-  // dedicated test below for the catalogue-driven sections, which render identically before and
-  // after launch.
-  await expect(page.locator('.step-body').nth(1)).toContainText('OT+T’s trades');
-  const card = page.locator('.data-notlaunched');
-  await expect(card).toContainText('Not launched yet');
-  await expect(card).toContainText('Carrier');
-  await expect(card).toContainText('OT+T · Onchain Telephone + Telegraph');
-  await expect(card).toContainText('Ticker');
-  await expect(card).toContainText('OTT');
-  await expect(card).toContainText('last week’s creator tax, split by every wallet’s share of the circulating supply');
-  await expect(card).toContainText('3 places · 1, 5 and 10 GB · from $1.19');
-  await expect(card).toContainText('eSIMs from nadanada, paid by Lightning');
-  await expect(card).toContainText('pre-graduation');
-  await expect(card).toContainText('USDG');
-  // esim.js has no launchpad route of its own on this site, so the not-launched card sends a
-  // holder to whatever.fun's launch form instead — a new tab, labelled honestly as a departure.
-  const launchLink = card.locator('a[href="https://whatever-fun.vercel.app/#/new"]');
-  await expect(launchLink).toHaveText('Launch the coin on whatever.fun');
-  await expect(launchLink).toHaveAttribute('target', '_blank');
-  await expect(launchLink).toHaveAttribute('rel', 'noopener');
-  // Nothing about a wallet before there is a coin, no chain read, and no pool card either.
+  await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
+  await expect(page.locator('.ott-hero-sub')).toContainText('Weekly data credit for eligible OTT holders.');
+  await expect(page).toHaveTitle('OT+T — a memecoin with a data plan');
+  await expect(page.locator('.ott-station')).toHaveCount(4);
+  await expect(page.locator('.ott-station h3')).toHaveText(['OTT trades fund the data.', 'The weekly budget is set.', 'He checks his weekly credit.', 'He gets online in Tokyo.']);
+  await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
+  await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'Check launch status' })).toHaveAttribute('href', '#/status');
+  await expect(page.locator('.ott-hero-note')).toContainText('Prelaunch');
+  await expect(page.locator('.ott-hero-note')).toContainText('not available yet');
+  await expect(page.locator('.ott-journey-note')).toContainText('no weekly holder credit');
+  await expect(page.locator('.ott-faq')).toContainText('Buying today does not establish eligibility for the current week');
+  await expect(page.getByRole('link', { name: 'Launch the coin on whatever.fun' })).toHaveCount(0);
   await expect(page.locator('.data-mine')).toHaveCount(0);
-  await expect(page.locator('.data-pool')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
-test('the plan catalogue, how-it-works and coverage render from config alone, the same before or after launch', async ({ page }) => {
+test('coverage leads with a supported place and reveals actual plans from config without a wallet', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
@@ -193,100 +174,91 @@ test('the plan catalogue, how-it-works and coverage render from config alone, th
 
   await page.goto('/index.html#/');
 
-  // Trust row: five checkable claims, two of them read straight off this fixture's own catalogue.
-  const trust = page.locator('.trust-item');
-  await expect(trust).toHaveCount(5);
-  await expect(trust).toContainText([
-    '3 places on the menu', 'eSIMs from $1.19', 'No trading required — holding is all it takes',
-    'No app, no SIM swap, no contract', 'Paid over Bitcoin Lightning — no person in the loop',
-  ]);
+  await expect(page.locator('.ott-journey')).toContainText('From a trading screen to a Tokyo street.');
+  await expect(page.locator('.ott-station')).toContainText(['Trading itself does not earn data credit', 'Last week’s collected tax', 'weekly balance check', 'He can use available credit']);
 
-  // The plan picker opens on the first place (Europe), grouped into the same two optgroups the
-  // catalogue's kinds imply — one region for each of Europe and Global, one country for Germany.
+  // This fixture lacks both the US and Japan, so coverage starts with its first valid place.
   const picker = page.locator('#plan-place');
+  const details = page.locator('.ott-plan-details');
+  await expect(page.locator('.ott-coverage-result')).toContainText('Europe');
+  await expect(page.locator('.ott-coverage-availability')).toHaveText('1 package available for use in Europe.');
+  await expect(details).not.toHaveAttribute('open', '');
+  await expect(picker).toBeHidden();
+  await expect(page.locator('.plan-grid')).toBeHidden();
+  await expect(page.locator('.ott-ticket, .ott-package-button, .ott-terminal-art')).toHaveCount(0);
+  await details.getByText('View available plans', { exact: true }).click();
+  await expect(picker).toBeVisible();
   await expect(picker.locator('optgroup[label="Regions"] option')).toHaveCount(2);
   await expect(picker.locator('optgroup[label="Countries"] option')).toHaveCount(1);
-  // Germany's option carries its flag; the two regions do not.
-  await expect(picker.locator('option', { hasText: 'Germany' })).toHaveText('🇩🇪 Germany');
+  // The native picker uses clear country names; flags belong to the airport board.
+  await expect(picker.locator('option', { hasText: 'Germany' })).toHaveText('Germany');
   await expect(picker.locator('option', { hasText: 'Europe' })).toHaveText('Europe');
 
-  // Europe sells one size in this fixture, so its one card is not "featured" — that badge only
-  // means something when there is a second size in the running to lose to.
+  // Europe sells one size in this fixture, which is the selected package.
   const grid = page.locator('.plan-grid');
   await expect(grid.locator('.plan-card')).toHaveCount(1);
-  await expect(grid.locator('.plan-card.featured')).toHaveCount(0);
+  await expect(grid.locator('.plan-card.featured')).toHaveCount(1);
   await expect(grid.locator('.plan-size')).toHaveText('1 GB');
   await expect(grid.locator('.plan-price')).toHaveText('$1.19');
-  await expect(grid.locator('.plan-term')).toHaveText('7 days');
+  await expect(grid.locator('.plan-term')).toHaveText('7 days of data');
   await expect(grid.locator('.plan-meta')).toContainText('38 countries');
   await expect(grid.locator('.plan-meta')).not.toContainText('OTT this week');
-  await expect(grid.getByRole('link', { name: 'Get this eSIM' })).toHaveAttribute('href', '#your-data');
+  await expect(grid.getByRole('link', { name: 'Check launch status' })).toHaveAttribute('href', '#/status');
+  await expect(grid.locator('.plan-credit-label')).toHaveText('DATA CREDIT REQUIRED');
 
-  // Switching the place repaints the grid: Germany sells three sizes, and the honestly-computed
-  // best deal is the 10 GB one (80¢/GB against 5 GB's ~$1.00 and 1 GB's $1.99) — not whichever
-  // card happens to sit in the middle.
+  // Switching place keeps the coverage result and public packages in agreement.
   await picker.selectOption('germany');
   await expect(grid.locator('.plan-card')).toHaveCount(3);
   await expect(grid.locator('.plan-card.featured')).toHaveCount(1);
   const featured = grid.locator('.plan-card.featured');
-  await expect(featured.locator('.plan-size')).toHaveText('10 GB');
-  await expect(featured.locator('.plan-price')).toHaveText('$7.99');
-  await expect(featured.locator('.plan-badge')).toHaveText('Most data per dollar');
+  await expect(featured.locator('.plan-size')).toHaveText('5 GB');
+  await expect(featured.locator('.plan-price')).toHaveText('$4.99');
+  await expect(page.locator('.ott-coverage-result')).toContainText('Germany');
+  await expect(page.locator('.ott-coverage-availability')).toHaveText('3 packages available for use in Germany.');
   await expect(grid).toContainText('$1.99');
   await expect(grid).toContainText('$4.99');
   await expect(grid.locator('.plan-meta').first()).toContainText('DE');
 
-  // How it works: three plain steps, numbered. Step 1 is the mechanism (holding, no brand
-  // needed); step 2 names this fixture's own brand for the week's budget; step 3 is redemption.
-  const steps = page.locator('.step');
-  await expect(steps).toHaveCount(3);
-  await expect(steps.nth(0).locator('.step-n')).toHaveText('1');
-  await expect(steps.nth(0).locator('.step-title')).toHaveText('Hold OTT');
-  await expect(steps.nth(0).locator('.step-body')).toContainText('holding is the whole mechanism');
-  await expect(steps.nth(1).locator('.step-n')).toHaveText('2');
-  await expect(steps.nth(1).locator('.step-body')).toContainText('OT+T’s trades');
-  await expect(steps.nth(1).locator('.step-body')).toContainText('share of the circulating supply');
-  await expect(steps.nth(2).locator('.step-n')).toHaveText('3');
-  await expect(steps.nth(2).locator('.step-body')).toContainText('nadanada');
-  await expect(steps.nth(2).locator('.step-body')).toContainText('scan the QR at the airport');
-  await expect(steps.nth(2).locator('.step-body')).toContainText('does not carry over');
+  await expect(page.locator('.ott-station')).toHaveCount(4);
+  await expect(page.locator('.ott-allocation')).toContainText('weekly balance check');
 
-  // Coverage: every place in the catalogue, once each, with its cheapest shelf price (not its
-  // cheapest per-gigabyte price — Germany's cheapest entry is 1 GB at $1.99, even though 10 GB is
-  // the better deal per gigabyte).
+  // The optional coverage directory lists each configured place once; prices stay with plans.
   const cov = page.locator('.cov-item');
+  await expect(page.locator('#coverage')).not.toHaveAttribute('open', '');
+  await page.locator('.coverage-details summary').click();
   await expect(cov).toHaveCount(3);
-  await expect(cov.filter({ hasText: 'Europe' })).toContainText('from $1.19');
-  await expect(cov.filter({ hasText: 'Global' })).toContainText('from $8.99');
+  const regions = page.locator('.ott-coverage-group').filter({ has: page.getByRole('heading', { name: 'Regions', exact: true }) });
+  const countries = page.locator('.ott-coverage-group').filter({ has: page.getByRole('heading', { name: 'Countries', exact: true }) });
+  await expect(regions).toContainText('Europe');
+  await expect(regions).toContainText('Global');
+  await expect(countries).toContainText('Germany');
   const deItem = cov.filter({ hasText: 'Germany' });
-  await expect(deItem).toContainText('from $1.99');
-  await expect(deItem.locator('.cov-flag')).toHaveText('🇩🇪');
+  await expect(deItem.locator('.cov-flag')).toHaveAttribute('src', './assets/flags/de.svg');
 
   expect(errors).toEqual([]);
 });
 
-test('the plan cards say how much OTT a wallet would need to hold to cover each package this week', async ({ page }) => {
+test('the public catalogue stays browsable when a weekly allocation is unavailable', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page, { calls: CALLS });
   await stubConfig(page, LAUNCHED);
-  // A real, currently-published budget — the one thing the previous test's fixture deliberately
-  // left at zero — so tokensToCover() has something to divide by.
+  // Account budget data does not gate reading actual packages.
   await stubAllowances(page, {});
   await page.route('**/api/redeem**', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'no api in this test' }));
 
   await page.goto('/index.html#/');
+  await expect(page.locator('.ott-plan-details')).not.toHaveAttribute('open', '');
+  await page.locator('.ott-plan-details summary').click();
   const grid = page.locator('.plan-grid');
-  // Europe, 1 GB at $1.19 — priceUsd × circulating ÷ budgetUsd, the same arithmetic the page uses.
-  await expect(grid.locator('.plan-meta')).toContainText('needs ≈ ' + needStr(1.19) + ' OTT this week');
+  await expect(grid.locator('.plan-price')).toHaveText('$1.19');
 
   await page.locator('#plan-place').selectOption('germany');
-  // The featured 10 GB Germany package costs more dollars than the 1 GB one, so it also needs more
-  // OTT to cover — proving this reads the package's own price, not a fixed figure repeated per card.
-  const featured = grid.locator('.plan-card.featured');
-  await expect(featured.locator('.plan-meta')).toContainText('needs ≈ ' + needStr(7.99) + ' OTT this week');
-  const oneGb = grid.locator('.plan-card').filter({ has: page.locator('.plan-size', { hasText: '1 GB' }) });
-  await expect(oneGb.locator('.plan-meta')).toContainText('needs ≈ ' + needStr(1.99) + ' OTT this week');
+  await expect(grid.locator('.plan-card')).toHaveCount(3);
+  await expect(grid.locator('.plan-price')).toHaveText(['$1.99', '$4.99', '$7.99']);
+  await expect(grid.getByRole('link', { name: 'Select this plan' })).toHaveCount(3);
+  await expect(page.locator('.ott-coverage-result')).toContainText('Germany');
+  await expect(page.locator('.data-mine')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -298,79 +270,38 @@ test('a config with no brand block renders exactly as it did before the brand ex
   await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
 
   await page.goto('/index.html#/');
-  // The hero itself names no brand, so it renders identically either way; only the how-it-works
-  // band's second step, which names whoever runs the curve, falls back to the generic wording.
-  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, just for holding OTT.');
-  await expect(page.locator('.step-body').nth(1)).toContainText('the coin’s trades');
-  await expect(page.locator('.step-body').nth(1)).not.toContainText('OT+T');
-  const card = page.locator('.data-notlaunched');
-  await expect(card).toContainText('Not launched yet');
-  await expect(card).not.toContainText('Carrier');
-  await expect(card).not.toContainText('Ticker');
+  // A missing optional brand block does not break the public story or catalogue.
+  await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
+  await expect(page.locator('.ott-station')).toHaveCount(4);
+  await expect(page.locator('.ott-journey-note')).toContainText('Prelaunch');
   expect(errors).toEqual([]);
 });
 
-test('the nav lists exactly three routes, home first, and highlights the active one', async ({ page }) => {
+test('the nav exposes destinations, explanation, account, and status', async ({ page }) => {
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED);
   await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
   await page.goto('/index.html#/');
-  const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.dataset.route));
-  expect(links).toEqual(['home', 'status', 'about']);
+  const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
+  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status']);
   await expect(page.locator('#nav a[data-route="home"]')).toHaveClass(/active/);
 });
 
-test('once launched, the treasury and pool are read from the chain, and a wallet-less visitor is invited rather than thrown at', async ({ page }) => {
+test('once launched, the public page routes holders to My data and keeps operational figures on Status', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page, { calls: CALLS });
   await stubConfig(page, LAUNCHED);
   await stubAllowances(page, {});
-  await stubTreasury(page, {
-    asOf: 1789396369, treasury: TREASURY, escrowClaimableUsd: 1234.56, walletUsd: 67.89,
-    reseller: { name: 'nadanada', balanceUsd: 412, sats: 734521, asOf: 1789396369 },
-    spend30dUsd: 10.44, redemptions30d: 4, perDayUsd: 0.35, runwayDays: 1177,
-    lastClaim: { at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }, status: 'funded',
-  });
 
   await page.goto('/index.html#/');
-  await expect(page.locator('#view h1')).toHaveText('Mobile data in 28 places, just for holding OTT.');
-  // With a wallet available (stubNetwork does not add one, but the redeem flow test below does;
-  // here there is none), the hero still offers to connect rather than assuming one.
-  await expect(page.locator('.hero-actions').getByRole('button', { name: 'Connect wallet' })).toBeVisible();
-  // The programme's own numbers are supporting detail, painted last — below the wallet section
-  // this visitor has not connected to yet, not beside it.
-  await expect(page.locator('#programme .section-head')).toContainText('The programme’s numbers');
-  // The pool card: the Lightning wallet's balance, published, with one word on it.
-  const pool = page.locator('.data-pool');
-  await expect(pool).toContainText('FUNDED');
-  await expect(pool).toContainText('Pool balance');
-  await expect(pool).toContainText('$412.00');
-  await expect(pool).toContainText('in the Lightning wallet that pays nadanada');
-  await expect(pool).toContainText('734,521 sats');
-  await expect(pool).toContainText('1,177 days');
-  await expect(pool).toContainText('4 eSIMs redeemed');
-  await expect(pool).toContainText('$41.70 USDG out of the escrow');
-  await expect(pool).toContainText('sits in a Lightning wallet, off chain');
-  await expect(pool).toContainText('holds $67.89 USDG');
-  const tiles = page.locator('.data-tiles').first();
-  await expect(tiles).toContainText('$1,234.56');              // escrow.balanceOfToken(treasury, USDG)
-  await expect(tiles).toContainText('1,545 GB');                // ÷ Germany's $0.80/GB (10 GB for $7.99)
-  await expect(tiles).toContainText('$0.80/GB (Germany · 10 GB)');
-  await expect(tiles).toContainText('137 GB global');           // ÷ Global's $8.99/GB
-  await expect(tiles).toContainText('10%');                     // creatorTaxBps
-  await expect(tiles).toContainText('$50.00 still held');       // creatorTaxBalance
-  await expect(tiles).not.toContainText('Rebate');               // the rebate tile is retired
-  await expect(page.locator('.data-progress')).toContainText('$3,000.00 of $10,000.00');
-  await expect(page.locator('.data-progress')).toContainText('30% of the way');
-
-  // Chromium has no window.ethereum, so this is the wallet-less path.
-  const mine = page.locator('.data-mine');
-  await expect(mine).toContainText('Connect a wallet');
-  await expect(mine).toContainText('refreshes every Monday');
-  await expect(mine.getByRole('button', { name: 'Connect wallet' })).toBeVisible();
-  await expect(mine).not.toContainText('Could not');
-  await expect(mine.locator('.dh-tile')).toHaveCount(0);
+  await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
+  await expect(page.locator('.ott-hero-note')).toContainText('Weekly credit depends');
+  await expect(page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' })).toHaveAttribute('href', '#/data');
+  await expect(page.locator('#programme')).toHaveCount(0);
+  await page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' }).click();
+  await expect(page.locator('.data-mine')).toContainText('No browser wallet detected');
+  await expect(page.locator('.data-mine').getByRole('button', { name: 'Connect wallet' })).toBeDisabled();
   expect(errors).toEqual([]);
 });
 
@@ -441,7 +372,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   // disk in this checkout.
   await page.route('**/data/treasury.json', (route) => route.fulfill({ status: 404, body: 'no treasury reading' }));
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   await expect(page.locator('.data-pool')).toHaveCount(0);
@@ -449,10 +380,12 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   // The two headline figures the founder asked for, first in the DOM and biggest on the page.
   const headline = mine.locator('.dh-tile');
   await expect(headline).toHaveCount(2);
-  await expect(headline.nth(0)).toContainText('OTT held');
+  await expect(mine.locator('.credit-summary')).toContainText('$18.01');
+  await expect(headline.nth(0)).toContainText('OTT at snapshot');
   await expect(headline.nth(0)).toContainText('1,234 OTT');
   await expect(headline.nth(0)).toContainText('0.152%');
-  await expect(headline.nth(1)).toContainText('Data this week');
+  await expect(headline.nth(1)).toContainText('Weekly allocation');
+  await expect(headline.nth(1)).toContainText('$20.00');
   await expect(headline.nth(1)).toContainText('25 GB');
   await expect(headline.nth(1)).toContainText('≈ 25 GB Germany · 2 GB Global');
   // The very first figure in the panel is a headline tile, not one of the compact supporting ones —
@@ -463,20 +396,12 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   // dollar figures — the ledger's real unit — kept as the honest sub-caption underneath.
   const tiles = mine.locator('.data-tiles');
   await expect(tiles).toContainText('Used this week');
-  await expect(tiles).toContainText('2 GB');
-  await expect(tiles).toContainText('$1.99 redeemed');
+  await expect(tiles).toContainText('$1.99');
   await expect(tiles).toContainText('Left this week');
   // 23, not the 22 that flooring $18.01 on its own would give: the three GB figures on screen have
   // to add up, because a reader who subtracts 2 from 25 and gets 22 reads it as a bug. So "left" is
   // what remains of the headline after "used", and the dollars underneath stay exact.
-  await expect(tiles).toContainText('23 GB');
-  await expect(tiles).toContainText('$18.01 left to spend');
-  // textContent, not innerText: the tile labels are uppercased by CSS, and innerText returns the
-  // transformed text while every assertion above matches the source casing.
-  const after = (text, label) => Number((text.split(label)[1] || '').match(/(\d+)\s*GB/)[1]);
-  const tileText = await tiles.textContent();
-  const headlineGb = Number((await mine.locator('.dh-tile').nth(1).textContent()).match(/(\d+)\s*GB/)[1]);
-  expect(after(tileText, 'Used this week') + after(tileText, 'Left this week')).toBe(headlineGb);
+  await expect(tiles).toContainText('$18.01');
   await expect(tiles).toContainText('Your share');
   await expect(tiles).toContainText('0.152%');
   await expect(tiles).toContainText('Resets in');
@@ -543,8 +468,8 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(card).toContainText('MATCH-123');
   // The balance the API answered with, not one the page worked out for itself — and the signed
   // read that followed the redeem carried the past order's code too, with no extra click needed.
-  await expect(mine.locator('.data-tiles')).toContainText('$13.02 left to spend');
-  await expect(mine.locator('.data-tiles')).toContainText('$6.98 redeemed');
+  await expect(mine.locator('.credit-summary')).toContainText('$13.02');
+  await expect(mine.locator('.data-tiles')).toContainText('$6.98');
   await expect(pastCard.locator('.data-ac')).toHaveText('LPA:1$old.example$OLD');
 
   // The redeem named the slot it was filling: this wallet had 1 order, so n is 1.
@@ -609,7 +534,7 @@ test('a wallet that holds nothing is told so directly, and pointed at where to g
     return route.fulfill({ status: 404, contentType: 'text/plain', body: 'unused in this test' });
   });
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText('This wallet holds no OTT, so it has no data this week.');
   const buy = mine.locator('a[href="https://whatever-fun.vercel.app/#/new"]');
@@ -643,7 +568,7 @@ test('a week whose allowance has not been published yet says so, with the week i
     redeemedUsd: 0, remainingUsd: 0, orders: [], history: [],
   })));
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText('has not been published yet');
   await expect(mine).toContainText('the week that ended ' + fmtDate(weekEndOf(lastWeek)));
@@ -652,8 +577,10 @@ test('a week whose allowance has not been published yet says so, with the week i
   // $20.00 allowance (25 GB, used the exact same way the ordinary dashboard test checks it), not
   // the API's own protective zero.
   await expect(mine.locator('.dh-tile').first()).toContainText('1,234 OTT');
-  await expect(mine.locator('.dh-tile').nth(1)).toContainText('25 GB');
-  await expect(mine.locator('.data-tiles')).toContainText('$20.00 left to spend');
+  await expect(mine.locator('.dh-tile').nth(1)).toContainText('$20.00');
+  await expect(mine.locator('.credit-summary')).toContainText('Awaiting allocation');
+  await expect(mine.locator('.data-tiles')).toContainText('Current spendable credit unavailable');
+  await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -672,7 +599,7 @@ test('the "Resets in" tile counts down live, without a repaint', async ({ page }
   await stubAllowances(page, { week, weekStart: weekStartOf(week), weekEnd, wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } } });
   await page.route('**/api/redeem**', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'unused in this test' }));
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const tiles = page.locator('.data-mine .data-tiles');
   await expect(tiles).toContainText('46m');
   // No repaint happens here — this is the same DOM node's own interval tick moving the clock
@@ -692,14 +619,14 @@ test('when the redeem API cannot be reached, what the indexer last published sti
   // No route for /api/redeem: the static test server answers 404 with a text body, which is also
   // what a static host without the function deployed would do.
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText('Could not reach the redeem API');
   // What the indexer's own file says is still shown: the holding, the share, this week's GB.
   await expect(mine.locator('.dh-tile').nth(0)).toContainText('1,234 OTT');
-  await expect(mine.locator('.dh-tile').nth(1)).toContainText('25 GB');
+  await expect(mine.locator('.dh-tile').nth(1)).toContainText('$20.00');
   // Used/left cannot be known without the API — said as unknown, not shown as zero.
-  await expect(mine.locator('.data-tiles')).toContainText('not known');
+  await expect(mine.locator('.data-tiles')).toContainText('Redeem API unavailable');
   await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
   await expect(mine.getByRole('button', { name: 'Show my eSIM codes' })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -724,7 +651,7 @@ test('a bundle claimed in a previous week is still shown, filed under its eSIM a
     redeemedUsd: 0, remainingUsd: 20, orders: [], history,
   })));
 
-  await page.goto('/index.html#/');
+  await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   // Nothing was claimed this week, only two weeks ago — but the eSIM that bundle minted is still
   // the one SIM card shown, with that one bundle listed underneath and tagged with its own week,

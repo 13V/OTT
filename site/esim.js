@@ -1,47 +1,13 @@
 'use strict';
 /**
- * OT+T — the home route (#/): a carrier landing page, not a config dump.
+ * OT+T's public story and holder account. The home route explains how a creator-tax-funded
+ * weekly budget becomes wallet data credit, then presents the eSIM catalogue as its use.
+ * My data reads the published allocation and redemption API, shows the actual spendable
+ * dollar credit first, and keeps installation details behind wallet authorization.
  *
- * One coin on Pons carries a creator tax, and that tax goes to a treasury. What the treasury buys
- * with it is mobile data: every week, the tax the coin collected LAST week becomes THIS week's data
- * budget, and a wallet's allowance is its share of the circulating supply times that budget —
- * allowanceUsd = (tokens ÷ circulating) × budgetUsd — banked as dollars of data credit and spent on
- * eSIMs from nadanada, in 1, 5 or 10 GB sizes across a few dozen places, paid for over Lightning.
- * Holding is the whole mechanism: there is no claim to file and no trade to make. The allowance
- * expires at the end of the week it was published for — use it or lose it, which is what keeps the
- * promise affordable, since the pool never owes more than one week of tax it has already collected.
- * A gigabyte's price depends on where you buy it and how much of it you buy at once — a 10 GB
- * package is a far better per-gigabyte deal than a 1 GB one — so credit is banked in dollars rather
- * than gigabytes, and the page says so instead of hiding it in a unit. The accounting is done off
- * chain by scripts/allowances.js, which writes site/data/allowances.json once a week's tax is
- * known; the handing out of a profile is done by /api/redeem, because it costs money and needs a
- * secret. This file is the page between the two.
- *
- * The page reads top to bottom the way a carrier's does: a hero with the offer, a row of checkable
- * facts, the plan catalogue with a place picker (the actual product), how holding turns into an
- * eSIM, the full coverage list, the visitor's own wallet — what it holds and what that buys this
- * week, which is the one screen a holder actually lives on — and last, as supporting detail rather
- * than the headline, the programme's own chain numbers. Every section but the wallet panel and the
- * live numbers reads from config/esim.json alone, so the page is not empty before the coin launches;
- * only the wallet panel and the chain numbers need a launched coin.
- *
- * It is a route module in the same sense site/launch.js is a signing module: app.js owns the
- * router, the RPC rotation, the wallet flow and the DOM helper, and hands them in as `ctx` — so
- * nothing here is a second copy of something app.js already does, and the file can be read on its
- * own. It exposes exactly one global, window.WhateverData, with one method: render(view, ctx). A
- * second global, window.WhateverQr (site/qr.js), draws the activation QR for the rare eSIM whose
- * qrCodeUrl came back empty; this file calls it defensively and does not depend on it being loaded.
- *
- * Everything this page needs is loaded when the page is opened and never at boot — config/esim.json
- * and data/allowances.json are both allowed to be missing, and a missing file here must cost this
- * route its numbers and no other route anything. Every failure path is a notice in the page; the
- * only thing that throws is a bug.
- *
- * v1 is deliberately narrow: pre-graduation only, and USDG-paired only. The tax the budget is built
- * from is read off the curve's own fee escrow in USDG; a coin paired to native ETH collects its tax
- * in ETH instead, so v1 cannot price a dollar budget from it, and the page says so rather than
- * guessing. Once a coin graduates, trading moves off the curve entirely, so no further tax accrues
- * against it — a graduated coin's holders keep whatever budget is already funded, and nothing after.
+ * app.js supplies DOM, wallet, and routing helpers. This module reads configuration and
+ * allowances only when either route opens; missing data is reported without blocking
+ * the other routes. Redemption signatures and API calls remain confined to My data.
  */
 (function () {
   const SEL = {
@@ -55,9 +21,9 @@
     getLaunchedToken: '0x3cf28b5a',       // getLaunchedToken(address)        — factory
   };
   const MESSAGE_HEAD = 'OT+T';
-  const ZERO = '0x0000000000000000000000000000000000000000';
-  const USDG_DECIMALS = 6;
   const LAUNCHPAD_URL = 'https://whatever-fun.vercel.app/#/new';
+  let selectedPackageCode = '';
+  let myDataRender = 0;
 
   // ============================================================================ small helpers
   const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
@@ -65,16 +31,9 @@
   // pre-brand wording when this is null, so a fork that has not set cfg.brand renders exactly as
   // the page did before the brand existed.
   const brandOf = (cfg) => (cfg && cfg.brand) || null;
-  const pad = (hex) => String(hex).replace(/^0x/, '').toLowerCase().padStart(64, '0');
-  const word = (hex, i) => BigInt('0x' + hex.slice(2 + i * 64, 2 + (i + 1) * 64));
-  const shortAddr = (a) => (a && a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : a || '—');
   // Money here is a treasury balance, not a price, so it always carries its cents: "$1,234.50"
   // reads as a balance and "$1,234.5" reads as a typo.
   const fmtMoney = (n) => (Number.isFinite(n) ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—');
-  // Gigabytes are banked as fractions and redeemed as wholes, so a balance shows two decimals and
-  // the number of packages it buys is the integer part.
-  const fmtGb = (n) => (Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' GB' : '—');
-  const fmtPct = (bps) => (Number.isFinite(bps) ? (bps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%' : '—');
   // A price from the catalogue: "$0.62". Two decimals, like a shelf label.
   const fmtPrice = (n) => (Number.isFinite(n) ? '$' + n.toFixed(2) : '—');
   // A token balance, human-scaled: thousands separators, at most two decimals — the same tabular
@@ -116,7 +75,6 @@
   const dearest = (cfg) => packagesOf(cfg).reduce((m, p) => (m && perGb(m) >= perGb(p) ? m : p), null);
   // The cheapest package to just buy, in dollars — "from $0.99" is a shelf price a small holder can
   // actually afford, not a unit price nobody redeems at exactly.
-  const cheapestEntry = (cfg) => packagesOf(cfg).reduce((m, p) => (m && m.priceUsd <= p.priceUsd ? m : p), null);
   const packageByCode = (cfg, code) => packagesOf(cfg).find((p) => p.code === code || p.packageCode === code) || null;
   const packageLabel = (p) => p.name + ' · ' + (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days';
   // Every place the catalogue sells, once each, in the order esim.json lists them — the same order
@@ -135,15 +93,6 @@
   // The sizes on offer at one place, smallest first — what the plan grid and the redeem form both
   // build their size options from.
   const packagesAt = (cfg, slug) => packagesOf(cfg).filter((p) => p.slug === slug).sort((a, b) => (Number(a.gb) || 0) - (Number(b.gb) || 0));
-  // "1, 5 and 10 GB" (or "…or 10 GB" mid-sentence) — the sizes actually in the catalogue, joined
-  // the way a sentence would rather than assumed, so a catalogue with a fourth size still reads
-  // right without this file changing.
-  function gbSizesText(cfg, joiner) {
-    const sizes = Array.from(new Set(packagesOf(cfg).map((p) => Number(p.gb)).filter((n) => n > 0))).sort((a, b) => a - b);
-    if (!sizes.length) return '';
-    if (sizes.length === 1) return String(sizes[0]);
-    return sizes.slice(0, -1).join(', ') + ' ' + joiner + ' ' + sizes[sizes.length - 1];
-  }
   // "$12.40 is 20 GB in Germany, or 2 GB worldwide" — the one line that makes a dollar figure mean
   // something at an airport. Both figures are dollars ÷ a per-GB price, so the count is how many
   // gigabytes the balance actually buys, not how many packages of one fixed size it buys.
@@ -187,7 +136,6 @@
     if (hours > 0) return hours + 'h ' + (totalMin % 60) + 'm';
     return totalMin + 'm';
   }
-  const units = (big, decimals) => Number(big) / Math.pow(10, decimals);
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
   const errText = (e) => (e && e.message ? e.message : String(e)).slice(0, 200);
 
@@ -257,159 +205,111 @@
     return j;
   }
 
-  // ============================================================================ chain reads
-  /**
-   * Everything the page shows from the chain, in one batch where app.js offers one and one call
-   * each where it does not. A read that fails is null and its tile shows a dash; a page that
-   * cannot show the treasury can still show the rules and the wallet's own balance.
-   */
-  async function readChain(ctx, cfg) {
-    const usdg = ((ctx.cfg && ctx.cfg.usdg) || cfg.pair || '').toLowerCase();
-    const escrow = ctx.cfg && ctx.cfg.pons && ctx.cfg.pons.feeEscrow;
-    const calls = [
-      { key: 'treasury', to: escrow, data: SEL.balanceOfToken + pad(cfg.treasury) + pad(usdg) },
-      { key: 'raised', to: cfg.curve, data: SEL.realQuoteReserve },
-      { key: 'threshold', to: cfg.curve, data: SEL.graduationThreshold },
-      { key: 'graduated', to: cfg.curve, data: SEL.graduated },
-      { key: 'taxBps', to: cfg.curve, data: SEL.creatorTaxBps },
-      { key: 'taxHeld', to: cfg.curve, data: SEL.creatorTaxBalance },
-    ].filter((c) => isAddress(c.to));
-    let answers;
-    if (typeof ctx.rpcBatch === 'function') {
-      answers = await ctx.rpcBatch(calls.map((c) => ({ method: 'eth_call', params: [{ to: c.to, data: c.data }, 'latest'] })));
-    } else {
-      answers = await Promise.all(calls.map((c) => ctx.callRaw(c.to, c.data).catch(() => null)));
-    }
-    const out = {};
-    calls.forEach((c, i) => {
-      const hex = answers[i];
-      out[c.key] = hex && hex.length >= 66 ? word(hex, 0) : null;
-    });
-    return {
-      treasuryUsd: out.treasury === null || out.treasury === undefined ? null : units(out.treasury, USDG_DECIMALS),
-      raisedUsd: out.raised == null ? null : units(out.raised, USDG_DECIMALS),
-      thresholdUsd: out.threshold == null ? null : units(out.threshold, USDG_DECIMALS),
-      graduated: out.graduated == null ? null : out.graduated !== 0n,
-      taxBps: out.taxBps == null ? null : Number(out.taxBps),
-      taxHeldUsd: out.taxHeld == null ? null : units(out.taxHeld, USDG_DECIMALS),
-    };
-  }
-
   // ============================================================================ the page
-  /**
-   * Seven bands, top to bottom: hero, trust row, plans (the catalogue, with a place picker), how it
-   * works, coverage, the visitor's own wallet, and last the programme's own chain numbers. Every
-   * band up through coverage reads config/esim.json alone, so it renders in full before the coin
-   * has launched — which is the state this page will actually be seen in first. Only the wallet
-   * panel and the live numbers need a launched coin, and both are skipped for one honest card when
-   * it has not.
-   */
+  // Public story: proposition, funding, use, catalogue, account preview, and conditions.
   async function render(view, ctx) {
     const { h, notice } = ctx;
-    // `refresh.mine` is set once the wallet panel exists, below, so the hero's "Connect wallet"
-    // button (shown when no wallet is available yet) can repaint it after a successful connect
-    // without this file keeping a second copy of the wallet flow or reloading the page.
-    const refresh = { mine: null };
-    view.appendChild(hero(ctx, refresh));
-
     let cfg;
     try { cfg = await loadJson('./config/esim.json'); }
     catch (e) {
       view.appendChild(bareSection(ctx, notice('The data programme is not configured yet (config/esim.json could not be read: ' + errText(e) + ').', 'warn')));
       return;
     }
+    if (ctx.isCurrent && !ctx.isCurrent()) return;
     cfg = cfg || {};
     const launched = isAddress(cfg.coin) && isAddress(cfg.curve) && isAddress(cfg.treasury);
+    view.appendChild(hero(ctx, cfg, launched));
 
-    // This week's budget and the circulating supply, read once and handed to whichever band can
-    // use them — the plan cards' "OTT to cover this" line needs them just as much as the wallet
-    // panel does, and a missing or not-yet-published file costs both the same way: the figure that
-    // needed it is left out rather than guessed at.
+    // The optional allowances file adds current-week context to the catalogue.
     let allow = null;
     try { allow = await loadJson('./data/allowances.json'); } catch (e) { allow = null; }
+    if (ctx.isCurrent && !ctx.isCurrent()) return;
 
-    // These three read config/esim.json (and, for the plan cards' meta line, the allowances file)
-    // alone, so they render the same whether or not a coin has launched — which matters, because
-    // "not launched" is the state a first-time visitor sees.
-    view.appendChild(trustRow(ctx, cfg));
-    view.appendChild(plansSection(ctx, cfg, allow));
+    view.appendChild(trustRow(ctx, cfg, launched));
     view.appendChild(howItWorks(ctx, cfg));
+    view.appendChild(plansSection(ctx, cfg, allow, launched));
     view.appendChild(coverageSection(ctx, cfg));
-
-    if (!launched) {
-      view.appendChild(bareSection(ctx, notLaunched(ctx, cfg)));
-      return;
+    view.appendChild(accountPreview(ctx, launched));
+    view.appendChild(faqSection(ctx));
+    const sectionId = location.hash.slice(1);
+    if (sectionId && !sectionId.startsWith('/') && document.getElementById(sectionId)) {
+      requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView({ block: 'start' }));
     }
-
-    const mine = h('div', { class: 'card data-mine' });
-    view.appendChild(h('div', { class: 'section', id: 'your-data' }, h('div', { class: 'wrap' }, mine)));
-    refresh.mine = () => paintMine(ctx, cfg, allow, mine);
-    // The wallet panel and the treasury numbers do not wait for each other: a slow RPC should not
-    // hold up a balance that comes from a static file, and vice versa.
-    refresh.mine();
-
-    const numbers = h('div', { class: 'col' }, notice('Reading the chain…', 'plain'));
-    view.appendChild(h('div', { class: 'section', id: 'programme' }, h('div', { class: 'wrap' },
-      h('div', { class: 'section-head' }, h('h2', {}, 'The programme’s numbers')),
-      numbers)));
-    await paintNumbers(ctx, cfg, numbers);
   }
 
-  // A section with no header of its own — used for the two single-card fallbacks (config missing,
-  // not launched) so they still sit in the page's .section/.wrap rhythm instead of floating flush
-  // against the viewport edge.
+  async function renderMyData(view, ctx) {
+    const renderId = ++myDataRender;
+    const isCurrent = () => renderId === myDataRender && (!ctx.isCurrent || ctx.isCurrent());
+    const { h, notice } = ctx;
+    view.appendChild(h('div', { class: 'page-head dashboard-head' },
+      h('div', { class: 'label' }, 'YOUR CONNECTION'),
+      h('h1', {}, 'My data'),
+      h('p', { class: 'page-lede' }, 'Your weekly data credit, existing eSIMs and next redemption.')));
+    let cfg;
+    try { cfg = await loadJson('./config/esim.json'); }
+    catch (e) { if (isCurrent()) view.appendChild(notice('The data programme could not be loaded: ' + errText(e), 'warn')); return; }
+    if (!isCurrent()) return;
+    if (!isAddress(cfg.coin) || !isAddress(cfg.curve) || !isAddress(cfg.treasury)) {
+      view.appendChild(h('div', { class: 'card dashboard-empty' },
+        h('span', { class: 'state-pill' }, 'PRELAUNCH'),
+        h('h2', {}, 'Your data starts when OT+T launches.'),
+        h('p', {}, 'The catalogue is available to explore, but there is no weekly credit or eSIM redemption yet.'),
+        h('a', { class: 'btn btn-primary', href: '#/status' }, 'See programme status'),
+        h('a', { class: 'btn btn-ghost', href: '#/' }, 'Explore destinations')));
+      return;
+    }
+    let allow = null;
+    try { allow = await loadJson('./data/allowances.json'); } catch (e) { /* The panel reports missing data. */ }
+    if (!isCurrent()) return;
+    const panel = h('div', { class: 'card data-mine dashboard-panel' });
+    view.appendChild(panel);
+    paintMine(ctx, cfg, allow, panel);
+  }
+
+  // Keep a missing-configuration notice within the regular content width.
   function bareSection(ctx, content) {
     return ctx.h('div', { class: 'section' }, ctx.h('div', { class: 'wrap' }, content));
   }
 
   // ============================================================================ 1. hero
-  /**
-   * One headline (the offer, not the mechanism — the how belongs further down), one sub-line, and
-   * two actions: the primary one either jumps to the plans a visitor with a wallet is here for, or
-   * offers to connect one for a visitor who has none yet, so connecting from the hero is not a dead
-   * end — `refresh.mine` (set once the wallet panel below exists) repaints it with the freshly
-   * connected address instead of leaving the page to say "Connect a wallet" under a wallet that is
-   * now connected.
-   */
-  function hero(ctx, refresh) {
+  // The first-screen route diagram carries the funding and redemption sequence.
+  function hero(ctx, cfg, launched) {
     const { h } = ctx;
-    const hasWallet = !!window.ethereum;
-    const primary = hasWallet
-      ? h('a', { class: 'btn btn-primary', href: '#plans' }, 'See the plans')
-      : h('button', { class: 'btn btn-primary', onclick: async () => {
-          const acc = await ctx.connect();
-          if (acc && refresh.mine) refresh.mine();
-          const target = document.getElementById('your-data');
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } }, 'Connect wallet');
+    const primary = h('a', { class: 'btn btn-primary', href: '#how-it-works' }, 'Follow the signal');
     return h('div', { class: 'section hero' }, h('div', { class: 'wrap' },
       h('div', { class: 'hero-copy' },
-        h('h1', { class: 'hero-title' }, 'Mobile data in 28 places, just for holding OTT.'),
-        h('p', { class: 'hero-sub' }, 'Your share of OTT becomes a data allowance every week — spend it on an eSIM before it resets.'),
+        h('span', { class: 'state-pill' }, launched ? 'DATA PROGRAMME ACTIVE' : 'PRELAUNCH · CATALOGUE PREVIEW'),
+        h('h1', { class: 'hero-title' }, 'A memecoin with a data plan.'),
+        h('p', { class: 'hero-kicker' }, 'Last week’s creator tax. This week’s mobile data.'),
+        h('p', { class: 'hero-sub' }, 'Eligible OTT holders receive a share of a variable weekly data budget to redeem for available travel eSIMs.'),
         h('div', { class: 'hero-actions' }, primary,
-          h('a', { class: 'btn btn-ghost', href: '#how-it-works' }, 'How it works')))));
+          h('a', { class: 'btn btn-ghost', href: '#plans' }, 'Explore destinations'),
+          h('a', { class: 'hero-text-link', href: '#/data' }, 'My data ↗')),
+        h('p', { class: 'hero-foot' }, launched ? 'Allocation depends on the weekly snapshot and collected fees.' : 'The coin has not launched. Weekly credit and redemption are not available yet.')),
+      h('div', { class: 'hero-visual', role: 'img', 'aria-label': 'Signal route: creator tax funds a weekly data budget, which is divided among eligible wallets and redeemed for an eSIM package.' },
+        h('div', { class: 'route-heading' }, h('span', {}, 'THE DATA ROUTE'), h('span', {}, 'OT+T / 01')),
+        h('div', { class: 'signal-route' },
+          [['01', 'Creator tax', 'Collected on trades'], ['02', 'Weekly budget', 'Previous week’s fees'], ['03', 'Wallet share', 'Monday snapshot'], ['04', 'eSIM package', 'Redeem data credit']].map(([n, title, sub], i) =>
+            h('div', { class: 'route-station' + (i === 2 ? ' route-junction' : '') },
+              h('span', { class: 'route-number' }, n),
+              h('span', { class: 'route-node', 'aria-hidden': 'true' }, i === 2 ? '+' : ''),
+              h('span', { class: 'route-text' }, h('strong', {}, title), h('small', {}, sub))))),
+        h('div', { class: 'route-end' }, h('span', { 'aria-hidden': 'true' }, '+'), 'FEES INTO FIELDWORK'))));
   }
 
-  // ============================================================================ 2. trust row
-  /**
-   * Four or five short, checkable claims — not a slogan. Two are read straight off the catalogue
-   * (so they can never overstate it), and the rest describe the mechanism itself. Nothing here is a
-   * number this file invented; a fork with a different catalogue gets different numbers rather than
-   * this file's own guess.
-   */
-  function trustRow(ctx, cfg) {
+  // ============================================================================ funding mechanism
+  function trustRow(ctx, cfg, launched) {
     const { h } = ctx;
-    const plist = places(cfg);
-    const cheapEntry = cheapestEntry(cfg);
-    const items = [
-      plist.length ? plist.length + ' places on the menu' : 'More places added as the catalogue grows',
-      cheapEntry ? 'eSIMs from ' + fmtPrice(cheapEntry.priceUsd) : 'Priced per package, shown at checkout',
-      'No trading required — holding is all it takes',
-      'No app, no SIM swap, no contract',
-      'Paid over Bitcoin Lightning — no person in the loop',
-    ];
-    return h('div', { class: 'section trust' }, h('div', { class: 'wrap' },
-      h('div', { class: 'trust-row' }, items.map((t) => h('div', { class: 'trust-item' }, t)))));
+    return h('section', { class: 'section mechanism', id: 'how-it-works' }, h('div', { class: 'wrap mechanism-grid' },
+      h('div', { class: 'mechanism-intro' }, h('span', { class: 'label label--accent' }, 'THE CONNECTION'),
+        h('h2', {}, 'A trade creates the tax. A snapshot sets the share.'),
+        h('p', {}, 'The creator tax collected in the previous week sets the next week’s data budget. An eligible wallet gets a share based on its OTT balance at the Monday snapshot relative to circulating supply.'),
+        h('a', { href: '#/about', class: 'text-arrow' }, 'Read the full rules ↗')),
+      h('div', { class: 'mechanism-facts' },
+        h('div', { class: 'mechanism-fact' }, h('span', {}, '01 / FUNDING'), h('strong', {}, 'Budget varies with trading.'), h('p', {}, 'Only collected creator tax funds the weekly credit.')),
+        h('div', { class: 'mechanism-fact' }, h('span', {}, '02 / ELIGIBILITY'), h('strong', {}, 'The snapshot matters.'), h('p', {}, 'Buying OTT today does not establish eligibility for the current week.')),
+        h('div', { class: 'mechanism-fact' }, h('span', {}, '03 / EXPIRY'), h('strong', {}, 'Use the week’s credit that week.'), h('p', {}, 'Unused credit expires. A redeemed package has separate validity rules.')),
+        h('p', { class: 'mechanism-status' }, launched ? 'Check My data for your current allocation.' : 'Prelaunch: no weekly budget or holder credit has been published.'))));
   }
 
   // ============================================================================ 3. plans
@@ -424,7 +324,7 @@
    * no budget published yet, that figure is not computable, so the line falls back to the plain
    * coverage fact instead of guessing.
    */
-  function plansSection(ctx, cfg, allow) {
+  function plansSection(ctx, cfg, allow, launched) {
     const { h } = ctx;
     const plist = places(cfg);
     const regions = plist.filter((p) => p.kind === 'region');
@@ -437,6 +337,30 @@
           h('optgroup', { label: 'Countries' }, optionsFor(countries)))
       : h('select', { class: 'place-select', id: 'plan-place' }, optionsFor(plist));
     const grid = h('div', { class: 'plan-grid' });
+    const search = h('input', { class: 'destination-search', id: 'destination-search', type: 'search', placeholder: 'Search a country or region', autocomplete: 'off' });
+    const results = h('div', { class: 'destination-results', 'aria-live': 'polite' });
+    const clearButton = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { search.value = ''; paintResults(); search.focus(); } }, 'Clear');
+    function choose(slug) {
+      select.value = slug;
+      select.dispatchEvent(new Event('change'));
+      search.value = '';
+      paintResults();
+      document.getElementById('plan-options').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    window.OTT_chooseDestination = choose;
+    function paintResults() {
+      clear(results);
+      const query = search.value.trim().toLocaleLowerCase();
+      if (!query) { results.hidden = true; return; }
+      results.hidden = false;
+      const matches = plist.filter((p) => p.name.toLocaleLowerCase().includes(query));
+      if (!matches.length) { results.appendChild(h('p', { class: 'destination-empty' }, 'No matching place in the current catalogue. Try a country or region.')); return; }
+      for (const p of matches) results.appendChild(h('button', { type: 'button', class: 'destination-result', onclick: () => choose(p.slug) },
+        h('span', {}, (p.flag ? p.flag + ' ' : '') + p.name), h('small', {}, p.kind === 'region' ? 'Region' : 'Country')));
+    }
+    search.addEventListener('input', paintResults);
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const first = plist.find((p) => p.name.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())); if (search.value.trim() && first) { e.preventDefault(); choose(first.slug); } } if (e.key === 'Escape') { search.value = ''; paintResults(); } });
+    paintResults();
 
     function paint() {
       clear(grid);
@@ -450,24 +374,30 @@
         const featured = here.length > 1 && p === best;
         grid.appendChild(h('div', { class: 'plan-card' + (featured ? ' featured' : '') },
           featured ? h('div', { class: 'plan-badge' }, 'Most data per dollar') : null,
-          h('div', { class: 'plan-size' }, (Number(p.gb) || 1) + ' GB'),
+          h('div', { class: 'plan-destination' }, p.name + ' / ' + (p.kind === 'region' ? 'REGION' : 'COUNTRY')),
+          h('h3', { class: 'plan-size' }, (Number(p.gb) || 1) + ' GB'),
+          h('div', { class: 'plan-term' }, (Number(p.days) || 7) + ' days of data'),
+          h('div', { class: 'plan-credit-label' }, 'USES DATA CREDIT'),
           h('div', { class: 'plan-price' }, fmtPrice(p.priceUsd)),
-          h('div', { class: 'plan-term' }, (Number(p.days) || 7) + ' days'),
           h('div', { class: 'plan-meta' },
             h('span', {}, p.regions || p.name),
-            need !== null ? h('span', {}, 'needs ≈ ' + fmtTokens(need) + ' OTT this week') : null),
-          h('a', { class: 'btn btn-sm plan-cta', href: '#your-data' }, 'Get this eSIM')));
+            need !== null ? h('span', {}, 'At this week’s budget, ≈ ' + fmtTokens(need) + ' OTT at snapshot') : null),
+          h('a', { class: 'btn btn-sm plan-cta', href: launched ? '#/data' : '#/status', onclick: () => { selectedPackageCode = p.code; } }, launched ? 'Select this plan' : 'Check launch status')));
       }
     }
     select.addEventListener('change', paint);
     paint();
 
-    return h('div', { class: 'section', id: 'plans' }, h('div', { class: 'wrap' },
+    return h('div', { class: 'section discovery', id: 'plans' }, h('div', { class: 'wrap' },
       h('div', { class: 'section-head' },
-        h('h2', {}, 'Data plans, priced by place'),
-        h('p', { class: 'small' }, 'Pick a place — the three sizes and their prices update below.')),
-      h('div', { class: 'plan-picker' }, h('label', { for: 'plan-place' }, 'Place'), select),
-      grid));
+        h('span', { class: 'label label--accent' }, 'THE DATA'),
+        h('h2', {}, 'Put the credit to work.'),
+        h('p', { class: 'section-lede' }, 'Search a destination and compare available eSIM packages. The figures are data credit required, not the cost of acquiring OTT.')),
+      h('div', { class: 'search-shell' }, h('label', { for: 'destination-search' }, 'Find a destination'), h('div', { class: 'search-control' }, search, clearButton), results),
+      h('div', { id: 'plan-options', class: 'plan-options' },
+        h('div', { class: 'plan-picker' }, h('label', { for: 'plan-place' }, 'Compare plans for'), select),
+        grid,
+        h('p', { class: 'plan-disclaimer' }, launched ? 'Your weekly allocation depends on the snapshot and available funding. Package availability is confirmed at redemption.' : 'Catalogue preview. OT+T has not launched, so weekly credit and eSIM redemption are not available yet.'))));
   }
 
   // ============================================================================ 4. how it works
@@ -485,77 +415,68 @@
     const steps = [
       { title: 'Hold OTT',
         body: 'Keep any amount of OTT in your wallet. No trading, no staking, no claim to file — holding is the whole mechanism.' },
-      { title: 'Your share becomes this week’s budget',
-        body: 'Every Monday, last week’s creator tax on ' + carrier + '’s trades becomes this week’s data budget, and your allowance is your share of the circulating supply times that budget — banked as dollars of credit, because a gigabyte’s price depends on where you spend it.' },
+      { title: 'Receive weekly credit',
+        body: 'Each Monday, last week’s creator tax on ' + carrier + '’s trades funds a variable data budget. Your share depends on your balance at the weekly snapshot and the circulating supply.' },
       { title: 'Redeem an eSIM and scan it',
-        body: 'Spend the credit on an eSIM from nadanada: pick a place and size, sign a message to prove the wallet is yours, and scan the QR at the airport — and spend it before the week ends, because what is unused does not carry over.' },
+        body: 'Choose a destination and package, then sign with your wallet to redeem. Unused weekly credit expires at the week’s end; a purchased package has its own validity period.' },
     ];
-    return h('div', { class: 'section alt', id: 'how-it-works' }, h('div', { class: 'wrap' },
-      h('div', { class: 'section-head' }, h('h2', {}, 'How it works')),
+    return h('div', { class: 'section usage', id: 'using-it' }, h('div', { class: 'wrap' },
+      h('div', { class: 'section-head' }, h('span', { class: 'label label--accent' }, 'FROM CREDIT TO COVERAGE'), h('h2', {}, 'When the programme opens, here’s the route.')),
       h('div', { class: 'steps' }, steps.map((s, i) => h('div', { class: 'step' },
         h('div', { class: 'step-n' }, String(i + 1)),
-        h('div', { class: 'step-title' }, s.title),
+        h('h3', { class: 'step-title' }, s.title),
         h('div', { class: 'step-body' }, s.body))))));
   }
 
   // ============================================================================ 5. coverage
-  /** Every place in the catalogue, once each, with its cheapest entry — dense on purpose, so the
-   *  page proves the "28 places" claim above rather than just making it a second time. */
+  /** A collapsible catalogue list: every configured place once, with its cheapest entry. */
   function coverageSection(ctx, cfg) {
     const { h } = ctx;
     const plist = places(cfg);
     const items = plist.map((p) => {
       const cheap = packagesAt(cfg, p.slug).reduce((m, x) => (!m || x.priceUsd <= m.priceUsd ? x : m), null);
-      return h('div', { class: 'cov-item' },
+      return h('button', { type: 'button', class: 'cov-item', onclick: () => { if (window.OTT_chooseDestination) window.OTT_chooseDestination(p.slug); } },
         h('span', { class: 'cov-flag' }, p.flag),
         h('span', { class: 'cov-name' }, p.name),
-        h('span', { class: 'cov-price' }, cheap ? 'from ' + fmtPrice(cheap.priceUsd) : '—'));
+        h('span', { class: 'cov-price' }, cheap ? 'from ' + fmtPrice(cheap.priceUsd) + ' credit' : '—'));
     });
-    return h('div', { class: 'section', id: 'coverage' }, h('div', { class: 'wrap' },
-      h('div', { class: 'section-head' },
-        h('h2', {}, 'Coverage'),
-        h('p', { class: 'small' }, plist.length ? plist.length + ' places on the menu today.' : 'Nothing configured yet.')),
-      h('div', { class: 'cov-grid' }, items)));
+    return h('div', { class: 'coverage-summary', id: 'coverage' }, h('div', { class: 'wrap' },
+      h('details', { class: 'coverage-details' },
+        h('summary', {}, 'View all ' + plist.length + ' destinations', h('span', {}, 'COUNTRIES + REGIONS')),
+        h('div', { class: 'cov-grid' }, items))));
   }
 
-  function addrLink(ctx, a) {
-    const explorer = ctx.cfg && ctx.cfg.explorer;
-    return explorer ? ctx.h('a', { class: 'mono', href: explorer + '/address/' + a, target: '_blank', rel: 'noopener' }, shortAddr(a)) : ctx.h('span', { class: 'mono' }, shortAddr(a));
-  }
-
-  // Before launch day the whole page below coverage is this one card: the rules the programme will
-  // run under, and the one useful button, which launches the coin. cfg.pair is the only address the
-  // config carries at this point.
-  function notLaunched(ctx, cfg) {
+  function accountPreview(ctx, launched) {
     const { h } = ctx;
-    const brand = brandOf(cfg);
-    const rows = h('div', { class: 'rows' });
-    const row = (k, v) => rows.appendChild(h('div', { class: 'row' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)));
-    const plist = places(cfg);
-    const cheapEntry = cheapestEntry(cfg);
-    if (brand) {
-      row('Carrier', brand.name + ' · ' + brand.full);
-      row('Ticker', brand.ticker);
-    }
-    row('Status', 'Not launched yet');
-    row('Weekly budget', 'last week’s creator tax, split by every wallet’s share of the circulating supply');
-    row('Packages', plist.length && cheapEntry ? plist.length + ' places · ' + gbSizesText(cfg, 'and') + ' GB · from ' + fmtPrice(cheapEntry.priceUsd) : 'none configured yet');
-    row('Redeemed as', 'eSIMs from nadanada, paid by Lightning');
-    row('Creator tax', fmtPct(Number(cfg.taxBps) || 0) + ' to the treasury');
-    row('Paired to', cfg.pair === ZERO || !cfg.pair ? 'native ETH (tax not priced in v1)' : 'USDG');
-    row('Counts', 'balances snapshotted pre-graduation only');
-    return h('div', { class: 'card data-notlaunched' },
-      h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Not launched yet')),
-      h('p', { class: 'small' }, 'The coin behind this programme has not been launched. These are the rules it will run under; the addresses land in config/esim.json on launch day.'),
-      rows,
-      h('div', { class: 'data-actions' },
-        // whatever.fun is the launchpad this coin would launch through; it is a different site now,
-        // so this leaves rather than routes — a new tab, and a label that says exactly that.
-        h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Launch the coin on whatever.fun'),
-        h('a', { class: 'btn btn-ghost', href: '#/about' }, 'How this works')));
+    return h('section', { class: 'section account-preview' }, h('div', { class: 'wrap account-preview-grid' },
+      h('div', { class: 'section-head' },
+        h('span', { class: 'label label--accent' }, 'THE SERVICE STATEMENT'),
+        h('h2', {}, 'See your share. Use what’s there.'),
+        h('p', { class: 'section-lede' }, 'My data shows your actual weekly credit, its expiry, and the eSIMs attached to your wallet.'),
+        h('a', { class: 'btn btn-primary', href: '#/data' }, launched ? 'Open My data' : 'Preview My data')),
+      h('div', { class: 'statement-preview', 'aria-label': 'Layout preview of My data; no wallet balance is shown' },
+        h('div', { class: 'statement-top' }, h('strong', {}, 'OT+T / MY DATA'), h('span', {}, 'LAYOUT PREVIEW')),
+        h('div', { class: 'statement-value' }, h('span', {}, 'REMAINING WEEKLY CREDIT'), h('strong', {}, '—')),
+        h('div', { class: 'statement-line' }, h('span', {}, 'EXPIRES'), h('strong', {}, 'After the weekly reset')),
+        h('div', { class: 'statement-line' }, h('span', {}, 'YOUR eSIMs'), h('strong', {}, 'Shown after wallet connection')),
+        h('p', {}, 'No account values are shown in this preview.'))));
   }
 
-  // ============================================================================ 6. your data
+  function faqSection(ctx) {
+    const { h } = ctx;
+    const entries = [
+      ['How is my weekly credit calculated?', 'The previous week’s creator tax funds a data budget. An eligible wallet’s share is based on its OTT balance at the weekly snapshot relative to the circulating supply. Funding and eligibility can change week to week.'],
+      ['When does credit expire?', 'Unused credit expires at the end of the week it was published for. It does not roll over. A redeemed eSIM package has separate validity rules.'],
+      ['Can I install the eSIM on my phone?', 'Your device must support eSIMs. Check your device and carrier settings before redeeming. After redemption, use the install link or scan the QR code on another screen.'],
+      ['What if I already have an eSIM for a place?', 'A further package for the same place can be added to that eSIM. Packages run consecutively. The provider’s guidance on how long an unused package may wait before activation is unresolved, so do not assume a queued package can be stored indefinitely.'],
+      ['What if credit or funding is insufficient?', 'You can choose a smaller package when your credit covers it and the data pool is funded. Otherwise, redemption remains unavailable until the relevant balance or funding changes.'],
+    ];
+    return h('div', { class: 'section alt faq-section' }, h('div', { class: 'wrap' },
+      h('div', { class: 'section-head' }, h('span', { class: 'label label--accent' }, 'GOOD TO KNOW'), h('h2', {}, 'Before you fly')),
+      h('div', { class: 'faq-list' }, entries.map(([q, a]) => h('details', { class: 'faq-item' }, h('summary', {}, q), h('p', {}, a))))));
+  }
+
+  // ============================================================================ My data
   /**
    * The wallet's side of the page, and the one the founder asked for by name: how much OTT this
    * wallet holds, and how much data that buys this week. Two sources, most-sure first — /api/redeem
@@ -570,7 +491,7 @@
     const account = currentAccount(ctx);
     clear(panel);
     stopCountdown();
-    panel.appendChild(h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Your data')));
+    panel.appendChild(h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, 'Your data')));
 
     if (!account) {
       const hint = h('p', { class: 'hint' }, '');
@@ -583,7 +504,10 @@
         } catch (e) { hint.textContent = 'Could not connect: ' + errText(e); hint.classList.add('err'); }
         finally { btn.disabled = false; }
       } }, 'Connect wallet');
-      panel.appendChild(h('p', { class: 'small' }, 'Connect a wallet to see what it holds, and how much data that buys this week. The allowance is simply your share of OTT’s circulating supply — it refreshes every Monday, and does not carry over.'));
+      btn.disabled = !window.ethereum;
+      panel.appendChild(h('p', { class: 'small' }, window.ethereum
+        ? 'Connect a wallet to see its weekly credit and eSIMs. Eligibility depends on the weekly balance snapshot and the available budget.'
+        : 'No browser wallet detected. Install a compatible wallet to see your weekly credit and eSIMs.'));
       panel.appendChild(h('div', { class: 'data-actions' }, btn));
       panel.appendChild(hint);
       return;
@@ -624,10 +548,10 @@
     // Holdings, not spending power: the API reports tokens/share from whatever the file last said
     // even while that file is stale, so these are trusted from `standing` whenever it answered at
     // all — no staleness branch needed here.
-    const tokensStr = standing && standing.tokens !== undefined && standing.tokens !== null ? standing.tokens : (fileRow && fileRow.tokens !== undefined ? fileRow.tokens : '0');
-    const tokens = unitsFromDecimalStr(tokensStr, dec);
+    const tokensStr = standing && standing.tokens !== undefined && standing.tokens !== null ? standing.tokens : (fileRow && fileRow.tokens !== undefined ? fileRow.tokens : null);
+    const tokens = tokensStr === null ? NaN : unitsFromDecimalStr(tokensStr, dec);
     const shareRaw = standing && standing.share !== undefined && standing.share !== null ? standing.share : (fileRow && fileRow.share);
-    const share = Number.isFinite(Number(shareRaw)) ? Number(shareRaw) : 0;
+    const share = shareRaw !== null && shareRaw !== undefined && Number.isFinite(Number(shareRaw)) ? Number(shareRaw) : NaN;
     const week = Number(standing && standing.week !== undefined && standing.week !== null ? standing.week : (allow && allow.week));
     const weekEnd = Number(standing && standing.weekEnd !== undefined && standing.weekEnd !== null ? standing.weekEnd : (allow && allow.weekEnd));
     const nowWeek = weekOf(Math.floor(Date.now() / 1000));
@@ -648,15 +572,28 @@
     const allowUsdRaw = (!stale && standing && standing.allowanceUsd !== undefined && standing.allowanceUsd !== null) ? standing.allowanceUsd
       : (fileRow && fileRow.allowanceUsd !== undefined && fileRow.allowanceUsd !== null ? fileRow.allowanceUsd
         : (standing ? standing.allowanceUsd : null));
-    const allowanceUsd = Number.isFinite(Number(allowUsdRaw)) ? Number(allowUsdRaw) : 0;
+    const allowanceUsd = allowUsdRaw !== null && allowUsdRaw !== undefined && Number.isFinite(Number(allowUsdRaw)) ? Number(allowUsdRaw) : NaN;
     const redeemedUsd = standing ? Number(standing.redeemedUsd) : null;
-    const remainingUsd = standing ? Math.max(0, allowanceUsd - (Number.isFinite(redeemedUsd) ? redeemedUsd : 0)) : null;
+    const apiRemaining = standing && standing.remainingUsd !== null && standing.remainingUsd !== undefined
+      ? Number(standing.remainingUsd) : NaN;
+    const remainingUsd = standing
+      ? (Number.isFinite(apiRemaining) ? apiRemaining
+        : (Number.isFinite(allowanceUsd) && Number.isFinite(redeemedUsd) ? Math.max(0, allowanceUsd - redeemedUsd) : NaN))
+      : null;
 
     if (apiError) body.appendChild(notice('Could not reach the redeem API: ' + apiError + '. Showing what the indexer last published; redeeming needs the API back.', 'warn'));
 
     if (stale) {
       body.appendChild(notice('This week’s allowance has not been published yet — the numbers below are from the week that ended '
         + (fmtDate(publishedWeekEnd) || 'last week') + '. A fresh file is written every half hour.', 'plain'));
+    }
+
+    if (panel.classList.contains('dashboard-panel')) {
+      body.appendChild(h('div', { class: 'credit-summary' },
+        h('div', {}, h('span', { class: 'credit-summary-label' }, 'REMAINING WEEKLY CREDIT'),
+          h('strong', {}, stale ? 'Awaiting allocation' : (Number.isFinite(remainingUsd) ? fmtMoney(remainingUsd) : 'Unavailable')),
+          h('p', {}, stale ? 'Last published allowance: ' + (Number.isFinite(allowanceUsd) ? fmtMoney(allowanceUsd) : 'unavailable') + '. This is not spendable current-week credit.' : 'For eSIM packages only. It cannot be withdrawn or carried over.')),
+        h('div', { class: 'credit-summary-side' }, h('span', {}, 'EXPIRES'), h('b', {}, !stale && Number.isFinite(weekEnd) ? fmtDate(weekEnd) : 'Not published'))));
     }
 
     // An allowance is a claim on a pool, and the pool can be behind it — the week's budget comes
@@ -677,6 +614,11 @@
         + 'from the treasury once a day, so the rest should clear shortly.', 'warn'));
     }
 
+    if (!Number.isFinite(tokens)) {
+      body.appendChild(notice('Your holding and weekly credit are not available right now. Try again when the programme data is published.', 'warn'));
+      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
+      return;
+    }
     if (!(tokens > 0)) {
       body.appendChild(notice('This wallet holds no OTT, so it has no data this week.', 'plain'));
       body.appendChild(h('div', { class: 'data-actions' },
@@ -688,7 +630,7 @@
       return;
     }
 
-    body.appendChild(dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd, weekEnd }));
+    body.appendChild(dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd: stale ? NaN : remainingUsd, weekEnd: stale ? NaN : weekEnd }));
 
     if (!standing) {
       body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
@@ -698,7 +640,11 @@
     // The SIM is the object: what this wallet already has, and what is queued on it, comes before
     // the picker that adds more — so a returning holder reads "here is your eSIM" before "buy more
     // data", not the other way around.
+    if (!((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length)) {
+      body.appendChild(notice('No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
+    }
     body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
+    if (stale) return;
     body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel));
   }
 
@@ -709,43 +655,24 @@
   let countdownTimer = null;
   function stopCountdown() { if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; } }
 
-  /**
-   * The two numbers the founder asked for, first and biggest — what this wallet holds, and what
-   * that buys this week, in gigabytes, because that is what a carrier shows and a dollar figure is
-   * not. Then four supporting tiles: used and left in the same units as the headline, the wallet's
-   * share of supply, and a live countdown to the reset. Nothing here implies a single guaranteed GB
-   * figure — inGb() says what the balance is worth at the cheapest place and the dearest, the same
-   * honest spread the rest of the page already shows, because a gigabyte's price depends on where
-   * it is spent.
-   */
+  /** Credit is the spendable unit. A catalogue-based GB equivalent remains secondary. */
   function dashboardTiles(ctx, cfg, d) {
     const { h } = ctx;
-    const lo = cheapest(cfg);
-    // The three figures have to reconcile on screen. Flooring each of the three dollar amounts
-    // independently does not: $18.62 of allowance, $1.99 used and $16.63 left floor to 26, 2 and 23
-    // at the cheapest rate, and a reader who can add up sees 26 that turns into 25 and reads it as
-    // a bug. So the total and the used figure are floored, and the remainder is what is left of the
-    // total after it — the one of the three nobody checks independently.
-    const headlineGb = lo && Number.isFinite(d.allowanceUsd) ? Math.floor(d.allowanceUsd / perGb(lo)) : null;
-    const usedGb = lo && Number.isFinite(d.redeemedUsd) ? Math.floor(d.redeemedUsd / perGb(lo)) : null;
-    const leftGb = headlineGb !== null && usedGb !== null ? Math.max(0, headlineGb - usedGb)
-      : (lo && Number.isFinite(d.remainingUsd) ? Math.floor(d.remainingUsd / perGb(lo)) : null);
-
     const headline = h('div', { class: 'data-headline' },
       h('div', { class: 'dh-tile' },
-        h('div', { class: 'dh-label' }, 'OTT held'),
+        h('div', { class: 'dh-label' }, 'OTT at snapshot'),
         h('div', { class: 'dh-value' }, fmtTokens(d.tokens) + ' OTT'),
         h('div', { class: 'dh-sub' }, fmtSharePct(d.share) + ' of the circulating supply')),
       h('div', { class: 'dh-tile' },
-        h('div', { class: 'dh-label' }, 'Data this week'),
-        h('div', { class: 'dh-value' }, headlineGb === null ? '—' : fmtGb(headlineGb)),
-        h('div', { class: 'dh-sub' }, inGb(cfg, d.allowanceUsd) || (Number.isFinite(d.allowanceUsd) ? fmtMoney(d.allowanceUsd) + ' of credit' : 'no packages configured yet'))));
+        h('div', { class: 'dh-label' }, 'Weekly allocation'),
+        h('div', { class: 'dh-value' }, Number.isFinite(d.allowanceUsd) ? fmtMoney(d.allowanceUsd) : '—'),
+        h('div', { class: 'dh-sub' }, 'Data credit, not cash. ' + (inGb(cfg, d.allowanceUsd) || 'Compare packages below.'))));
 
     const supporting = h('div', { class: 'stat-grid data-tiles' },
-      ctx.tile('Used this week', usedGb === null ? '—' : fmtGb(usedGb),
-        Number.isFinite(d.redeemedUsd) ? fmtMoney(d.redeemedUsd) + ' redeemed' : 'not known — the redeem API could not be reached', 'coins'),
-      ctx.tile('Left this week', leftGb === null ? '—' : fmtGb(leftGb),
-        Number.isFinite(d.remainingUsd) ? fmtMoney(d.remainingUsd) + ' left to spend' : 'not known — the redeem API could not be reached', 'arrows'),
+      ctx.tile('Used this week', Number.isFinite(d.redeemedUsd) ? fmtMoney(d.redeemedUsd) : '—',
+        Number.isFinite(d.redeemedUsd) ? 'Data credit redeemed' : 'Redeem API unavailable', 'coins'),
+      ctx.tile('Left this week', Number.isFinite(d.remainingUsd) ? fmtMoney(d.remainingUsd) : '—',
+        Number.isFinite(d.remainingUsd) ? 'Spendable on available eSIM packages' : 'Current spendable credit unavailable', 'arrows'),
       ctx.tile('Your share', fmtSharePct(d.share), 'of OTT’s circulating supply', 'shield'),
       liveCountdownTile(ctx, d.weekEnd));
 
@@ -839,9 +766,12 @@
         sizes.appendChild(h('button', { type: 'button', class: 'btn btn-sm', 'data-code': p.code, onclick: () => selectSize(p.code) },
           (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days — ' + fmtPrice(p.priceUsd)));
       }
-      selectSize(here.length ? here[0].code : '');
+      const preferred = here.find((p) => p.code === selectedPackageCode);
+      selectSize(preferred ? preferred.code : (here.length ? here[0].code : ''));
     }
     placeSelect.addEventListener('change', paintSizes);
+    const selected = packageByCode(cfg, selectedPackageCode);
+    if (selected) placeSelect.value = selected.slug;
     paintSizes();
 
     async function doRedeem() {
@@ -922,7 +852,7 @@
     const { h } = ctx;
     clear(panel);
     stopCountdown();
-    panel.appendChild(h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Your data')));
+    panel.appendChild(h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, 'Your data')));
     panel.appendChild(h('p', { class: 'mono data-addr' }, addr));
     const body = h('div', {});
     panel.appendChild(body);
@@ -1159,104 +1089,6 @@
     return ((Number(b.week) || 0) - (Number(a.week) || 0)) || ((Number(b.n) || 0) - (Number(a.n) || 0));
   }
 
-  /**
-   * Is the pool funded. The Lightning wallet that pays nadanada is what actually pays for a
-   * redemption, and it lives off chain where nothing here can read it directly — so it is written
-   * down in public every half hour, with the rate it is being spent at and the runway that implies,
-   * and shown here with one word on it. "unknown" is what a fork without that wallet configured
-   * shows, and is the honest word.
-   */
-  function poolCard(ctx, t, cfg) {
-    const { h } = ctx;
-    if (!t || typeof t !== 'object') return h('div', {});
-    const brand = brandOf(cfg);
-    const status = String(t.status || 'unknown');
-    const badgeClass = status === 'funded' ? 'badge' : status === 'low' ? 'badge badge-hold' : 'badge badge-off';
-    const r = t.reseller || null;
-    const balance = r && Number.isFinite(Number(r.balanceUsd)) ? Number(r.balanceUsd) : null;
-    // nadanada is paid from a Lightning wallet rather than a reseller account, so its balance is
-    // introduced as what it is, sats and all; anything else keeps the older "at <reseller>" line.
-    const balanceSub = r && r.name === 'nadanada'
-      ? 'in the Lightning wallet that pays nadanada' + (Number.isFinite(Number(r.sats)) ? ' · ' + Number(r.sats).toLocaleString('en-US') + ' sats' : '') + (r.error ? ' — could not be read' : '')
-      : (r && r.name ? 'at ' + r.name + (r.error ? ' — could not be read' : '') : 'no reseller reading');
-    const runwayText = t.runwayDays === null || t.runwayDays === undefined
-      ? (Number(t.redemptions30d) > 0 ? '—' : 'no spend yet')
-      : Number(t.runwayDays).toLocaleString('en-US') + ' days';
-    const last = t.lastClaim && t.lastClaim.at ? new Date(Number(t.lastClaim.at) * 1000) : null;
-    const asOf = t.asOf ? new Date(Number(t.asOf) * 1000) : null;
-    return h('div', { class: 'card data-pool' },
-      h('div', { class: 'card-head' },
-        h('h3', { class: 'card-title' }, 'The pool'),
-        h('span', { class: badgeClass }, status.toUpperCase())),
-      h('div', { class: 'stat-grid data-tiles' },
-        ctx.tile('Pool balance', balance === null ? '—' : fmtMoney(balance), balanceSub, 'wallet'),
-        ctx.tile('Runway', runwayText, 'at the last 30 days’ rate', 'clock'),
-        ctx.tile('Last 30 days', fmtMoney(Number(t.spend30dUsd) || 0), (Number(t.redemptions30d) || 0) + ' eSIM' + (Number(t.redemptions30d) === 1 ? '' : 's') + ' redeemed', 'coins'),
-        ctx.tile('Last claim', last && !Number.isNaN(last.getTime()) ? last.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'none yet',
-          t.lastClaim ? fmtMoney(Number(t.lastClaim.amount) || 0) + ' ' + (t.lastClaim.kind === 'eth' ? 'ETH' : 'USDG') + ' out of the escrow' : 'the escrow is swept daily', 'arrows')),
-      h('p', { class: 'small', style: 'margin-top:10px' },
-        brand ? 'The balance that pays for a redemption is what ' + brand.name + ' pays nadanada from; it sits in a Lightning wallet, off chain. It is read and published every half hour'
-              : 'The balance that pays for a redemption sits in a Lightning wallet, off chain. It is read and published every half hour',
-        asOf && !Number.isNaN(asOf.getTime()) ? ' — last at ' + asOf.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' UTC' : '',
-        Number.isFinite(Number(t.walletUsd)) ? '. The treasury wallet holds ' + fmtMoney(Number(t.walletUsd)) + ' USDG waiting to be moved there.' : '.'));
-  }
-
-  // Raised against the graduation threshold. The bar is the same idiom as status.js's own curve
-  // card, and --w is the fraction, so the width states exactly what the numbers beside it say.
-  function progress(ctx, c) {
-    const { h } = ctx;
-    const frac = Number.isFinite(c.raisedUsd) && c.thresholdUsd > 0 ? Math.min(1, c.raisedUsd / c.thresholdUsd) : 0;
-    const fill = h('i', {});
-    fill.style.setProperty('--w', String(frac));
-    return h('div', { class: 'card data-progress' },
-      h('div', { class: 'card-head' },
-        h('h3', { class: 'card-title' }, 'Curve progress'),
-        h('span', { class: 'num' }, Number.isFinite(c.raisedUsd) && Number.isFinite(c.thresholdUsd) ? fmtMoney(c.raisedUsd) + ' of ' + fmtMoney(c.thresholdUsd) : '—')),
-      h('div', { class: 'sp-bar dp-bar' }, fill),
-      h('p', { class: 'small', style: 'margin-top:10px' }, Math.round(frac * 100) + '% of the way to graduation. Creator tax accrues toward a future week’s budget until then.'));
-  }
-
-  // ============================================================================ 7. the programme's numbers
-  /**
-   * The treasury and curve figures, painted after the wallet panel rather than beside it — this is
-   * supporting detail for a holder who wants to check the mechanism, not the first thing the page
-   * shows. Kept as its own async function (rather than inlined in render()) only so render() stays
-   * a plain list of the seven bands in order.
-   */
-  async function paintNumbers(ctx, cfg, numbers) {
-    const { h, notice } = ctx;
-    const usdgPaired = String(cfg.pair || '').toLowerCase() === String((ctx.cfg && ctx.cfg.usdg) || '').toLowerCase();
-    try {
-      const c = await readChain(ctx, cfg);
-      clear(numbers);
-      if (!usdgPaired) {
-        // No fake accounting: the budget is priced from the curve's USDG-denominated fee escrow,
-        // and a native-ETH pair (pair == 0x0) or any other pair collects its tax in that asset
-        // instead. Say so where the numbers would be.
-        numbers.appendChild(notice('This coin is paired to ' + (cfg.pair === ZERO || !cfg.pair ? 'native ETH' : shortAddr(cfg.pair))
-          + ', and v1 only prices the weekly data budget in USDG — a native-ETH pair collects its creator tax in ETH instead, so no dollar budget can be read here yet.', 'warn'));
-      }
-      const lo = cheapest(cfg), hi = dearest(cfg);
-      const poolGb = usdgPaired && Number.isFinite(c.treasuryUsd) && lo ? Math.floor(c.treasuryUsd / perGb(lo)) : null;
-      numbers.appendChild(h('div', { class: 'stat-grid page-tiles data-tiles' },
-        ctx.tile('Treasury claimable', usdgPaired ? fmtMoney(c.treasuryUsd) : '—', 'USDG sitting in the fee escrow, waiting to become a future week’s budget', 'wallet'),
-        ctx.tile('Unclaimed, as data', poolGb === null ? '—' : fmtGb(poolGb),
-          lo ? 'at ' + fmtPrice(perGb(lo)) + '/GB (' + lo.name + ' · ' + (Number(lo.gb) || 1) + ' GB)' + (hi && hi !== lo ? ' · ' + fmtGb(Math.floor(c.treasuryUsd / perGb(hi))) + ' ' + hi.name.toLowerCase() : '') : 'no packages configured', 'coins'),
-        ctx.tile('Creator tax', fmtPct(c.taxBps), c.taxHeldUsd !== null ? fmtMoney(c.taxHeldUsd) + ' still held in the curve' : 'read from the curve', 'flame')));
-      numbers.appendChild(progress(ctx, c));
-      // The pool card is the one thing on this page the chain cannot vouch for, so it comes from a
-      // file scripts/treasury.js writes every half hour. Missing (a fresh fork, the first run not
-      // yet made) means no card, not an error: the chain numbers above are still true.
-      try { numbers.appendChild(poolCard(ctx, await loadJson('./data/treasury.json'), cfg)); } catch (e) { /* no reading yet */ }
-      if (c.graduated) numbers.appendChild(notice('This coin has graduated. v1 only prices next week’s budget from tax collected on the bonding curve, so trading from here on does not fund a future allowance.', 'warn'));
-      numbers.appendChild(h('p', { class: 'small', style: 'margin-top:12px' },
-        'Coin ', addrLink(ctx, cfg.coin), ' · curve ', addrLink(ctx, cfg.curve), ' · treasury ', addrLink(ctx, cfg.treasury), '.'));
-    } catch (e) {
-      clear(numbers);
-      numbers.appendChild(notice('Could not read the chain: ' + errText(e), 'warn'));
-    }
-  }
-
   // The wallet may connect after this route has started rendering (app.js asks the wallet for its
   // accounts after the first paint), so the address is re-read whenever it matters, through the
   // getter app.js provides, and remembered when this page's own button connected it.
@@ -1267,7 +1099,8 @@
   }
 
   window.WhateverData = {
-    render, SEL, signInMessage, hexOfUtf8,
+    render, renderMyData, SEL, signInMessage, hexOfUtf8,
+    selectPackage: (code) => { selectedPackageCode = String(code || ''); },
     // Shared with site/status.js, the same way SEL already is, so the two files cannot silently
     // disagree about how a token amount, a share or a week is read.
     unitsFromDecimalStr, fmtTokens, fmtSharePct, weekOf, weekStartOf, weekEndOf,

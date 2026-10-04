@@ -130,8 +130,8 @@ stale.
 |---|---|
 | `site/` | The front end: plain files, no build step |
 | `site/index.html` | The one HTML shell; a hash router picks what fills it |
-| `site/app.js` | The hash router: mounts `site/esim.js` at `#/`, `site/status.js` at `#/status`, and draws the short About panel itself at `#/about` |
-| `site/esim.js` | The programme page's script (`#/`): rules, live treasury and curve numbers, a wallet's own credit, the redeem flow |
+| `site/app.js` | The hash router: mounts `site/esim.js` at `#/` and `#/data`, `site/status.js` at `#/status`, and draws About at `#/about` |
+| `site/esim.js` | Destination discovery and catalogue (`#/`), the holder dashboard (`#/data`), credit and eSIM display, and the redeem flow |
 | `site/status.js` | The status dashboard (`#/status`): the whole machine on one screen — what's running, what isn't, and every number behind it |
 | `site/ui.js`, `site/ui.css` | Shared visual components: the token badge, the delta pill, the small charts |
 | `site/style.css` | Site-wide styles and the colour palette |

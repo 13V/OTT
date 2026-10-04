@@ -1,35 +1,18 @@
-/* OT+T — "Signal": the incumbent American telco register.
- *
- * OT+T (Onchain Telephone + Telegraph) is a phone carrier, and the previous identity here — a
- * near-black page washed in a violet-magenta bloom, sampled from an unrelated 3D model's textures —
- * read as a memecoin launchpad, because that is what this codebase used to be. Nine real carrier
- * sites were read to correct it (verizon.com, att.com, t-mobile.com, vodafone.co.uk, visible.com,
- * fi.google.com, ee.co.uk, three.co.uk, usmobile.com): eight of nine run a light page and none run a
- * fully dark one; every one of them spends exactly one saturated accent, narrowly, on CTAs and
- * active states; every shadow sampled is neutral black at 4–16% opacity, never colored; buttons are
- * mostly pills; cards sit at 8–24px radius; and every brand uses exactly one self-hosted sans-serif
- * with no serif anywhere. This file is that grammar, applied.
- *
- * Tokens below are the whole palette. --accent is spent in exactly the places this file marks —
- * primary buttons, the active nav underline, one numbered-step circle, one small tile icon — and
- * --positive/--warning/--negative exist only for real state (order placed, degraded, down), never
- * for decoration. There is no gradient token and no glow token in this file on purpose: every
- * "active/important" moment below is a flat fill, and every lift is a neutral-black shadow or a 1px
- * border, never a colored one.
- */
+/* OT+T / Onchain Telephone + Telegraph. A service statement, a signal route,
+ * and warm field-paper surfaces connect the public story with the holder account. */
 
 :root {
   color-scheme: light;
 
-  --bg: #FFFFFF;
-  --surface: #F4F5F6;
-  --text: #14171A;
-  --text-secondary: #5B6169;
-  --border: #DCE0E3;
+  --bg: #F4F0E7;
+  --surface: #EAE5DA;
+  --text: #16262B;
+  --text-secondary: #495B5B;
+  --border: #C9CEC6;
 
-  --accent: #0B57D6;
-  --accent-hover: #08409E;
-  --accent-tint: rgba(11, 87, 214, .08);
+  --accent: #B63C1C;
+  --accent-hover: #8D2F16;
+  --accent-tint: rgba(182, 60, 28, .10);
 
   --positive: #1E8E3E;
   --positive-tint: rgba(30, 142, 62, .10);
@@ -38,13 +21,14 @@
   --negative: #C4281E;
   --negative-tint: rgba(196, 40, 30, .10);
 
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  --wrap-width: 1232px;                 /* Verizon's real content-well width; the field's own median */
-  --radius-button: 999px;               /* pill — the majority pattern (Verizon/AT&T/Visible/Fi/EE) */
-  --radius-card: 12px;                  /* the 8–24px card cluster every site with card evidence sits in */
-  --radius-control: 8px;
+  --wrap-width: 1232px;
+  --radius-button: 4px;
+  --radius-card: 5px;
+  --radius-control: 4px;
 
   /* Neutral black, never colored — the one shadow rule every site studied agrees on. Most surfaces
      use a border instead; these two are for the handful of moments (a hovered plan card, a floating
@@ -114,10 +98,9 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .mh-top { display: flex; align-items: center; gap: 24px; height: 72px; }
 @media (max-width: 860px) { .mh-top { height: 56px; } }
 
-/* The wordmark is plain text, one weight, one colour — no gradient, no tinted "+". A trick spent on
-   a logotype is still a trick spent on the one place a carrier site never spends one. */
-.brand { font: 700 18px/1 var(--font-sans); letter-spacing: -.01em; color: var(--text); flex: none; }
-.brand .dot-fun { color: inherit; }
+/* The plus is the brand's signal junction, repeated in the route diagram and section details. */
+.brand { font: 800 23px/1 var(--font-display); letter-spacing: -.05em; color: var(--text); flex: none; }
+.brand .dot-fun { color: var(--accent); }
 
 #nav { display: flex; gap: 24px; margin-left: 8px; }
 #nav a { font: 500 14px/1 var(--font-sans); color: var(--text-secondary); padding: 8px 2px; transition: color .15s ease; }
@@ -165,7 +148,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 }
 
 .page-head { margin-bottom: 24px; }
-.page-head h1 { font: 700 clamp(26px, 3.2vw, 34px)/1.15 var(--font-sans); letter-spacing: -.02em; color: var(--text); }
+.page-head h1 { font: 700 clamp(26px, 3.2vw, 34px)/1.15 var(--font-display); letter-spacing: -.025em; color: var(--text); }
 .page-lede { color: var(--text-secondary); font: 400 clamp(15px, 1.4vw, 17px)/1.6 var(--font-sans); max-width: 52ch; margin-top: 8px; }
 
 /* The eyebrow label: small uppercase text in --text-secondary, nothing else — no monospace, no
@@ -198,7 +181,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 
 /* Sized to read as one confident line at desktop and wrap to two on a phone, never five — every
    carrier hero sampled is a short sentence or fragment, not a multi-clause claim. */
-.hero-title { font: 700 clamp(38px, 5.6vw, 64px)/1.05 var(--font-sans); letter-spacing: -.02em; color: var(--text); }
+.hero-title { font: 700 clamp(46px, 6.5vw, 86px)/.98 var(--font-sans); letter-spacing: -.075em; color: var(--text); }
 .hero-sub { margin-top: 20px; max-width: 56ch; font: 400 clamp(16px, 1.6vw, 18px)/1.55 var(--font-sans); color: var(--text-secondary); }
 .hero-actions { display: flex; align-items: center; gap: 12px; margin-top: 32px; flex-wrap: wrap; }
 
@@ -254,10 +237,10 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
   padding: 4px 12px; border-radius: var(--radius-button);
   background: var(--accent); color: #fff; font: 600 12px/1.4 var(--font-sans);
 }
-.plan-size { font: 600 16px/1.3 var(--font-sans); color: var(--text-secondary); }
+.plan-size { font: 700 clamp(44px, 5vw, 68px)/1 var(--font-sans); letter-spacing: -.05em; color: var(--text); }
 .plan-price {
   display: flex; align-items: baseline; gap: 6px; margin-top: 8px;
-  font: 700 44px/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text);
+  font: 700 23px/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 .plan-term { font: 400 15px/1.3 var(--font-sans); color: var(--text-secondary); }
@@ -296,13 +279,8 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .cov-name { flex: 1; min-width: 0; font: 500 14px/1.3 var(--font-sans); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cov-price { flex: none; font: 600 14px/1 var(--font-sans); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
-/* ---- the trust row: short factual claims, quiet, fenced by hairlines top and bottom */
-.trust-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 32px; padding: 32px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.trust-item { font: 500 14px/1.4 var(--font-sans); color: var(--text-secondary); text-align: center; }
-
 /* ============================================================ buttons
-   Flat pills, one accent fill, a hairline border everywhere else. Hover on the primary is a darker
-   flat fill (--accent-hover) — never a glow, never a gradient. */
+   Compact squared controls with a signal-orange primary action. */
 .btn, .plan-cta {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   font: 600 14px/1 var(--font-sans); letter-spacing: 0;
@@ -446,7 +424,6 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .dh-value { margin-top: 10px; font: 700 clamp(30px, 4vw, 38px)/1.1 var(--font-sans); letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
 .dh-sub { margin-top: 8px; font: 500 13px/1.45 var(--font-sans); color: var(--text-secondary); }
 .data-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.data-notlaunched .rows { margin-top: 14px; }
 .data-addr { color: var(--text-secondary); margin: -6px 0 14px; overflow-wrap: anywhere; }
 /* The curve's progress, in the same bar idiom as .sp-bar below, just taller. */
 .data-progress .dp-bar { height: 12px; border-radius: 6px; }
@@ -528,3 +505,179 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .prose-note { max-width: 68ch; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
   color: var(--text-secondary); font-size: 13px; }
 .page-lede { max-width: 60ch; }
+
+/* Brand direction: signal route, field paper, structured service statements. */
+#masthead { background: var(--bg); }
+#nav a { font-weight: 650; }
+#view { padding-top: 0; }
+#view > .page-head { padding-top: 64px; }
+.page-head h1 { max-width: 19ch; font-size: clamp(36px, 5vw, 58px); letter-spacing: -.055em; }
+.page-lede { max-width: 60ch; }
+.section-head { max-width: 760px; }
+.section-head h2 { font: 720 clamp(32px, 4.4vw, 56px)/1.04 var(--font-sans); letter-spacing: -.06em; }
+.label--accent { color: var(--accent); }
+.state-pill { display: inline-flex; align-items: center; min-height: 28px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 3px; color: var(--accent); font: 750 11px/1.2 var(--font-sans); letter-spacing: .085em; }
+.text-arrow, .hero-text-link { display: inline-block; border-bottom: 1px solid currentColor; padding: 4px 0; color: var(--accent); font-weight: 700; }
+.text-arrow:hover, .hero-text-link:hover { color: var(--accent-hover); }
+.hero { position: relative; overflow: hidden; padding: 74px 0 84px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.hero .wrap { gap: 40px; }
+@media (min-width: 900px) { .hero .wrap { gap: 6%; } }
+.hero-copy { position: relative; z-index: 1; }
+.hero-title { max-width: 10ch; margin-top: 26px; }
+.hero-kicker { max-width: 29ch; margin-top: 28px; font: 700 clamp(20px, 2vw, 27px)/1.15 var(--font-sans); letter-spacing: -.035em; }
+.hero-sub { max-width: 48ch; margin-top: 16px; font-size: 17px; color: var(--text-secondary); }
+.hero-actions { margin-top: 30px; }
+.hero-actions .btn { min-height: 50px; }
+.hero-text-link { margin-left: 8px; }
+.hero-foot { max-width: 52ch; margin-top: 26px; padding-left: 14px; border-left: 3px solid var(--accent); font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.hero-visual { position: relative; display: block; width: 100%; min-height: 450px; max-width: none; margin: 0; padding: 24px 34px; aspect-ratio: auto; color: var(--bg); background: var(--text); border-radius: 4px; }
+.hero-visual::before { content: '+'; position: absolute; right: -25px; bottom: -77px; font: 800 280px/.9 var(--font-sans); color: rgba(244,240,231,.05); pointer-events: none; }
+.route-heading, .statement-top { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid rgba(244,240,231,.3); font: 700 11px/1.3 var(--font-mono); letter-spacing: .06em; }
+.route-heading span:last-child { color: #A8B6B0; }
+.signal-route { position: relative; margin-top: 18px; }
+.signal-route::before { content: ''; position: absolute; left: 39px; top: 31px; bottom: 32px; width: 3px; background: var(--accent); }
+.route-station { position: relative; display: grid; grid-template-columns: 24px 32px minmax(0, 1fr); gap: 8px 17px; align-items: center; min-height: 83px; border-bottom: 1px solid rgba(244,240,231,.17); }
+.route-station:last-child { border-bottom: 0; }
+.route-number { font: 600 10px/1 var(--font-mono); color: #A8B6B0; }
+.route-node { position: relative; z-index: 1; width: 22px; height: 22px; border: 5px solid var(--text); border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.route-junction .route-node { display: flex; justify-content: center; align-items: center; width: 32px; height: 32px; margin-left: -5px; border: 0; border-radius: 3px; box-shadow: none; color: #fff; font: 600 25px/1 var(--font-sans); }
+.route-text strong, .route-text small { display: block; }
+.route-text strong { font: 650 clamp(19px, 2vw, 25px)/1.1 var(--font-sans); letter-spacing: -.04em; }
+.route-text small { margin-top: 5px; color: #B6C4BE; font-size: 12px; }
+.route-end { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: #B6C4BE; font: 700 10px/1 var(--font-mono); letter-spacing: .09em; }
+.route-end span { color: #F47C53; font: 700 22px/1 var(--font-sans); }
+.mechanism { background: var(--text); color: var(--bg); }
+.mechanism-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(42px, 7vw, 110px); }
+.mechanism .label, .mechanism .text-arrow { color: #FE9271; }
+.mechanism-intro h2 { max-width: 12ch; font: 720 clamp(38px, 5vw, 66px)/1.02 var(--font-sans); letter-spacing: -.065em; }
+.mechanism-intro p { max-width: 52ch; margin: 26px 0 22px; color: #D1DAD2; line-height: 1.65; }
+.mechanism-facts { border-top: 1px solid #657675; }
+.mechanism-fact { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 6px 18px; padding: 22px 0; border-bottom: 1px solid #657675; }
+.mechanism-fact > span { grid-row: span 2; color: #FE9271; font: 650 11px/1.4 var(--font-mono); }
+.mechanism-fact strong { font-size: 19px; line-height: 1.2; letter-spacing: -.025em; }
+.mechanism-fact p { color: #D1DAD2; font-size: 14px; }
+.mechanism-status { margin-top: 18px; font-size: 12px; color: #A8B6B0; }
+.usage { background: var(--surface); }
+.usage .section-head { margin-bottom: 42px; }
+.steps { gap: 0; border-top: 1px solid var(--border); }
+.step { position: relative; padding: 25px 30px 18px 0; border-bottom: 1px solid var(--border); }
+.step + .step { padding-left: 30px; border-left: 1px solid var(--border); }
+.step-n { width: auto; height: auto; margin-bottom: 20px; display: block; background: none; color: var(--accent); font: 700 13px/1 var(--font-mono); }
+.step-n::before { content: '+'; margin-right: 9px; font: 700 19px/1 var(--font-sans); }
+.step-title { font-size: 22px; letter-spacing: -.04em; }
+.discovery { background: var(--bg); }
+.search-shell { position: relative; max-width: 720px; margin: 0 0 38px; }
+.search-shell > label { display: block; margin-bottom: 9px; font-weight: 700; font-size: 13px; }
+.search-control { display: flex; gap: 10px; }
+.destination-search { flex: 1; min-width: 0; height: 56px; padding: 0 17px; border: 1px solid var(--border); border-radius: var(--radius-control); background: #fff; color: var(--text); font-size: 16px; }
+.destination-search::placeholder { color: #687977; }
+.destination-results { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; right: 75px; max-height: 280px; overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: #fff; box-shadow: var(--shadow-hover); }
+.destination-result { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 12px 14px; text-align: left; }
+.destination-result:hover, .destination-result:focus-visible { background: var(--surface); }
+.destination-result small { color: var(--text-secondary); }
+.destination-empty { padding: 12px; font-size: 14px; color: var(--text-secondary); }
+.plan-options, #plans, #coverage, #how-it-works, #using-it { scroll-margin-top: 90px; }
+.plan-picker { margin-bottom: 24px; }
+.plan-picker label { font-weight: 700; }
+.place-select { background-color: #fff; }
+.plan-card, .plan-card.featured { padding: 26px; background: #FAF8F2; border: 1px solid var(--border); border-top: 3px solid var(--text); border-radius: 3px; box-shadow: none; }
+.plan-card.featured { border-top-color: var(--accent); }
+.plan-card:hover { box-shadow: none; border-color: var(--text-secondary); }
+.plan-card.featured:hover { border-color: var(--accent); }
+.plan-badge { top: 15px; left: auto; right: 15px; transform: none; padding: 5px 8px; border-radius: 2px; background: var(--accent); color: #fff; font-size: 10px; }
+.plan-destination { min-height: 28px; padding-right: 100px; color: var(--text-secondary); font: 700 10px/1.3 var(--font-mono); letter-spacing: .02em; text-transform: uppercase; }
+.plan-size { margin-top: 12px; }
+.plan-term { margin-top: 6px; color: var(--text-secondary); font-size: 14px; }
+.plan-credit-label { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-secondary); font: 700 10px/1 var(--font-mono); letter-spacing: .06em; }
+.plan-price { margin-top: 8px; }
+.plan-meta { margin-top: 19px; gap: 7px; font-size: 12px; }
+.plan-disclaimer { margin-top: 22px; max-width: 76ch; color: var(--text-secondary); font-size: 13px; }
+.coverage-summary { padding: 0 0 72px; background: var(--bg); }
+.coverage-details { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.coverage-details summary { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 0; cursor: pointer; font-weight: 700; }
+.coverage-details summary span { color: var(--text-secondary); font: 650 10px/1 var(--font-mono); }
+.coverage-details[open] summary { border-bottom: 1px solid var(--border); }
+.cov-grid { margin: 18px 0; border-radius: 2px; }
+.cov-item { width: 100%; text-align: left; background: #FAF8F2; }
+.cov-item:hover, .cov-item:focus-visible { background: var(--surface); }
+.cov-name { white-space: normal; overflow: visible; }
+.cov-price { font-size: 12px; white-space: nowrap; }
+.account-preview { background: var(--surface); }
+.account-preview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 7vw, 110px); align-items: center; }
+.account-preview .section-head { margin-bottom: 0; }
+.account-preview .btn { margin-top: 28px; }
+.statement-preview { padding: 27px; background: #FAF8F2; border: 1px solid var(--border); border-top: 4px solid var(--accent); }
+.statement-top { color: var(--text); border-color: var(--border); }
+.statement-top span { color: var(--accent); }
+.statement-value { padding: 30px 0; border-bottom: 1px solid var(--border); }
+.statement-value span { display: block; color: var(--text-secondary); font: 700 10px/1 var(--font-mono); }
+.statement-value strong { display: block; margin-top: 8px; font: 700 56px/1 var(--font-sans); }
+.statement-line { display: flex; justify-content: space-between; gap: 20px; padding: 15px 0; border-bottom: 1px solid var(--border); }
+.statement-line span { color: var(--text-secondary); font: 700 10px/1.4 var(--font-mono); }
+.statement-line strong { text-align: right; font-size: 13px; }
+.statement-preview > p { margin-top: 17px; color: var(--text-secondary); font-size: 12px; }
+.faq-section { background: var(--bg) !important; }
+.faq-list { max-width: 850px; border-top: 1px solid var(--border); }
+.faq-item { border-bottom: 1px solid var(--border); }
+.faq-item summary { padding: 20px 4px; cursor: pointer; font-weight: 700; list-style-position: outside; }
+.faq-item p { max-width: 70ch; padding: 0 4px 22px; color: var(--text-secondary); line-height: 1.65; }
+.dashboard-head { margin-bottom: 28px; }
+.dashboard-panel, .dashboard-empty { max-width: 1100px; border-top: 4px solid var(--accent); }
+.dashboard-empty { max-width: 720px; padding: 34px; }
+.dashboard-empty h2 { margin: 20px 0 10px; font: 700 clamp(25px, 3vw, 38px)/1.1 var(--font-sans); letter-spacing: -.045em; }
+.dashboard-empty p { max-width: 58ch; margin-bottom: 24px; color: var(--text-secondary); }
+.dashboard-panel .data-headline { gap: 12px; }
+.dashboard-panel .dh-tile { background: var(--surface); }
+.credit-summary { display: flex; justify-content: space-between; gap: 28px; margin: 0 0 20px; padding: 27px 30px; border-radius: 3px; background: var(--text); color: var(--bg); }
+.credit-summary-label, .credit-summary-side span { display: block; color: #B9C8BF; font: 700 11px/1.3 var(--font-mono); }
+.credit-summary strong { display: block; margin: 9px 0; font-size: clamp(34px, 5vw, 54px); line-height: 1; letter-spacing: -.06em; }
+.credit-summary p { max-width: 53ch; color: #D4DED5; font-size: 13px; }
+.credit-summary-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 8px; flex: none; }
+.credit-summary-side b { font-size: 14px; }
+.status-summary { display: flex; align-items: center; gap: 20px; max-width: 840px; margin: 4px 0 30px; padding: 18px 22px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
+.status-summary p { line-height: 1.5; color: var(--text); }
+.prose-entry { scroll-margin-top: 100px; }
+.prose-title { font-size: 23px; }
+.prose-body { font-size: 16px; line-height: 1.75; }
+#site-footer { margin-top: 0; }
+@media (max-width: 900px) {
+  .mechanism-grid, .account-preview-grid { gap: 30px; }
+  .mechanism-fact { grid-template-columns: 82px minmax(0,1fr); }
+}
+@media (max-width: 700px) {
+  .hero { padding: 44px 0 48px; }
+  .hero .wrap { gap: 32px; }
+  .hero-title { font-size: clamp(43px, 10vw, 65px); }
+  .hero-kicker { margin-top: 22px; font-size: 20px; }
+  .hero-visual { min-height: 0; padding: 16px 20px; }
+  .route-heading { padding-bottom: 10px; }
+  .signal-route { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+  .signal-route::before { left: 9%; right: 9%; top: 32px; bottom: auto; width: auto; height: 2px; }
+  .route-station { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 0; padding: 9px 0; border: 0; }
+  .route-node { order: 1; margin: 0 0 5px 4px; width: 17px; height: 17px; border-width: 3px; }
+  .route-junction .route-node { margin-left: 0; width: 24px; height: 24px; font-size: 20px; }
+  .route-number { order: 0; }
+  .route-text { order: 2; }
+  .route-text strong { font-size: 12px; line-height: 1.2; }
+  .route-text small { display: none; }
+  .route-end { margin-top: 7px; }
+  .mechanism-grid, .account-preview-grid { grid-template-columns: 1fr; gap: 36px; }
+  .mechanism-intro h2 { max-width: 16ch; font-size: 40px; }
+  .step + .step { padding-left: 0; border-left: 0; }
+  .section { padding: 54px 0; }
+  .destination-results { right: 0; }
+  .cov-grid { grid-template-columns: 1fr; }
+  .status-summary, .credit-summary { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .credit-summary-side { align-items: flex-start; }
+  #view > .dashboard-empty, #view > .dashboard-panel { width: calc(100% - 32px); margin-inline: auto; }
+}
+@media (max-width: 390px) {
+  .mh-top { gap: 8px; }
+  .mh-right { gap: 6px; }
+  .wallet-slot .btn { padding-inline: 10px; font-size: 12px; }
+  .hero-title { font-size: 42px; }
+  .hero-actions .btn { width: 100%; }
+  .hero-text-link { margin-left: 0; }
+  .search-control .btn { padding-inline: 14px; }
+  .route-text strong { font-size: 11px; }
+}
