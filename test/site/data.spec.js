@@ -283,7 +283,7 @@ test('the nav exposes destinations, explanation, account, and status', async ({ 
   await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
   await page.goto('/index.html#/');
   const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
-  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status']);
+  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status', 'Open app']);
   await expect(page.locator('#nav a[data-route="home"]')).toHaveClass(/active/);
 });
 

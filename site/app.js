@@ -20,7 +20,7 @@
 (function () {
   const CHAIN_ID_HEX = '0x1237';           // 4663, Robinhood Chain
 
-  const STATE = { cfg: null, account: null, route: '', endpoint: 0 };
+  const STATE = { cfg: null, account: null, route: '', appScreen: 'home', endpoint: 0 };
   window.OTT_STATE = STATE;                // a harmless inspection hook
 
   // ============================================================================ DOM helpers
@@ -95,10 +95,17 @@
 
   // ============================================================================ wallet
   async function connect() {
-    if (!window.ethereum) { toast('No wallet found', 'Install a browser wallet to view your data or redeem.'); return null; }
+    if (!window.ethereum || typeof window.ethereum.request !== 'function') {
+      toast('Connect your wallet', 'Open OTT in your wallet browser, or install a browser wallet to connect.');
+      paintWallet();
+      return null;
+    }
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const account = accounts && accounts[0] || null;
+    if (!account) { window.WhateverData?.resetWallet?.(); STATE.account = null; paintWallet(); return null; }
     await ensureChain();
-    STATE.account = accounts && accounts[0];
+    if (account !== STATE.account) window.WhateverData?.resetWallet?.();
+    STATE.account = account;
     paintWallet();
     return STATE.account;
   }
@@ -110,6 +117,7 @@
       return true;
     } catch (e) {
       if (e && e.code === 4902) {
+        if (!STATE.cfg || !STATE.cfg.rpc) throw new Error('Network settings are unavailable. Go online and try connecting again.');
         await window.ethereum.request({
           method: 'wallet_addEthereumChain',
           params: [{
@@ -127,7 +135,7 @@
     const slot = $('wallet-slot');
     if (!slot) return;
     clear(slot);
-    if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: async () => { const button = slot.querySelector('button'); button.disabled = true; button.textContent = 'Connecting…'; try { await connect(); if (STATE.route === 'data') renderRoute(); } catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); } }, 'aria-label': 'Connect wallet' }, 'Connect wallet')); return; }
+    if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: async () => { const button = slot.querySelector('button'); button.disabled = true; button.textContent = 'Connecting…'; try { await connect(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); } catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); } }, 'aria-label': 'Connect wallet' }, 'Connect wallet')); return; }
     slot.appendChild(h('a', { class: 'wallet-addr', href: '#/data', 'aria-label': 'My data, wallet ' + STATE.account }, shortAddr(STATE.account)));
   }
 
@@ -150,7 +158,8 @@
   }
 
   // ============================================================================ routes
-  const ROUTES = ['home', 'data', 'status', 'holders', 'about'];
+  const ROUTES = ['home', 'data', 'status', 'holders', 'about', 'app'];
+  const APP_SCREENS = ['home', 'plans', 'esims', 'help'];
   // Full <title> strings, not just labels — the title bar says where you are. An empty or unknown
   // hash falls back to 'home', so TITLES.home also stands in whenever STATE.route somehow lands on
   // something this map does not name.
@@ -160,6 +169,7 @@
     status: 'Status — OT+T',
     holders: 'Holders — OT+T',
     about: 'How this works — OT+T',
+    app: 'OTT app — OT+T',
   };
 
   /**
@@ -272,11 +282,23 @@
     });
   }
 
-  const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, holders: renderHolders, about: renderAbout };
+  function renderApp(view, isCurrent) {
+    const A = window.OTTMobileApp;
+    if (!A || typeof A.render !== 'function') { view.appendChild(notice('The OTT app has not loaded. Reload this page to try again.', 'warn')); return; }
+    A.render(view, {
+      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
+      refresh: renderRoute,
+      walletAvailable: () => !!(window.ethereum && typeof window.ethereum.request === 'function'),
+    }, STATE.appScreen);
+  }
+
+  const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, holders: renderHolders, about: renderAbout, app: renderApp };
   let renderVersion = 0;
 
   function renderRoute() {
     const version = ++renderVersion;
+    window.OTTMobileApp?.dispose?.();
     const view = $('view');
     clear(view);
     view.scrollTop = 0;
@@ -285,13 +307,23 @@
 
   function navigate() {
     const sectionId = location.hash.slice(1);
+    if (sectionId === 'view' && STATE.route) { $('view')?.focus(); return; }
     if (sectionId && !sectionId.startsWith('/') && STATE.route === 'home') {
       const target = document.getElementById(sectionId);
       if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     }
-    const raw = location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0];
+    const path = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
+    const raw = path[0];
     STATE.route = ROUTES.includes(raw) ? raw : 'home';
+    STATE.appScreen = STATE.route === 'app' && path.length <= 2 && APP_SCREENS.includes(path[1]) ? path[1] : 'home';
+    const appMode = STATE.route === 'app';
     document.body.classList.toggle('home-active', STATE.route === 'home');
+    document.body.classList.toggle('ott-app-mode', appMode);
+    const masthead = $('masthead'), footer = $('site-footer');
+    if (masthead) masthead.hidden = appMode;
+    if (footer) footer.hidden = appMode;
+    $('nav')?.classList.remove('open');
+    $('nav-toggle')?.setAttribute('aria-expanded', 'false');
     document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === STATE.route));
     document.title = TITLES[STATE.route] || TITLES.home;
     renderRoute();
@@ -301,15 +333,23 @@
   // ============================================================================ boot
   async function boot() {
     try {
-      STATE.cfg = await fetch('./config/addresses.json', { cache: 'no-store' }).then((r) => r.json());
+      STATE.cfg = await fetch('./config/addresses.json', { cache: 'no-store' }).then((r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
     } catch (e) {
-      const view = $('view');
-      if (view) view.appendChild(notice('Could not load configuration. Serve this directory over HTTP rather than opening the file directly.', 'error'));
-      return;
+      if (/^#\/?app(?:\/|\?|$)/.test(location.hash)) {
+        // The installed shell can show offline help without caching or inventing live config.
+        STATE.cfg = {};
+      } else {
+        const view = $('view');
+        if (view) view.appendChild(notice('Could not load configuration. Serve this directory over HTTP rather than opening the file directly.', 'error'));
+        return;
+      }
     }
 
     const chain = $('foot-chain');
-    if (chain) chain.textContent = 'Robinhood Chain · ' + STATE.cfg.chainId;
+    if (chain && Number(STATE.cfg.chainId) === 4663) chain.textContent = 'Robinhood Chain · ' + STATE.cfg.chainId;
     const toggle = $('nav-toggle'), nav = $('nav');
     if (toggle && nav) toggle.addEventListener('click', () => {
       const open = nav.classList.toggle('open');
@@ -325,10 +365,15 @@
     if (window.ethereum) {
       try {
         const accs = await window.ethereum.request({ method: 'eth_accounts' });
-        if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); if (STATE.route === 'data') renderRoute(); }
+        if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); }
       } catch { /* an unavailable wallet is not an error here */ }
       if (typeof window.ethereum.on === 'function') {
-        window.ethereum.on('accountsChanged', (accs) => { STATE.account = accs && accs[0]; paintWallet(); if (STATE.route === 'data') renderRoute(); });
+        window.ethereum.on('accountsChanged', (accs) => {
+          window.WhateverData?.resetWallet?.();
+          STATE.account = accs && accs[0] || null;
+          paintWallet();
+          if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+        });
         window.ethereum.on('chainChanged', () => location.reload());
       }
     }

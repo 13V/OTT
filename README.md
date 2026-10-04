@@ -167,6 +167,33 @@ stale.
 
 ## Running it
 
+The holder web app opens at `#/app`, with Home, Plans, eSIMs and Help screens. The website's
+**Open app** link enters it; **Add to phone** offers browser installation or platform instructions.
+The manifest starts the installed app at that route and uses relative paths for GitHub Pages.
+The clay artwork and the same self-hosted fonts carry through from the website.
+
+Before launch, **Try the app preview** uses an example $20 allocation with $5 already spent.
+Adding a package changes only this page's sample account. It never issues an eSIM, requests a
+signature, writes to the provider or stores a balance. Refreshing clears the example. Setup guides
+describe the phone's installation process; preview mode never produces usable activation codes.
+
+The service worker stores only an explicit list of public shell files, fonts, icons and artwork.
+Configuration, current ledgers, APIs, wallet signatures, eSIM credentials and orders are never
+cached. Previously viewed interface/help files can open offline; credit and redemption require a
+live connection. Signed orders are never queued for later delivery.
+
+The first app version uses an injected wallet, including a mobile wallet's browser. Direct wallet
+connection from Safari, Chrome or an installed PWA still needs a mobile connector. Real credit,
+redemption and installation details reuse the existing My data module when the programme is
+configured. Remaining-GB telemetry is not implemented, so package sizes are not presented as live
+usage readings. App installation and real eSIM installation still require physical-device testing.
+
+GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committing changes, run
+`npm run deploy:pages` to publish the committed `site/` tree on `gh-pages`. It excludes `api/`,
+Vercel configuration and untracked files, adds `.nojekyll`, and does not change the current checkout.
+Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
+using a separate API host also requires explicit origin and signed-host integration.
+
 ```
 node scripts/lint.js                                # every script parses, every config is JSON
 npm test                                             # the ledger, the redeem function, both providers,

@@ -6,12 +6,19 @@
 <title>OT+T — a memecoin with a data plan</title>
 <meta name="description" content="OT+T plans to turn creator tax into a variable weekly mobile-data budget for eligible OTT holders. Explore the eSIM catalogue and see how the programme works before launch.">
 <meta name="theme-color" content="#F4F0E7">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="OTT">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="icon" href="data:,">
 <link href="fonts.css" rel="stylesheet">
 <link rel="stylesheet" href="./style.css">
 <link rel="stylesheet" href="./ui.css">
 <link rel="stylesheet" href="./home.css">
 <link rel="stylesheet" href="./account-preview.css">
+<link rel="stylesheet" href="./mobile-app.css">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./assets/app/icon-180.png">
 </head>
 <body>
 <a class="skip-link" href="#view">Skip to content</a>
@@ -26,6 +33,7 @@
       <a href="#plans">Destinations</a>
       <a data-route="data" href="#/data">My data</a>
       <a data-route="status" href="#/status">Status</a>
+      <a data-route="app" href="#/app">Open app</a>
     </nav>
     <div class="mh-right">
       <!-- app.js fills this. There is no search slot here — that box only ever filtered the
@@ -53,6 +61,7 @@
         <p class="foot-col-title">Programme</p>
         <a href="#/">The idea</a>
         <a href="#/data">My data</a>
+        <a href="#/app">Open app</a>
         <a href="#/status">Status</a>
         <a href="#/holders">Holders</a>
         <a href="#/about">How it works</a>
@@ -93,6 +102,8 @@
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
 <script src="./status.js"></script>
 <script src="./holders.js"></script>
+<script src="./mobile-app.js"></script>
+<script src="./pwa.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

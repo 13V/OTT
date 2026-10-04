@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">OT+T SIM icon</title>
+  <rect width="512" height="512" fill="#172F31"/>
+  <path d="M154 102H300L362 164V370Q362 394 338 394H154Q130 394 130 370V126Q130 102 154 102Z" fill="#E6632C"/>
+  <path d="M300 102V145Q300 164 319 164H362" fill="#BC421C"/>
+  <g fill="none" stroke="#F4F0E7" stroke-width="14" stroke-linecap="square" stroke-linejoin="round">
+    <ellipse cx="176" cy="247" rx="19" ry="26"/>
+    <path d="M210 221H245M227.5 221V273M263 232V261M249 246.5H277M289 221H326M307.5 221V273"/>
+  </g>
+  <g fill="#172F31" opacity=".35">
+    <rect x="186" y="317" width="29" height="22" rx="5"/>
+    <rect x="231" y="317" width="29" height="22" rx="5"/>
+    <rect x="276" y="317" width="29" height="22" rx="5"/>
+  </g>
+</svg>

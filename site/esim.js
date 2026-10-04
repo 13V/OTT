@@ -174,12 +174,15 @@
   // price for the one call that spends money.
   const SIGNIN_REUSE_MS = 8 * 60 * 1000;
   let lastRead = null; // { addr, message, signature, at }
+  let walletGeneration = 0;
   const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
   async function signIn(addr, want) {
     const w = want || { action: 'read' };
     if (w.action === 'read' && readIsFresh(addr)) return { message: lastRead.message, signature: lastRead.signature };
+    const generation = walletGeneration;
     const message = signInMessage(addr, w);
     const signature = await window.ethereum.request({ method: 'personal_sign', params: [hexOfUtf8(message), addr] });
+    if (generation !== walletGeneration) throw new Error('Your wallet changed while confirming. Reconnect and try again.');
     if (w.action === 'read') lastRead = { addr, message, signature, at: Date.now() };
     return { message, signature };
   }
@@ -684,7 +687,7 @@
   // than frozen at whatever it read when the wallet connected.
   function liveCountdownTile(ctx, weekEndSec) {
     stopCountdown();
-    const tile = ctx.tile('Resets in', fmtCountdown(weekEndSec), 'Unused data does not carry over to next week.', 'clock');
+    const tile = ctx.tile('Resets in', fmtCountdown(weekEndSec), 'Unused weekly credit does not carry over to next week.', 'clock');
     const valueEl = tile.querySelector('.st-value, .u-tile-value');
     if (valueEl && Number.isFinite(Number(weekEndSec))) {
       countdownTimer = setInterval(() => {
@@ -1094,12 +1097,13 @@
   // getter app.js provides, and remembered when this page's own button connected it.
   let lastAccount = null;
   function currentAccount(ctx) {
-    const live = typeof ctx.currentAccount === 'function' ? ctx.currentAccount() : null;
-    return live || lastAccount || ctx.account || null;
+    if (typeof ctx.currentAccount === 'function') return ctx.currentAccount() || null;
+    return lastAccount || ctx.account || null;
   }
 
   window.WhateverData = {
     render, renderMyData, SEL, signInMessage, hexOfUtf8,
+    resetWallet: () => { walletGeneration++; lastAccount = null; lastRead = null; },
     selectPackage: (code) => { selectedPackageCode = String(code || ''); },
     // Shared with site/status.js, the same way SEL already is, so the two files cannot silently
     // disagree about how a token amount, a share or a week is read.

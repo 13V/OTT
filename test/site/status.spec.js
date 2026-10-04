@@ -375,7 +375,7 @@ test('the nav includes the holder dashboard and highlights status', async ({ pag
   await stubConfig(page, NOT_LAUNCHED);
   await page.goto('/index.html#/status');
   const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
-  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status']);
+  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status', 'Open app']);
   await expect(page.locator('#nav a[data-route="status"]')).toHaveClass(/active/);
   expect(errors).toEqual([]);
 });

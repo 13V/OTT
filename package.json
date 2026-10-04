@@ -11,6 +11,7 @@
   "lint": "node scripts/lint.js",
   "catalogue": "node scripts/catalogue.js",
   "serve": "node test/site/support/server.js",
+  "deploy:pages": "node scripts/publish-pages.js",
   "allowances": "node scripts/allowances.js",
   "test:allowances": "node test/allowances.test.js",
   "test:week": "node test/week.test.js",
