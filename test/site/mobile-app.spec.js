@@ -15,7 +15,8 @@ test('sample journey selects a plan without a wallet signature or a real order',
   await page.getByRole('button', { name: 'Try the app preview', exact: true }).click();
   await expect(page.locator('.om-balance')).toHaveText('$15.00');
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click();
-  await expect(page.locator('#om-place')).toHaveValue('united-states');
+  await expect(page.getByRole('button', { name: 'Choose coverage. United States', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Package size' }).getByRole('button', { name: /^5 GB/ })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('Preview only.');
@@ -33,17 +34,42 @@ test('sample journey selects a plan without a wallet signature or a real order',
   expect(writes).toEqual([]);
 });
 
-test('coverage search handles no match and package review stays prelaunch', async ({ page }) => {
+test('coverage picker supports keyboard selection, no matches and prelaunch package review', async ({ page }) => {
   stubNetwork(page);
   await page.goto('/#/app/plans');
-  await page.getByLabel('Find a place', { exact: true }).fill('Atlantis');
-  await expect(page.locator('.om-search-result')).toContainText('No matching country or region');
-  await expect(page.getByLabel('Choose coverage', { exact: true })).toBeDisabled();
-  await expect(page.locator('.om-package')).toHaveCount(0);
-  await page.getByLabel('Find a place', { exact: true }).fill('Japan');
-  await expect(page.getByLabel('Choose coverage', { exact: true })).toHaveValue('japan');
-  await expect(page.locator('.om-package')).toHaveCount(3);
+  const coverage = page.getByRole('button', { name: /^Choose coverage\./ });
+  await coverage.click();
+  const picker = page.getByRole('dialog');
+  const search = picker.getByLabel('Search a country or region', { exact: true });
+  await expect(search).toBeFocused();
+  await search.fill('Atlantis');
+  await expect(picker.getByRole('status')).toContainText('No matching country or region');
+  await expect(picker.locator('.om-coverage-option')).toHaveCount(0);
+  // An empty search lets Escape dismiss the dialog rather than clearing the native search field.
+  await search.fill('');
+  await page.keyboard.press('Escape');
+  await expect(picker).toHaveCount(0);
+  await expect(coverage).toBeFocused();
+  await expect(coverage).toHaveAccessibleName('Choose coverage. United States');
+  await coverage.click();
+  await search.fill('Japan');
+  await expect(picker.locator('.om-coverage-option')).toHaveCount(1);
+  await page.keyboard.press('Tab');
+  await expect(picker.getByRole('button', { name: 'Japan', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(picker).toHaveCount(0);
+  await expect(coverage).toHaveAccessibleName('Choose coverage. Japan');
+  await expect(coverage).toBeFocused();
+  const sizes = page.getByRole('group', { name: 'Package size' });
+  await expect(sizes.getByRole('button')).toHaveCount(3);
+  await sizes.getByRole('button', { name: /^10 GB/ }).click();
+  await expect(sizes.getByRole('button', { name: /^10 GB/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(sizes.getByRole('button', { name: /^5 GB/ })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('heading', { name: '10 GB', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review package', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('10 GB');
+  await expect(page.getByRole('dialog')).toContainText('Japan');
   await expect(page.getByRole('dialog')).toContainText('Weekly credit and redemption are not available yet.');
   await expect(page.getByRole('button', { name: 'Add to preview', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Continue in My data', exact: true })).toHaveCount(0);
@@ -56,9 +82,17 @@ test('setup guide explains the OS handoff and supports iPhone and Android', asyn
   stubNetwork(page);
   await page.goto('/#/app/help');
   await expect(page.getByRole('heading', { name: 'Set up your eSIM', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+  await expect(page.locator('.om-setup-guide')).toContainText('Get connected first');
+  await page.getByRole('button', { name: 'Next step', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Step 2: Open your eSIM in OTT', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Next step', exact: true }).click();
   await expect(page.locator('.om-setup-guide')).toContainText('iOS 17.4');
   await expect(page.locator('.om-content')).toContainText('Your phone confirms and completes setup.');
   await page.getByRole('button', { name: 'Android', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Step 1: Get connected first', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Step 3: Add the eSIM in Settings', exact: true }).click();
   await expect(page.locator('.om-setup-guide')).toContainText('Network & internet');
   await expect(page.locator('.om-setup-guide a')).toHaveAttribute('href', 'https://support.google.com/pixelphone/answer/16115470?hl=en');
   await expect(page.locator('.om-content a[href^="https://esimsetup"]')).toHaveCount(0);
@@ -176,4 +210,29 @@ test('app screens fit phones and desktop with reachable bottom navigation', asyn
       await expect(page.locator('#site-footer')).toBeHidden();
     }
   }
+});
+
+test('Home and Plans put their primary action within the first phone screen', async ({ page }) => {
+  stubNetwork(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#/app');
+  await expect(page.locator('.om-status-pill')).not.toHaveText('Loading');
+  await page.evaluate(() => document.fonts.ready);
+  const actionIsOnScreen = async control => {
+    const box = await control.boundingBox();
+    const nav = await page.getByRole('navigation', { name: 'App navigation' }).boundingBox();
+    expect(box).not.toBeNull();
+    expect(nav).not.toBeNull();
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(nav.y);
+  };
+  const previewAction = page.getByRole('button', { name: 'Try the app preview', exact: true });
+  await actionIsOnScreen(previewAction);
+  await previewAction.click();
+  await expect(page.locator('.om-balance')).toHaveText('$15.00');
+  const homeAction = page.getByRole('button', { name: 'Find a data plan', exact: true });
+  await actionIsOnScreen(homeAction);
+  await homeAction.click();
+  await expect(page.locator('.om-status-pill')).not.toHaveText('Loading');
+  await actionIsOnScreen(page.getByRole('button', { name: 'Review package', exact: true }));
 });

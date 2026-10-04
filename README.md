@@ -170,7 +170,10 @@ stale.
 The holder web app opens at `#/app`, with Home, Plans, eSIMs and Help screens. The website's
 **Open app** link enters it; **Add to phone** offers browser installation or platform instructions.
 The manifest starts the installed app at that route and uses relative paths for GitHub Pages.
-The clay artwork and the same self-hosted fonts carry through from the website.
+The same holder appears in a clay park, a Japanese street and a connection kit. Cream SIM-shaped
+passes keep credit and package actions together, with compact coverage search and a step-by-step
+phone setup guide. The self-hosted fonts carry through from the website. Artwork files and their
+generation briefs are recorded in [docs/app-artwork.md](docs/app-artwork.md).
 
 Before launch, **Try the app preview** uses an example $20 allocation with $5 already spent.
 Adding a package changes only this page's sample account. It never issues an eSIM, requests a
