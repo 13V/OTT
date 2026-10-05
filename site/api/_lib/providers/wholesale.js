@@ -247,7 +247,7 @@ async function withPayLease(store, transactionId, fn) {
     if (!check || check.attempt !== mine.attempt) { await sleep(CLAIM_POLL_MS); continue; }   // lost the steal race
     break;
   }
-  try { return await fn(); } finally { await store.del(key); }
+  try { return await fn(mine); } finally { await store.del(key); }
 }
 
 /**
@@ -395,7 +395,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
     // caller at a time or two callers can each see it unpaid and each pay it. A store-backed
     // lease, claimed with SET NX and released in a finally, in keeping with how order() already
     // claims a fresh id the same way.
-    const outcome = await withPayLease(store, rec.transactionId, async () => {
+    const outcome = await withPayLease(store, rec.transactionId, async (paymentLease) => {
       if (s.status === 'SUCCESS') {
         // Onto the order as it stands now: another caller may already have carried it past
         // 'invoiced' — paid it, or even finished it — while we were asking the wallet.
@@ -409,7 +409,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
       if (!current) return { applied: false, record: null, justPaid: false };
       if (current.paymentHash !== rec.paymentHash || current.step !== 'invoiced') return { applied: false, record: current, justPaid: false };
       let r;
-      try { r = await payer.pay({ paymentRequest: current.paymentRequest, memo: 'OT+T ' + current.transactionId }); } catch (e) {
+      try { r = await payer.pay({ paymentRequest: current.paymentRequest, memo: 'OT+T ' + current.transactionId, paymentLease }); } catch (e) {
         await saveIfStep(store, rec.transactionId, 'invoiced', (cur) => ({ attempts: (cur.attempts || 0) + 1, error: 'wallet did not answer: ' + e.message }));
         throw fail('the Lightning wallet did not answer; try again in a minute', 503);
       }

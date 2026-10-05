@@ -144,6 +144,12 @@ environment managers; they are not public frontend settings. No Blink credential
 
 The allocation script currently divides last week's collected tax in proportion to eligible token holdings. The proposed entry allowance and 40 GB weekly cap are not implemented. Do not publish those as guaranteed benefits until the funding and allocation policy has been validated.
 
+The preferred operator funding currency is now USDC on Solana. Direct automated settlement with
+the supplier remains unverified; its documented purchase API lists Lightning and Stripe. The
+deployed payer and existing USDG-to-USDC-on-Base funding script have not been switched. See the
+[private operator phone-test guide](operator-phone-test.md) for the verified payment options and
+the isolated test tooling. No payment or real phone installation has been performed.
+
 ## Connect the frontend
 
 After the host has issued its real HTTPS API origin, put that origin in the public `apiBaseUrl` field of `site/config/app.json`. Use only the origin, without `/api`, a query, credentials or a fragment. The app resolves the two API paths against it and refuses redirects for account requests.
