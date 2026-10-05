@@ -264,7 +264,7 @@
   }
 
   /**
-   * Seven rows, always in this order: the coin, provider, Lightning wallet and store come from
+   * Eight rows, always in this order: the coin, provider, Lightning wallet, store and redemption come from
    * ./api/status; the indexer, claim keeper and funding keeper come from the data files the
    * keepers themselves write, so they still say something true when the health endpoint cannot be
    * reached at all — a static host with no functions deployed still has an indexer, a claim log
@@ -286,6 +286,20 @@
       rows.appendChild(checkRow(ctx, 'Provider', api.wiring && api.wiring.provider, api.checks && api.checks.provider, true));
       rows.appendChild(checkRow(ctx, 'Lightning wallet', api.wiring && api.wiring.payer, api.checks && api.checks.payer, false));
       rows.appendChild(checkRow(ctx, 'Store', api.wiring && api.wiring.store, api.checks && api.checks.store, true));
+      const redemption = api.redemption;
+      if (!launched) {
+        rows.appendChild(statusRow(ctx, redemption && redemption.enabled === true ? 'warn' : 'off', 'Data redemption',
+          redemption && redemption.enabled === true ? 'Prelaunch. Purchases are enabled, but token launch is still pending.'
+            : redemption && redemption.enabled === false ? 'Prelaunch. Data redemption is disabled.' : 'Prelaunch. Data redemption is unavailable.'));
+      } else if (redemption && redemption.enabled === false) {
+        rows.appendChild(statusRow(ctx, 'off', 'Data redemption', 'Purchases are paused. Account and installation reads remain available.'));
+      } else if (redemption && redemption.enabled === true && redemption.ready === true) {
+        rows.appendChild(statusRow(ctx, 'ok', 'Data redemption', 'Purchases are enabled. Funding and service checks passed.'));
+      } else if (redemption && redemption.enabled === true && redemption.ready === false) {
+        rows.appendChild(statusRow(ctx, 'warn', 'Data redemption', 'Purchases are enabled, but the service is not ready. Check funding and dependencies.'));
+      } else {
+        rows.appendChild(statusRow(ctx, 'warn', 'Data redemption', 'Redemption readiness is unavailable. Purchases have not been verified.'));
+      }
     }
     const launchedLocally = !!(d.cfg && isAddress(d.cfg.treasury));
     rows.appendChild(preview && !d.allowErr
