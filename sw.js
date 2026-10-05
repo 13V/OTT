@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v3';
+const CACHE_NAME = CACHE_PREFIX + 'v4';
 const SHELL = [
   'index.html', 'fonts.css', 'style.css', 'ui.css', 'home.css', 'account-preview.css',
-  'mobile-app.css', 'ui.js', 'qr.js', 'esim.js', 'clay-type.js', 'account-preview.js',
-  'home.js', 'status.js', 'holders.js', 'mobile-app.js', 'app.js', 'pwa.js',
+  'mobile-app.css?v=d3f80e6', 'ui.js', 'qr.js', 'esim.js?v=d3f80e6', 'clay-type.js', 'account-preview.js',
+  'home.js', 'status.js', 'holders.js', 'mobile-app.js?v=d3f80e6', 'app.js', 'pwa.js',
   'client-config.js', 'wallet.js',
   'manifest.webmanifest',
 ];
@@ -54,7 +54,7 @@ self.addEventListener('activate', (event) => {
 async function networkFirst(request, fallbackUrl) {
   const cache = await caches.open(CACHE_NAME);
   try {
-    const response = await fetch(request);
+    const response = await fetch(request, { cache: 'no-cache' });
     if (response.status === 200) {
       try { await cache.put(fallbackUrl, response.clone()); } catch (_) { /* Full storage must not hide a network response. */ }
     }
@@ -82,8 +82,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   // Navigation requests can include the hash route, although the shell file is the same.
   url.hash = '';
-  // Do not intercept signed requests, URL queries, other apps on this host or external services.
-  if (request.method !== 'GET' || url.origin !== ROOT.origin || url.search) return;
+  // Only the exact public release URLs above may have a query. Account requests,
+  // arbitrary queries, other apps and external services always bypass this cache.
+  if (request.method !== 'GET' || url.origin !== ROOT.origin || (url.search && !shellUrls.has(url.href))) return;
   if (url.href === ROOT.href || url.href === indexUrl) {
     event.respondWith(networkFirst(request, indexUrl));
   } else if (shellUrls.has(url.href)) {
