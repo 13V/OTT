@@ -3,10 +3,12 @@
   "cleanUrls": true,
   "functions": {
     "api/redeem.js": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "config/esim.json"
     },
     "api/status.js": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "config/esim.json"
     }
   },
   "headers": [

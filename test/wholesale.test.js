@@ -17,7 +17,7 @@
  */
 const path = require('path');
 
-const LIB = path.join(__dirname, '..', 'site', 'api', 'lib');
+const LIB = path.join(__dirname, '..', 'site', 'api', '_lib');
 const mockPayer = require(path.join(LIB, 'payers', 'mock.js'));
 const S = require(path.join(LIB, 'store.js'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));

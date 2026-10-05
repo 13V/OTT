@@ -107,10 +107,10 @@ function loadConfig(p = ESIM_PATH) {
 // Monday 00:00 UTC, anchored to the first Monday after the Unix epoch so it needs no calendar
 // library and no timezone. This file and the redeem API must agree on the week to the second — a
 // wallet's allowance is written here and spent there — so there is exactly one definition, in
-// site/api/lib/week.js, and this script reaches across for it. The dependency only goes this way:
+// site/api/_lib/week.js, and this script reaches across for it. The dependency only goes this way:
 // the API is deployed on its own and can never reach into scripts/.
 // ---------------------------------------------------------------------------
-const { WEEK_S, ANCHOR, weekOf, weekStart, weekEnd } = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'week.js'));
+const { WEEK_S, ANCHOR, weekOf, weekStart, weekEnd } = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'week.js'));
 
 // ---------------------------------------------------------------------------
 // The pure part: logs in, ledger out.

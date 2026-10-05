@@ -34,7 +34,7 @@
  * path coverage as possible.
  *
  * The eSIM side is not a stub: test/support/fake-wholesale.js (the same fake test/wholesale.test.js
- * and test/redeem-wholesale.test.js drive), site/api/lib/payers/mock.js (LN_PAYER=mock) and the
+ * and test/redeem-wholesale.test.js drive), site/api/_lib/payers/mock.js (LN_PAYER=mock) and the
  * real in-memory store (STORE=memory) stand in for provider.example, Blink and Upstash respectively —
  * everything upstream of those three sockets is the real code, unmodified, run through
  * require(), exactly as it runs in production.
@@ -57,10 +57,10 @@ const A = require(path.join(ROOT, 'scripts', 'allowances.js'));
 const T = require(path.join(ROOT, 'scripts', 'treasury.js'));
 const chainLib = require(path.join(ROOT, 'scripts', 'chain.js'));
 
-const secp = require(path.join(API, 'lib', 'secp256k1.js'));
-const eip191 = require(path.join(API, 'lib', 'eip191.js'));
-const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
-const providers = require(path.join(API, 'lib', 'providers'));
+const secp = require(path.join(API, '_lib', 'secp256k1.js'));
+const eip191 = require(path.join(API, '_lib', 'eip191.js'));
+const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
+const providers = require(path.join(API, '_lib', 'providers'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 // ---------------------------------------------------------------------------------------------
@@ -79,7 +79,7 @@ const usd = (n) => '$' + Number(n).toFixed(2);
 
 // ---------------------------------------------------------------------------------------------
 // A real wall clock, replaced with one this file drives by hand. `Date.now` alone is not enough:
-// site/api/redeem.js and site/api/lib/providers/wholesale.js both call `new Date()` (for `week`,
+// site/api/redeem.js and site/api/_lib/providers/wholesale.js both call `new Date()` (for `week`,
 // for a sign-in message's freshness, for an order's `createdAt`), and V8 does not route `new
 // Date()` through `Date.now()` — so both have to be replaced together, or "the week rolls" would
 // move scripts/allowances.js's clock and leave redeem.js reading the real one. The class extends
@@ -402,8 +402,8 @@ async function main() {
   console.log('the loop, start to finish — claim, fund, allowances, redeem, and back around a week later');
   console.log('what is simulated and what is real, so the numbers below are read honestly:');
   console.log('  REAL:      scripts/claim.js, scripts/fund.js, scripts/allowances.js, scripts/treasury.js,');
-  console.log('             site/api/redeem.js, site/api/lib/providers/wholesale.js, site/api/lib/store.js');
-  console.log('             (STORE=memory), lib/bolt11.js, lib/eip191.js, lib/secp256k1.js, lib/keccak.js,');
+  console.log('             site/api/redeem.js, site/api/_lib/providers/wholesale.js, site/api/_lib/store.js');
+  console.log('             (STORE=memory), _lib/bolt11.js, _lib/eip191.js, _lib/secp256k1.js, _lib/keccak.js,');
   console.log('             and scripts/chain.js\'s ABI encoder — all unmodified, run through require().');
   console.log('  SIMULATED: the Robinhood Chain RPC (one in-process fake, below), the Pons escrow and the');
   console.log('             coin/USDG contracts on it, the FixedFloat and Across APIs (localhost HTTP),');
@@ -534,7 +534,7 @@ async function main() {
     // -------------------------------------------------------------------------------------
     // What the pool actually paid wholesale is read from the wallet's own ledger, not
     // recomputed by hand: wholesale charges 95% of the catalogue price in sats (see
-    // site/api/lib/providers/wholesale.js's header comment), and hand-predicting the sat
+    // site/api/_lib/providers/wholesale.js's header comment), and hand-predicting the sat
     // rounding would just be re-deriving the same arithmetic the real code already did. The
     // wallet's own before/after balance is the ground truth.
     const paidSats = mockPayer._state.log.reduce((s, l) => s + l.sats, 0);

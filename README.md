@@ -115,7 +115,7 @@ read on 16 September 2026. If the six weeks is the real rule, a holder who claim
 does not travel loses the oldest bundles, and the weekly allowance should be given a way to be
 banked rather than claimed. Ask them before relying on either answer.
 
-That last fact is what `site/api/lib/store.js` exists to fix: one record per redemption id, kept in
+That last fact is what `site/api/_lib/store.js` exists to fix: one record per redemption id, kept in
 Upstash Redis over REST (`KV_REST_API_URL` / `KV_REST_API_TOKEN`; in memory only for tests), moved
 through invoiced → paid → done and resumable at every step, so a crash mid-payment picks up where it
 left off instead of paying twice. Three things follow from that design, and `test/wholesale.test.js`
@@ -124,7 +124,7 @@ means to fill, so a retried or replayed request gets back the order it already m
 second one; an unpaid invoice is not a redemption — `find()` answers null for it, so an outage never
 consumes a wallet's credit; and activation codes are only ever attached to a signed request from the
 wallet that earned them — the public `GET` shows balances and order history, never a code, because
-whoever installs a code first has the data. Before any invoice is paid, `site/api/lib/bolt11.js`
+whoever installs a code first has the data. Before any invoice is paid, `site/api/_lib/bolt11.js`
 decodes it and refuses to pay unless it carries the payment hash wholesale quoted and an amount
 matching the quoted price at Blink's own BTC rate, and refuses a quote priced above the catalogue as
 stale.
@@ -145,11 +145,11 @@ stale.
 | `site/vercel.json` | Function timeouts, cache headers, and the security headers every response carries |
 | `site/api/status.js` | The health endpoint the dashboard reads: what's wired up, checked live, never a secret |
 | `site/api/redeem.js` | The one serverless function that spends money: wallet signature in, eSIM out |
-| `site/api/lib/providers/` | `wholesale.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
-| `site/api/lib/payers/` | `blink.js` pays and prices in Lightning through Blink's API; `mock.js`, for tests |
-| `site/api/lib/store.js` | The wholesale provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
-| `site/api/lib/bolt11.js` | Decodes a Lightning invoice far enough to check its amount and payment hash before it's paid |
-| `site/api/lib/eip191.js`, `site/api/lib/secp256k1.js`, `site/api/lib/keccak.js` | Verify the wallet signature a redeem signs in with |
+| `site/api/_lib/providers/` | `wholesale.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
+| `site/api/_lib/payers/` | `blink.js` pays and prices in Lightning through Blink's API; `mock.js`, for tests |
+| `site/api/_lib/store.js` | The wholesale provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
+| `site/api/_lib/bolt11.js` | Decodes a Lightning invoice far enough to check its amount and payment hash before it's paid |
+| `site/api/_lib/eip191.js`, `site/api/_lib/secp256k1.js`, `site/api/_lib/keccak.js` | Verify the wallet signature a redeem signs in with |
 | `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from wholesale |
 | `site/config/addresses.json` | Chain id, RPC endpoints, USDG, the Pons factory and its friends — the copy the site and the API read |
 | `site/data/allowances.json` | The week's plan: each wallet's balance, share and allowance — written by `scripts/allowances.js` |

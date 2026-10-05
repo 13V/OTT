@@ -325,7 +325,7 @@ if (require.main === module) {
   const key = process.env.PRIVATE_KEY || '';
   if (!key) { console.error('PRIVATE_KEY is required — the treasury\'s key, in the environment, never in a file'); process.exit(1); }
   process.env.LN_PAYER = process.env.LN_PAYER || 'blink';
-  const payer = require(path.join(SITE, 'api', 'lib', 'payers')).payer();
+  const payer = require(path.join(SITE, 'api', '_lib', 'payers')).payer();
   run({
     chain,
     config: readJson(ESIM_PATH, {}),

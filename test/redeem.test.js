@@ -5,7 +5,7 @@
  *
  * site/api/redeem.js is a Vercel function that talks to three things: the deployment's own
  * static files (config + allowances), a wallet's signature, and an eSIM provider. All three are
- * stood in for here — a node:http server for the files, lib/secp256k1 + lib/eip191 for the
+ * stood in for here — a node:http server for the files, _lib/secp256k1 + _lib/eip191 for the
  * wallet (the same code path a browser's personal_sign produces bytes for), and the mock
  * provider — so what is checked is the function's own logic: who may redeem, how much, that
  * asking twice never mints twice, and — the new part — that a wallet's allowance is this week's
@@ -13,7 +13,7 @@
  * with last week's, and a file that is not for the current week spends nothing at all.
  *
  * There is no injectable clock: a week is coarse enough (Monday to Monday) that computing it once
- * from Date.now(), the same way site/api/lib/week.js does, is stable for the life of a test run.
+ * from Date.now(), the same way site/api/_lib/week.js does, is stable for the life of a test run.
  * Every fixture below is built from that real, current week rather than a hard-coded number, so
  * this suite does not start failing the next time it is run in a different week.
  *
@@ -23,10 +23,10 @@ const http = require('node:http');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
-const secp = require(path.join(API, 'lib', 'secp256k1.js'));
-const eip191 = require(path.join(API, 'lib', 'eip191.js'));
-const mock = require(path.join(API, 'lib', 'providers', 'mock.js'));
-const week = require(path.join(API, 'lib', 'week.js'));
+const secp = require(path.join(API, '_lib', 'secp256k1.js'));
+const eip191 = require(path.join(API, '_lib', 'eip191.js'));
+const mock = require(path.join(API, '_lib', 'providers', 'mock.js'));
+const week = require(path.join(API, '_lib', 'week.js'));
 
 let failures = 0;
 function check(what, got, want) {

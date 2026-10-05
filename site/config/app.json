@@ -1,4 +1,6 @@
 {
-  "walletConnect": { "projectId": "" },
+  "walletConnect": {
+    "projectId": "e648b373535cce417fba44f5c92e7dac"
+  },
   "apiBaseUrl": ""
 }

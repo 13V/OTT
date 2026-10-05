@@ -9,7 +9,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createServer } = require('../scripts/serve-api');
 const redeem = require('../site/api/redeem');
-const { weekOf, weekEnd } = require('../site/api/lib/week');
+const { weekOf, weekEnd } = require('../site/api/_lib/week');
 
 let checks = 0;
 function check(name, actual, expected) {

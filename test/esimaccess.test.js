@@ -85,7 +85,7 @@ const server = http.createServer((req, res) => {
   process.env.ESIMACCESS_ACCESS_CODE = ACCESS;
   process.env.ESIMACCESS_SINCE = '2026-01-01T00:00+00:00';
   process.env.ESIMACCESS_ALLOCATE_WAIT_MS = '3000';
-  const prov = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'providers', 'esimaccess.js'));
+  const prov = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'providers', 'esimaccess.js'));
 
   console.log('the request shape');
   const b = await prov.balanceUsd();

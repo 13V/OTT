@@ -1,6 +1,6 @@
 'use strict';
 /**
- * fake-blink — a fake of api.blink.sv's GraphQL endpoint for driving the REAL site/api/lib/payers/
+ * fake-blink — a fake of api.blink.sv's GraphQL endpoint for driving the REAL site/api/_lib/payers/
  * blink.js against something, fake or real, for the first time.
  *
  * One POST /graphql, exactly like the real API: every request is told apart by which operation its

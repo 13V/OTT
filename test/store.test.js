@@ -11,7 +11,7 @@
  */
 const http = require('http');
 const path = require('path');
-const S = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'store.js'));
+const S = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'store.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {

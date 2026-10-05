@@ -10,3 +10,5 @@ playwright-report/
 .vercel/
 build/
 .env.local
+.vercel
+.env*

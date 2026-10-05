@@ -45,7 +45,7 @@ const http = require('http');
 const crypto = require('crypto');
 const path = require('path');
 
-const bolt11 = require(path.join(__dirname, '..', '..', 'site', 'api', 'lib', 'bolt11.js'));
+const bolt11 = require(path.join(__dirname, '..', '..', 'site', 'api', '_lib', 'bolt11.js'));
 
 /** The two bundles the live catalogue prices, at their 15 Sep 2026 wholesale prices. */
 const CATALOGUE = {
@@ -56,7 +56,7 @@ const CATALOGUE = {
 const round2 = (x) => Math.round(x * 100) / 100;
 
 /**
- * Start the fake on an ephemeral port. `mockPayer` is the same lib/payers/mock.js module a test
+ * Start the fake on an ephemeral port. `mockPayer` is the same _lib/payers/mock.js module a test
  * drives via `_state` and `_settle`; `catalogue` defaults to CATALOGUE above and can be overridden
  * to price different bundles without touching the fake's logic.
  */

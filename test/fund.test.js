@@ -19,7 +19,7 @@ const path = require('path');
 
 const F = require(path.join(__dirname, '..', 'scripts', 'fund.js'));
 const chainLib = require(path.join(__dirname, '..', 'scripts', 'chain.js'));
-const mockPayer = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'payers', 'mock.js'));
+const mockPayer = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'payers', 'mock.js'));
 
 const T0 = Date.now();
 let failures = 0, checks = 0;

@@ -6,7 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const redeem = require('../site/api/redeem');
 const status = require('../site/api/status');
-const { allowRequestOrigin } = require('../site/api/lib/request-origin');
+const { allowRequestOrigin } = require('../site/api/_lib/request-origin');
 
 const MAX_BODY_BYTES = 16 * 1024;
 const ROUTES = new Map([

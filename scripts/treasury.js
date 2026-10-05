@@ -29,7 +29,7 @@ const CLAIMS_PATH = path.join(SITE, 'data', 'claims.json');
 const ALLOWANCES_PATH = path.join(SITE, 'data', 'allowances.json');
 // The one place week arithmetic lives, so this file and the indexer can never disagree on when a
 // week started — which is the boundary "what has been spent this week" is measured from.
-const { weekStart } = require(path.join(SITE, 'api', 'lib', 'week.js'));
+const { weekStart } = require(path.join(SITE, 'api', '_lib', 'week.js'));
 const OUT_PATH = path.join(SITE, 'data', 'treasury.json');
 
 const DAYS = 30;
@@ -225,7 +225,7 @@ if (require.main === module) {
   const name = process.env.ESIM_PROVIDER || (process.env.ESIMACCESS_ACCESS_CODE ? 'esimaccess' : '');
   if (name && name !== 'mock') {
     process.env.ESIM_PROVIDER = name;
-    provider = require(path.join(SITE, 'api', 'lib', 'providers')).provider();
+    provider = require(path.join(SITE, 'api', '_lib', 'providers')).provider();
   }
   run({
     rpc: A.makeRpc(endpoints, { log: (m) => process.stderr.write(m + '\n') }),

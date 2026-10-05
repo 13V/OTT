@@ -9,7 +9,7 @@
  *   node test/bolt11.test.js
  */
 const path = require('path');
-const bolt11 = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'bolt11.js'));
+const bolt11 = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'bolt11.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {

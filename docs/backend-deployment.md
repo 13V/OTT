@@ -16,7 +16,40 @@ The default listener is `127.0.0.1:3000`. `HOST` and `PORT` change it. The check
 
 For local integration, mock providers and memory storage are allowed only outside production. They are fixtures and must not be presented as a live account. The public app keeps sample accounts explicitly labelled.
 
-## Free Render prelaunch setup
+## Vercel prelaunch setup
+
+Vercel can host the existing static site and its two Node functions. Import `13V/OTT` with Root
+Directory **`site`**, Framework Preset **Other**, no build or install command, and Node **22.x**.
+Keep the output directory at its default. `site/vercel.json` sets function durations and includes
+the public eSIM catalogue in both function bundles. Utility modules live in `api/_lib`, so Vercel
+does not generate a separate function for each helper.
+
+If the account has no GitHub login connection, a deployment can instead upload only the committed
+`site/` files through Vercel's deployment API. That does not configure automatic Git deployments.
+Never upload the entire local workspace: it may contain private or untracked files.
+
+Apply the hosted configuration below to **both Production and Preview**, including
+`NODE_ENV=production` and `REDEMPTIONS_ENABLED=0`. Do not use the portable server's `HOST`, `PORT`
+or start command for these serverless functions. Use the verified provider base
+`https://nadanada.me/api/v2`, `LN_PAYER=blink`, and `STORE_PREFIX=ott:prelaunch:`. Keep the current
+main-branch `ALLOWANCES_URL` and `TREASURY_URL` from the weekly-data section.
+
+Create **Upstash for Redis** through Vercel Marketplace and connect it to this project. For
+prelaunch, select the **Free** plan, disable automatic plan upgrades, and disable eviction so
+order records cannot silently disappear at a storage limit. Vercel may require the account owner
+to accept the Marketplace and Upstash terms before provisioning. The adapter accepts the
+integration's `KV_REST_API_URL` / `KV_REST_API_TOKEN` or
+`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` variables. Keep credentials server-side
+and redeploy after connecting storage. The [Upstash integration documentation](https://upstash.com/docs/redis/howto/vercelintegration)
+describes this managed account flow. An unfunded Blink wallet remains a separate later step.
+
+For the current GitHub Pages frontend, preserve `FRONTEND_ORIGINS=https://13v.github.io` and
+`SIGNIN_HOST=13v.github.io`. Record Vercel's actual public production origin, configure it as the
+app's `apiBaseUrl`, republish Pages, and run `npm run check:prelaunch -- --remote`. A protected
+preview deployment is not a usable public API origin. If moving the canonical frontend to a
+Vercel domain later, update the exact origin, signed hostname and Reown allowlist together.
+
+## Alternative Render prelaunch setup
 
 The root `render.yaml` defines one free Node web service named `ott-api-prelaunch`. It creates no database or wallet and includes no private credentials. It pins Node 22, installs the lockfile without development packages or install scripts, starts the portable API and uses `/api/status` as its health check. The 75-second shutdown allowance covers the server's 70-second graceful shutdown window. Render supplies `PORT`.
 
@@ -34,8 +67,8 @@ Before live use, add `BLINK_API_KEY`, `KV_REST_API_URL` and `KV_REST_API_TOKEN` 
 
 A Lightning balance is not needed to deploy the API, verify the provider catalogue, connect persistent storage, configure mobile wallet pairing or publish the app. These steps can be completed while the token addresses remain empty and redemption is disabled:
 
-1. Sign in to Render and apply the free prelaunch Blueprint above. Keep `REDEMPTIONS_ENABLED=0`. Record the HTTPS origin Render actually assigns.
-2. Create a persistent Redis database in the [Upstash Console](https://console.upstash.com/). Review its plan before creation. Copy its HTTPS REST URL and standard read/write REST token into Render's `KV_REST_API_URL` and `KV_REST_API_TOKEN` environment settings. The [REST documentation](https://upstash.com/docs/redis/features/restapi) explains these credentials. A read-only token cannot record orders or pass the storage probe. A temporary database that expires after 72 hours is suitable only for a separate integration test, never the order ledger.
+1. Deploy the Vercel project or alternative Render Blueprint above. Keep `REDEMPTIONS_ENABLED=0`. Record the HTTPS production origin the host actually assigns.
+2. Create persistent Redis through Vercel Marketplace or the [Upstash Console](https://console.upstash.com/). Review its plan before creation. Connect its HTTPS REST URL and standard read/write REST token to the backend. The [REST documentation](https://upstash.com/docs/redis/features/restapi) explains these credentials. A read-only token cannot record orders or pass the storage probe. A temporary database that expires after 72 hours is suitable only for a separate integration test, never the order ledger.
 3. Create a dedicated OTT project in [Reown](https://dashboard.reown.com/), and allow the frontend origin `https://13v.github.io`. Copy the public project ID. [Reown's origin allowlist documentation](https://docs.reown.com/cloud/relay) says changes can take 15 minutes to apply. Project IDs are client identifiers; provider and storage credentials never belong in the client configuration.
 4. Run `npm run configure:app -- --project-id YOUR_PUBLIC_PROJECT_ID --api-origin https://YOUR_ACTUAL_API_HOST`. Commit these public settings and republish Pages. No backend or Reown value is invented by this command.
 5. Run `npm run check:prelaunch -- --remote`. It checks the current frontend settings, matching prelaunch backend, paused redemption, actual provider catalogue access, durable storage and the Pages CORS preflight. It performs only a status GET and an OPTIONS request against the API. The backend's status probe also tests one disposable storage key. The wallet can still be absent or empty; no payment or eSIM order is created.

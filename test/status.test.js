@@ -5,7 +5,7 @@
  *
  * A node:http server stands in for the deployment's own config and allowances files, exactly as
  * test/redeem.test.js's does; a second tiny server stands in for wholesale's bundle listing; the
- * mock Lightning payer (site/api/lib/payers/mock.js) stands in for a wallet. What is asserted is
+ * mock Lightning payer (site/api/_lib/payers/mock.js) stands in for a wallet. What is asserted is
  * the wire contract (GET only, JSON, never cached, no CORS), that a fully wired deployment reports
  * every check healthy with the numbers read from the real config, that one broken leg — a payer
  * that throws, a store that is not configured, an allowances file stamped for the wrong week —
@@ -19,8 +19,8 @@ const http = require('node:http');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
-const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
-const week = require(path.join(API, 'lib', 'week.js'));
+const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
+const week = require(path.join(API, '_lib', 'week.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -49,7 +49,7 @@ const LAUNCHED_CONFIG = {
 };
 const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
 
-// The current week, computed the same way status.js computes it (site/api/lib/week.js), so the
+// The current week, computed the same way status.js computes it (site/api/_lib/week.js), so the
 // allowances fixture below is unconditionally "this week" whenever this file happens to run.
 const CUR = week.weekOf(Math.floor(Date.now() / 1000));
 const STALE_WEEK = CUR - 1;
@@ -216,7 +216,7 @@ async function main() {
   }
 
   console.log('\nconcurrent health checks own separate throwaway store keys');
-  const probeStore = require(path.join(API, 'lib', 'store.js')).store();
+  const probeStore = require(path.join(API, '_lib', 'store.js')).store();
   const probeSet = probeStore.set, probeGet = probeStore.get, probeDel = probeStore.del;
   const probesWritten = [], probesDeleted = [];
   probeStore.set = async (key, value, opts) => {

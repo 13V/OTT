@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * One eSIM per wallet, per place, topped up — the real wholesale provider (site/api/lib/providers/
+ * One eSIM per wallet, per place, topped up — the real wholesale provider (site/api/_lib/providers/
  * wholesale.js), against the fake of wholesale (test/support/fake-wholesale.js), the mock Lightning
  * payer, and the in-memory store. test/wholesale.test.js checks the provider's money-handling in
  * isolation; this file checks the layer on top of it: which eSIM a redemption lands on.
@@ -21,7 +21,7 @@
  */
 const path = require('path');
 
-const LIB = path.join(__dirname, '..', 'site', 'api', 'lib');
+const LIB = path.join(__dirname, '..', 'site', 'api', '_lib');
 const mockPayer = require(path.join(LIB, 'payers', 'mock.js'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 

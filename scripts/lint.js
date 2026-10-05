@@ -18,7 +18,7 @@ const problems = [];
 // this just re-parses whatever is there. config/addresses.json is the one scripts/chain.js reads
 // and site/config/addresses.json is its twin for the site and the serverless functions; both are
 // checked, and neither is required to match the other, though today they do.
-const JS_DIRS = ['scripts', 'site', 'site/api', 'site/api/lib', 'site/api/lib/providers', 'site/api/lib/payers', 'test', 'test/support', 'test/site', 'test/site/support'];
+const JS_DIRS = ['scripts', 'site', 'site/api', 'site/api/_lib', 'site/api/_lib/providers', 'site/api/_lib/payers', 'test', 'test/support', 'test/site', 'test/site/support'];
 const JSON_DIRS = ['config', 'site/config', 'site/data'];
 
 // Nothing in this tree is loaded as an ES module today — MODULE_JS exists for the day one is,

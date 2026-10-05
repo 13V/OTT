@@ -4,7 +4,7 @@
 /** Read-only launch checks. Never signs, redeems, funds a wallet or prints backend secrets. */
 const fs = require('node:fs');
 const path = require('node:path');
-const { weekOf } = require('../site/api/lib/week');
+const { weekOf } = require('../site/api/_lib/week');
 const FRONTEND = 'https://13v.github.io';
 const address = value => /^0x[\da-f]{40}$/i.test(value || '') && !/^0x0{40}$/i.test(value);
 const row = (id, label, ok, detail) => ({ id, label, ok: !!ok, detail });

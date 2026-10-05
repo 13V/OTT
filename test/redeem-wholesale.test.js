@@ -4,7 +4,7 @@
  * /api/redeem, end to end, through the real wholesale provider — the fake wholesale
  * (test/support/fake-wholesale.js), the mock Lightning payer, the in-memory store, and, exactly as
  * test/redeem.test.js does for the mock provider, a node:http file server standing in for the
- * deployment's own config and allowances and lib/secp256k1 + lib/eip191 standing in for a
+ * deployment's own config and allowances and _lib/secp256k1 + _lib/eip191 standing in for a
  * wallet's personal_sign.
  *
  * test/redeem.test.js checks the endpoint's own logic (who may redeem, how much, idempotence, the
@@ -20,10 +20,10 @@ const http = require('node:http');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
-const secp = require(path.join(API, 'lib', 'secp256k1.js'));
-const eip191 = require(path.join(API, 'lib', 'eip191.js'));
-const mockPayer = require(path.join(API, 'lib', 'payers', 'mock.js'));
-const week = require(path.join(API, 'lib', 'week.js'));
+const secp = require(path.join(API, '_lib', 'secp256k1.js'));
+const eip191 = require(path.join(API, '_lib', 'eip191.js'));
+const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
+const week = require(path.join(API, '_lib', 'week.js'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
 let failures = 0, checks = 0;
@@ -47,7 +47,7 @@ const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provi
 const HOSTILE = secp.newPrivateKey(); // $2.99, for the day wholesale sends links that are not links
 const addr = (k) => secp.addressOf(k).toLowerCase();
 
-// The current week, computed the same way redeem.js computes it (site/api/lib/week.js), so the
+// The current week, computed the same way redeem.js computes it (site/api/_lib/week.js), so the
 // allowances fixture below is unconditionally "this week" whenever this file happens to run.
 const CUR = week.weekOf(Math.floor(Date.now() / 1000));
 
@@ -285,7 +285,7 @@ async function main() {
   // The guard at the serving end is not redundant: a record written before it existed, or by any
   // provider that never checked, is cleaned on the way out rather than trusted because it is ours.
   console.log('\na hostile record already in the store is still not served');
-  const store = require(path.join(API, 'lib', 'store.js')).store();
+  const store = require(path.join(API, '_lib', 'store.js')).store();
   const planted = await store.get('sim:' + addr(HOSTILE));
   const onlyIccid = Object.keys(planted.cards)[0];
   planted.cards[onlyIccid].appleInstallUrl = 'javascript:alert(1)';

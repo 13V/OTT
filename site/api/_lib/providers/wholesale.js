@@ -15,7 +15,7 @@
  *   - GET  /esim/{iccid} reports profile status and usage; /esim/{iccid}/purchase tops one up.
  *
  * There is no listing endpoint and nothing on their side knows which wallet an order was for, so
- * this provider keeps its own record in the store (lib/store.js): one document per transactionId,
+ * this provider keeps its own record in the store (_lib/store.js): one document per transactionId,
  * claimed with SET NX so two function instances cannot both invoice the same redemption, and moved
  * through invoiced → paid → done as each step lands. Every step is resumable: a function that dies
  * between paying and completing leaves a record the next request finishes. "Did we pay this
@@ -26,7 +26,7 @@
  * paying at a time and every write after it landing on the record as it stands in the store, never
  * on a stale copy taken before the wait for the wallet.
  *
- * Before paying, the invoice is decoded (lib/bolt11.js) and refused unless it carries the payment
+ * Before paying, the invoice is decoded (_lib/bolt11.js) and refused unless it carries the payment
  * hash wholesale quoted, an amount, and an amount that is the quoted price at the wallet's own
  * BTC price to within a tenth; and the quoted price is refused if it is above the catalogue's.
  * The credit charged to the trader is the catalogue (list) price; the pool pays the Lightning

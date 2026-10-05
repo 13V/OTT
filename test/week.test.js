@@ -5,7 +5,7 @@
  *
  * A wallet's allowance is written by the indexer for a given week and spent through the API in that
  * same week, and the page counts down to the end of it. The server side shares one module
- * (site/api/lib/week.js, which scripts/allowances.js imports), but the browser cannot require it —
+ * (site/api/_lib/week.js, which scripts/allowances.js imports), but the browser cannot require it —
  * site/api is the serverless functions directory, not a static one — so site/esim.js carries its
  * own copy of the arithmetic.
  *
@@ -18,7 +18,7 @@
  */
 const path = require('path');
 
-const server = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'week.js'));
+const server = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'week.js'));
 const indexer = require(path.join(__dirname, '..', 'scripts', 'allowances.js'));
 
 // site/esim.js is a browser IIFE that hangs its helpers off window. Give it the one global it

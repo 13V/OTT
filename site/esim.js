@@ -1010,7 +1010,7 @@
    * is nadanada's own list of profiles, and an order's `iccid` — or, before nadanada has finished
    * issuing it, `topupOf` — says which one a bundle belongs to; both are public even before a
    * signature reveals the codes, so grouping reads the same redacted or not. A provider with no
-   * notion of a standing profile (site/api/lib/providers/esimaccess.js, and any order fixture
+   * notion of a standing profile (site/api/_lib/providers/esimaccess.js, and any order fixture
    * written before this shape existed) sends `sims: []` and puts the full code on every order
    * instead; a completed order that names no top-up IS its own eSIM in that case, so `simFromOrder`
    * below builds the same card straight from the order's own fields — a fork or a test with no

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * site/api/lib/payers/blink.js — the REAL Blink payer, driven against test/support/fake-blink.js,
+ * site/api/_lib/payers/blink.js — the REAL Blink payer, driven against test/support/fake-blink.js,
  * a fake of api.blink.sv's GraphQL shape checked directly against the live API on 16 Sep 2026 (see
  * that file's header).
  *
@@ -12,7 +12,7 @@
  * pay() ran for real would otherwise be a paying holder's redemption.
  *
  * What is asserted throughout is blink.js's own contract with its callers — the {status, error}
- * shape site/api/lib/providers/wholesale.js switches on for pay(), the NONE|PENDING|SUCCESS|FAILURE
+ * shape site/api/_lib/providers/wholesale.js switches on for pay(), the NONE|PENDING|SUCCESS|FAILURE
  * shape it switches on for sent(), the exceptions scripts/fund.js and site/api/status.js catch —
  * never fake-blink.js's internals.
  *
@@ -22,7 +22,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-const payer = require(path.join(__dirname, '..', 'site', 'api', 'lib', 'payers', 'blink.js'));
+const payer = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'payers', 'blink.js'));
 const fakeBlink = require(path.join(__dirname, 'support', 'fake-blink.js'));
 
 let failures = 0, checks = 0;

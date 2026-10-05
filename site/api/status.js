@@ -34,21 +34,20 @@
  * is already due. A looping ?fresh=1 degrades to costing exactly what leaving the cache alone
  * would; a person who genuinely wants a new read still gets one, just not on every single request.
  *
- * Same file-tracing constraint as redeem.js: Vercel's bundler only follows a literal
- * readFileSync(path.join(__dirname, …)), so esim.json is read that way here too, with the same
- * ESIM_CONFIG_URL override and HTTP fallback. allowances.json is only ever fetched over HTTP, for
+ * Config is explicitly bundled by vercel.json and read from disk, with the same ESIM_CONFIG_URL
+ * override and HTTP fallback as redeem.js. allowances.json is only ever fetched over HTTP, for
  * the same reason redeem.js fetches it: the indexer rewrites it far more often than this function
  * is deployed.
  */
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { provider: chooseProvider } = require('./lib/providers');
-const { payer: choosePayer } = require('./lib/payers');
-const { store: chooseStore } = require('./lib/store');
-const { weekOf } = require('./lib/week');
-const { allowRequestOrigin } = require('./lib/request-origin');
-const { redemptionsEnabled } = require('./lib/redemption-policy');
+const { provider: chooseProvider } = require('./_lib/providers');
+const { payer: choosePayer } = require('./_lib/payers');
+const { store: chooseStore } = require('./_lib/store');
+const { weekOf } = require('./_lib/week');
+const { allowRequestOrigin } = require('./_lib/request-origin');
+const { redemptionsEnabled } = require('./_lib/redemption-policy');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
