@@ -1,4 +1,6 @@
 {
-  "walletConnect": { "projectId": "" },
-  "apiBaseUrl": ""
+  "walletConnect": {
+    "projectId": "e648b373535cce417fba44f5c92e7dac"
+  },
+  "apiBaseUrl": "https://ott-prelaunch.vercel.app"
 }
