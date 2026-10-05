@@ -16,11 +16,24 @@ worker's public precache, so an existing browser cache cannot hide this redesign
 Public shell refreshes revalidate HTTP responses. Arbitrary queries and private
 requests still bypass the service-worker cache.
 
-The 107 browser checks cover Home, Plans, eSIMs, Help, sample orders, wallet
+The 109 browser checks cover Home, Plans, eSIMs, Help, sample orders, wallet
 connection and signature failures, retrying private reads, installation-detail
 privacy, coverage selection, and desktop and phone navigation. Tested viewports
 include 2549 px desktop width and 320 x 568, 360 x 640 and 390 x 844 phones.
 Visual review also covered 2538 x 1299, 1440 x 900 and 768 x 1024 layouts.
+
+The design audit follow-up makes the sample preview the main prelaunch Home
+action and adds an app invitation to the first homepage screen. Plan options
+show GB, validity and required credit together. Functional screens give more
+space to account controls, and phone eSIM screens put those controls before
+artwork. The website and app share a clay header logo and solid orange primary
+buttons. Sample explanations and Exit preview appear before screen content;
+Help has named steps, a current step count and a state-appropriate final link.
+Supporting phone text is larger, and bottom navigation spans the phone width.
+All 109 browser tests pass; four phone layout checks were rerun after the final
+navigation adjustment. Lint and all 15 live prelaunch checks pass. Public
+redemption remains disabled. These checks use sample or fixture accounts and
+do not replace a funded purchase and physical phone connectivity test.
 
 Installation QR codes are encoded locally from the activation string when
 available. Setup instructions end with a real connectivity check: choose the

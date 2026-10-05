@@ -141,7 +141,7 @@ test('narrow layout has usable navigation and no horizontal overflow', async ({ 
   expect(errors).toEqual([]);
 });
 
-test('the mobile clay hero explains the product and routes prelaunch visitors to launch status', async ({ page }) => {
+test('the mobile clay hero explains the product and invites prelaunch visitors into the app', async ({ page }) => {
   stubNetwork(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/index.html#/');
@@ -154,15 +154,17 @@ test('the mobile clay hero explains the product and routes prelaunch visitors to
   await expect(image).toHaveAttribute('src', './assets/ott/hero-touch-grass.webp');
   await expect.poll(() => image.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
   await expect(page.locator('.ott-hero-note')).toContainText('Weekly credit and redemption are not available yet.');
+  await expect(page.locator('.ott-hero-note')).toContainText('sample eSIM setup without a wallet');
   await expect(page.locator('.ott-token-strip')).toContainText('Prelaunch');
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.locator('.ott-hero-actions').getByRole('link', { name: 'How it works' }).click();
   await expect.poll(() => page.evaluate(() => Math.round(document.getElementById('how-it-works').getBoundingClientRect().top))).toBeLessThan(130);
-  const primary = page.locator('.ott-hero-actions').getByRole('link', { name: 'Check launch status', exact: true });
-  await expect(primary).toHaveAttribute('href', '#/status');
+  const primary = page.locator('.ott-hero-actions').getByRole('link', { name: 'Explore the app', exact: true });
+  await expect(primary).toHaveAttribute('href', '#/app');
   await primary.click();
-  await expect(page).toHaveURL(/#\/status$/);
-  await expect(page.locator('.status-summary')).toContainText('weekly credit and redemptions are not available yet');
+  await expect(page).toHaveURL(/#\/app$/);
+  await expect(page.getByRole('button', { name: 'Try the app preview', exact: true })).toBeVisible();
+  await expect(page.locator('.om-status-pill')).toHaveText('Prelaunch');
 });
 
 test('a configured hero opens My data without requesting wallet access or an order', async ({ page }) => {

@@ -12,7 +12,10 @@ test('sample journey selects a plan without a wallet signature or a real order',
     window.ethereum = { request: async ({ method }) => { window.walletCalls.push(method); if (method === 'eth_accounts') return []; throw new Error('Preview must not request a wallet action'); } };
   });
   await page.goto('/#/app');
-  await page.getByRole('button', { name: 'Try the app preview', exact: true }).click();
+  const previewAction = page.getByRole('button', { name: 'Try the app preview', exact: true });
+  await expect(previewAction).toHaveCount(1);
+  await expect(page.locator('.om-home-actions').getByRole('button', { name: 'Try the app preview', exact: true })).toBeVisible();
+  await previewAction.click();
   await expect(page.locator('.om-balance')).toHaveText('$15.00');
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Choose coverage. United States', exact: true })).toBeVisible();
@@ -62,10 +65,20 @@ test('coverage picker supports keyboard selection, no matches and prelaunch pack
   await expect(coverage).toBeFocused();
   const sizes = page.getByRole('group', { name: 'Package size' });
   await expect(sizes.getByRole('button')).toHaveCount(3);
+  const packages = require('../../site/config/esim.json').packages.filter(pkg => pkg.slug === 'japan');
+  for (const pkg of packages) {
+    const option = sizes.getByRole('button', { name: new RegExp('^' + pkg.gb + ' GB,') });
+    await expect(option).toContainText(pkg.gb + ' GB');
+    await expect(option).toContainText(pkg.days + ' days');
+    await expect(option).toContainText('$' + pkg.priceUsd.toFixed(2) + ' data credit');
+  }
   await sizes.getByRole('button', { name: /^10 GB/ }).click();
   await expect(sizes.getByRole('button', { name: /^10 GB/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(sizes.getByRole('button', { name: /^5 GB/ })).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('heading', { name: '10 GB', exact: true })).toBeVisible();
+  const selected = packages.find(pkg => pkg.gb === 10);
+  await expect(page.getByRole('article', { name: 'Japan selected package', exact: true })).toContainText(selected.days + ' days');
+  await expect(page.getByRole('article', { name: 'Japan selected package', exact: true })).toContainText('$' + selected.priceUsd.toFixed(2));
   await expect(page.getByRole('button', { name: 'Review package', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('10 GB');
@@ -84,8 +97,14 @@ test('setup guide explains the OS handoff and supports iPhone and Android', asyn
   await expect(page.getByRole('heading', { name: 'Set up your eSIM', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
   await expect(page.locator('.om-setup-guide')).toContainText('Get connected first');
+  const steps = page.getByRole('group', { name: 'Setup steps', exact: true });
+  for (const [index, label] of ['Prepare', 'Your eSIM', 'Add eSIM', 'Get online'].entries()) {
+    await expect(steps.getByRole('button').nth(index)).toContainText(label);
+  }
+  await expect(page.locator('.om-setup-guide')).toContainText('Step 1 of 4');
   await page.getByRole('button', { name: 'Next step', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Step 2: Open your eSIM in OTT', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.om-setup-guide')).toContainText('Step 2 of 4');
   await page.getByRole('button', { name: 'Next step', exact: true }).click();
   await expect(page.locator('.om-setup-guide')).toContainText('iOS 17.4');
   await expect(page.locator('.om-content')).toContainText('Your phone confirms and completes setup.');
@@ -96,6 +115,72 @@ test('setup guide explains the OS handoff and supports iPhone and Android', asyn
   await expect(page.locator('.om-setup-guide')).toContainText('Network & internet');
   await expect(page.locator('.om-setup-guide a')).toHaveAttribute('href', 'https://support.google.com/pixelphone/answer/16115470?hl=en');
   await expect(page.locator('.om-content a[href^="https://esimsetup"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Next step', exact: true }).click();
+  await expect(page.locator('.om-setup-guide')).toContainText('Step 4 of 4');
+  await expect(page.locator('.om-setup-guide')).toContainText('turn Wi-Fi off and load a webpage');
+  const browse = page.locator('.om-setup-guide').getByRole('link', { name: 'Browse plans', exact: true });
+  await expect(browse).toHaveAttribute('href', '#/app/plans');
+  await browse.click();
+  await expect(page).toHaveURL(/#\/app\/plans$/);
+});
+
+test('sample status and exit stay visible before content on every app screen', async ({ page }) => {
+  stubNetwork(page);
+  for (const width of [360, 390, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#/app');
+    await page.getByRole('button', { name: 'Try the app preview', exact: true }).click();
+    for (const screen of ['Home', 'Plans', 'eSIMs', 'Help']) {
+      const destination = page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: screen, exact: true });
+      await destination.click();
+      await expect(destination).toHaveAttribute('aria-current', 'page');
+      const banner = page.locator('.om-preview-banner');
+      await expect(banner).toContainText('Sample credit and eSIMs. No real orders.');
+      await page.evaluate(() => document.fonts.ready);
+      const bannerBox = await banner.boundingBox();
+      const contentBox = await page.locator('.om-content').boundingBox();
+      expect(bannerBox).not.toBeNull();
+      expect(contentBox).not.toBeNull();
+      expect(bannerBox.y).toBeGreaterThanOrEqual(0);
+      expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(Math.min(contentBox.y, 844));
+      const exit = banner.getByRole('button', { name: 'Exit preview', exact: true });
+      expect(await exit.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return element === hit || element.contains(hit);
+      })).toBe(true);
+    }
+    await page.getByRole('button', { name: 'Exit preview', exact: true }).click();
+    await expect(page.locator('.om-preview-banner')).toHaveCount(0);
+  }
+});
+
+test('phone eSIM screens put account actions before artwork in prelaunch and sample modes', async ({ page }) => {
+  stubNetwork(page);
+  for (const width of [360, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#/app/esims');
+    for (const sample of [false, true]) {
+      const account = page.locator('.om-kit-account');
+      const artwork = page.locator('.om-world-kit');
+      const primary = sample
+        ? account.getByRole('link', { name: 'See setup guide', exact: true })
+        : account.getByRole('button', { name: 'Explore a sample account', exact: true });
+      await expect(primary).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      const accountBox = await account.boundingBox();
+      const artworkBox = await artwork.boundingBox();
+      const primaryBox = await primary.boundingBox();
+      const navBox = await page.getByRole('navigation', { name: 'App navigation' }).boundingBox();
+      expect(accountBox.y).toBeLessThan(artworkBox.y);
+      expect(primaryBox.y).toBeGreaterThanOrEqual(0);
+      expect(primaryBox.y + primaryBox.height).toBeLessThanOrEqual(navBox.y);
+      expect(await account.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('.om-world-kit')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+      if (!sample) await primary.click();
+    }
+    await page.getByRole('button', { name: 'Exit preview', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Explore a sample account', exact: true })).toBeVisible();
+  }
 });
 
 test('missing mobile wallet opens an honest handoff instead of pretending to connect', async ({ page }) => {

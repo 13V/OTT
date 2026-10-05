@@ -148,7 +148,7 @@ test('WalletConnect reaches real account reads and rejects private codes returne
     return route.fulfill(json(signed));
   });
   await page.goto('/#/app');
-  await page.locator('.om-credit-card').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await page.locator('.om-home-actions').getByRole('button', { name: 'Connect wallet', exact: true }).click();
   await expect(page.locator('.om-balance')).toHaveText('$12.01');
   expect(await page.evaluate(() => window.ethereum)).toBeUndefined();
   expect(await page.evaluate(() => window.fixtureRemoteConnections)).toBe(1);
@@ -163,7 +163,7 @@ test('WalletConnect reaches real account reads and rejects private codes returne
   await expect(page.locator('.om-balance')).toHaveCount(0);
   await expect(page.locator('.data-ac')).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('FIXTURE-ONLY');
-  await page.locator('.om-credit-card').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await page.locator('.om-home-actions').getByRole('button', { name: 'Connect wallet', exact: true }).click();
   await expect(page.locator('.om-balance')).toHaveText('$12.01');
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();

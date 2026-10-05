@@ -152,7 +152,7 @@ test('before launch, home explains the mechanism and availability', async ({ pag
   await expect(page.locator('.ott-station')).toHaveCount(4);
   await expect(page.locator('.ott-station h3')).toHaveText(['OTT trades fund the data.', 'The weekly budget is set.', 'He checks his weekly credit.', 'He gets online in Tokyo.']);
   await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
-  await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'Check launch status' })).toHaveAttribute('href', '#/status');
+  await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'Explore the app' })).toHaveAttribute('href', '#/app');
   await expect(page.locator('.ott-hero-note')).toContainText('Prelaunch');
   await expect(page.locator('.ott-hero-note')).toContainText('not available yet');
   await expect(page.locator('.ott-journey-note')).toContainText('no weekly holder credit');

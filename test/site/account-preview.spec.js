@@ -31,7 +31,12 @@ test('My data example switches between credit and eSIMs without issuing a packag
   await page.keyboard.press('Space');
   await expect(preview.locator('#account-credit-example')).toBeVisible();
   await expect(preview.locator('#account-credit-example')).toContainText('Unused weekly credit expires at the weekly reset.');
-  await expect(preview.getByRole('link', { name: 'Check launch status' })).toHaveAttribute('href', '#/status');
+  await expect(preview.locator('.ott-ap-intro')).toContainText('No wallet needed. No real orders.');
+  const exploreApp = preview.getByRole('link', { name: 'Explore the app' });
+  await expect(exploreApp).toHaveAttribute('href', '#/app');
+  await exploreApp.click();
+  await expect(page).toHaveURL(/#\/app$/);
+  await expect(page.getByRole('button', { name: 'Try the app preview', exact: true })).toBeVisible();
   await expect(page.locator('#wallet-gate')).toHaveCount(0);
   expect(writes).toEqual([]);
   expect(network.blocked).toEqual([]);

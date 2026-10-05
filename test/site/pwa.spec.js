@@ -160,7 +160,9 @@ test('the service worker caches public release files but never configuration, le
   for (const url of result) expect(urls).not.toContain(url);
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));
-  expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual(['esim.js', 'mobile-app.css', 'mobile-app.js']);
+  expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual([
+    'account-preview.js', 'esim.js', 'home.css', 'home.js', 'mobile-app.css', 'mobile-app.js', 'style.css',
+  ]);
   for (const url of publicVersions) expect(urls).toContain(url);
   expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);
   expect(urls.every((url) => new URL(url).origin === origin && new URL(url).pathname.startsWith('/OTT/'))).toBe(true);
