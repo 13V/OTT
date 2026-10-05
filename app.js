@@ -353,7 +353,7 @@
     const appSettings = fetch('./config/app.json', { cache: 'no-store', signal: AbortSignal.timeout(7000) })
       .then(response => response.ok ? response.json() : {}).catch(() => ({}));
     try {
-      STATE.cfg = await fetch('./config/addresses.json', { cache: 'no-store' }).then((r) => {
+      STATE.cfg = await fetch('./config/addresses.json', { cache: 'no-store', signal: AbortSignal.timeout(7000) }).then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       });
