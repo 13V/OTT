@@ -209,6 +209,11 @@ profiles remain redacted until the holder separately approves an account read.
 
 Set the public settings in `site/config/app.json`:
 
+`npm run configure:app -- --project-id YOUR_PUBLIC_REOWN_PROJECT_ID --api-origin https://YOUR_BACKEND_HOST`
+validates and saves these public values while preserving other settings. Either option can be
+supplied on its own. The command accepts no provider credentials; run launch checks and deploy
+after saving the settings.
+
 ```json
 {
   "walletConnect": { "projectId": "YOUR_PUBLIC_REOWN_PROJECT_ID" },

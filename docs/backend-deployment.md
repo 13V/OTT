@@ -16,6 +16,20 @@ The default listener is `127.0.0.1:3000`. `HOST` and `PORT` change it. The check
 
 For local integration, mock providers and memory storage are allowed only outside production. They are fixtures and must not be presented as a live account. The public app keeps sample accounts explicitly labelled.
 
+## Free Render prelaunch setup
+
+The root `render.yaml` defines one free Node web service named `ott-api-prelaunch`. It creates no database or wallet and includes no private credentials. It pins Node 22, installs the lockfile without development packages or install scripts, starts the portable API and uses `/api/status` as its health check. The 75-second shutdown allowance covers the server's 70-second graceful shutdown window. Render supplies `PORT`.
+
+After this Blueprint has been pushed to `main`, open [Deploy the prelaunch API on Render](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2F13V%2FOTT). Sign in to Render, review the single service and confirm that its compute plan is **Free** before applying the Blueprint. This link starts Render's setup flow; it is not an existing deployed API URL. [Render documents this deployment flow](https://render.com/docs/deploy-to-render).
+
+The service starts with the public frontend origin, signature hostname, real provider and payer selections, a prelaunch store namespace and current main-branch ledger URLs. `WHOLESALE_BASE_URL` is set to nadanada's documented public API base, `https://nadanada.me/api/v2`; its [official API reference](https://nadanada.me/api/v2/documentation) describes Lightning purchase and completion endpoints. Status probes only its bundle catalogue, without creating an order, and requires a recognizable nonempty bundle response. Status will still report the missing payer and durable store. Account requests will report that the coin has not launched while the public launch addresses are empty. A successful health check is only proof that the listener responds.
+
+Automatic deployments are off. When you change API code or the bundled catalogue, use **Manual Deploy** in the service dashboard to deploy the reviewed commit. New ledger data is fetched from `main` without redeploying the service. Once Render provides the actual HTTPS service URL, copy only its origin into `site/config/app.json`'s `apiBaseUrl`, republish GitHub Pages and check the cross-origin status response. Do not guess the service URL from its name.
+
+This free service is for setup and preview. It sleeps after 15 idle minutes and can take about a minute to wake up, so the app's short request timeout may require retrying after the service wakes. Render advises against using free instances for production. Move live redemption to suitable hosting before enabling provider orders. [Render's free-service limits](https://render.com/docs/free) describe its sleep, restart and usage behavior.
+
+Before live use, add `BLINK_API_KEY`, `KV_REST_API_URL` and `KV_REST_API_TOKEN` through the service's environment settings. Confirm an externally durable Redis REST store and a funded payer. If your provider supplies a different endpoint, override `WHOLESALE_BASE_URL` there; preserve the privacy of any operator-specific endpoint. Render's native Key Value connection string is not the HTTP REST endpoint this adapter expects, and its free Key Value tier loses data on restart. Keep secrets out of the Blueprint. Configure the real public `coin`, `curve` and `treasury` addresses, refresh the catalogue, and publish a funded current-week ledger. A Reown project ID is separately required for mobile wallet connections. The prelaunch namespace must not be reused as a shortcut to reset any later live order history.
+
 ## Hosted configuration
 
 Deploy this repository to a Node host that supports a persistent HTTP process, or retain the existing serverless handlers on a compatible host. For the portable server, the start command is:
@@ -28,7 +42,7 @@ Set `HOST=0.0.0.0` for hosts that require a public listener, and use the port su
 
 Terminate HTTPS at the platform or a trusted reverse proxy. The portable listener is HTTP; do not expose it directly as the frontend's API origin. The app accepts HTTPS API origins and permits plain HTTP only for local development on a loopback browser origin.
 
-Keep the following settings in the host's environment manager. Replace placeholders there. Do not commit a filled environment file or put these secrets in `site/config/app.json`.
+Keep the following settings in the host's environment manager. Public values may be declared in the Blueprint; credentials and operator-specific endpoints belong only in the environment manager. Do not commit a filled environment file or put secrets in `site/config/app.json`.
 
 | Setting | Required value or purpose |
 | --- | --- |
@@ -39,7 +53,7 @@ Keep the following settings in the host's environment manager. Replace placehold
 | `SIGNIN_HOST` | `13v.github.io` |
 | `ESIM_PROVIDER` | `wholesale` for the existing Lightning-funded provider |
 | `LN_PAYER` | `blink` |
-| `WHOLESALE_BASE_URL` | Private provider endpoint, supplied by the operator |
+| `WHOLESALE_BASE_URL` | `https://nadanada.me/api/v2` for the documented public API, or an operator-supplied alternative |
 | `BLINK_API_KEY` | Private Lightning wallet credential |
 | `KV_REST_API_URL` | Durable Redis REST endpoint |
 | `KV_REST_API_TOKEN` | Private Redis credential |
@@ -75,6 +89,8 @@ After the host has issued its real HTTPS API origin, put that origin in the publ
 Mobile WalletConnect also needs the separate public Reown project ID in the same file. The backend origin and Reown project ID are currently empty. No host URL or project ID is supplied by this deployment preparation.
 
 ## Verify before enabling live redemption
+
+Run `npm run check:launch` to check the public wallet, API and token configuration without contacting an account. After saving the real API origin, `npm run check:launch -- --remote` also reads `/api/status` and checks the GitHub Pages CORS preflight. It never signs, places an order, sends a payment or prints backend credentials. A successful HTTP health response alone cannot pass it: it checks actual dependency flags, matching token addresses, a current ledger and a positive Lightning balance. These checks do not certify budget coverage, package pricing or a successful installation on a real phone.
 
 Run the offline server tests and the existing backend suite. Check the real HTTPS endpoint's status response, including `config.launched`, selected provider/payer/store and every readiness field. Confirm a current-week ledger and a funded payer. A status check does not order an eSIM.
 

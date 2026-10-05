@@ -205,13 +205,16 @@ async function checkPayer() {
   } catch (e) { return { ok: false, detail: messageOf(e), pool: null }; }
 }
 
-/** How many bundles came back, whichever of the plausible response shapes wholesale used. */
+/** Count only a recognized, nonempty catalogue of named bundles, never arbitrary response rows. */
 function countBundles(json) {
   const data = json && json.data;
-  if (Array.isArray(data)) return data.length;
-  if (data && Array.isArray(data.bundles)) return data.bundles.length;
-  if (Array.isArray(json)) return json.length;
-  return 0;
+  const bundles = Array.isArray(data) ? data
+    : data && Array.isArray(data.bundles) ? data.bundles
+      : Array.isArray(json) ? json : null;
+  if (!bundles || !bundles.length) return 0;
+  if (!bundles.every((bundle) => bundle && typeof bundle === 'object' && !Array.isArray(bundle)
+    && typeof bundle.name === 'string' && bundle.name.trim())) return 0;
+  return bundles.length;
 }
 
 async function checkProvider() {
@@ -221,10 +224,13 @@ async function checkProvider() {
   if (chosen.name !== 'wholesale') return { ok: true, detail: chosen.name + ': no liveness probe defined for this provider' };
   try {
     const base = String(process.env.WHOLESALE_BASE_URL || '').trim().replace(/\/$/, '');
-    if (!base) throw new Error('the private provider endpoint is not configured');
+    if (!base) throw new Error('the provider endpoint is not configured');
     const json = await withTimeout(fetchJson(base + '/esim/bundles?country=DE', { timeoutMs: CHECK_TIMEOUT_MS }), CHECK_TIMEOUT_MS, 'provider');
-    if (!json || json.success === false) throw new Error('the network partner answered with no data');
-    return { ok: true, detail: 'catalogue answered, ' + countBundles(json) + ' bundles for germany' };
+    const bundles = countBundles(json);
+    if (!json || json.success === false || json.error || !bundles) {
+      throw new Error('the network partner answered with no usable bundle data');
+    }
+    return { ok: true, detail: 'catalogue answered, ' + bundles + ' bundles for germany' };
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
 }
 

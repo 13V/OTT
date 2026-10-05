@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Free prelaunch API only. No provider credentials, wallets or datastores are created here.
+services:
+  - type: web
+    name: ott-api-prelaunch
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: node scripts/serve-api.js
+    healthCheckPath: /api/status
+    maxShutdownDelaySeconds: 75
+    # The data workflow commits often. Update this service deliberately from the dashboard.
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: FRONTEND_ORIGINS
+        value: https://13v.github.io
+      - key: SIGNIN_HOST
+        value: 13v.github.io
+      - key: ESIM_PROVIDER
+        value: wholesale
+      - key: WHOLESALE_BASE_URL
+        value: https://nadanada.me/api/v2
+      - key: LN_PAYER
+        value: blink
+      - key: STORE_PREFIX
+        value: "ott:prelaunch:"
+      - key: ALLOWANCES_URL
+        value: https://raw.githubusercontent.com/13V/OTT/main/site/data/allowances.json
+      - key: TREASURY_URL
+        value: https://raw.githubusercontent.com/13V/OTT/main/site/data/treasury.json

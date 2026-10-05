@@ -104,13 +104,17 @@ async function main() {
   // A tiny fake of wholesale's own bundle listing, and nothing else — proving the provider check
   // never reaches for purchase or complete.
   let bundleHits = 0;
+  const bundleRows = Array.from({ length: 8 }, (_, i) => ({ name: 'bundle-' + i }));
+  const healthyBundlePayload = { success: true, data: { bundles: bundleRows } };
+  let bundlePayload = healthyBundlePayload, unexpectedProviderRequests = 0;
   const wholesaleServer = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (req.method === 'GET' && u.pathname === '/esim/bundles') {
       bundleHits++;
       res.setHeader('content-type', 'application/json');
-      return res.end(JSON.stringify({ success: true, data: { bundles: Array.from({ length: 8 }, (_, i) => ({ name: 'bundle-' + i })) } }));
+      return res.end(JSON.stringify(bundlePayload));
     }
+    unexpectedProviderRequests++;
     res.statusCode = 404; res.end(JSON.stringify({ error: 'not stubbed: ' + req.url }));
   });
   await new Promise((r) => wholesaleServer.listen(0, '127.0.0.1', r));
@@ -190,6 +194,38 @@ async function main() {
   check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances, { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3 });
   checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
   checkThat('and wholesale saw only the bundle listing, never purchase or complete', bundleHits > 0);
+
+  console.log('\nHTTP 200 is not proof that the provider has a usable catalogue');
+  const invalidCatalogues = [
+    ['an empty object', {}],
+    ['an error object', { error: 'catalogue unavailable' }],
+    ['an explicit failure with otherwise valid rows', { success: false, data: { bundles: bundleRows } }],
+    ['an error envelope with otherwise valid rows', { error: 'catalogue unavailable', data: { bundles: bundleRows } }],
+    ['an empty top-level array', []],
+    ['an empty data array', { success: true, data: [] }],
+    ['an empty nested bundle array', { success: true, data: { bundles: [] } }],
+    ['a missing bundle array', { success: true, data: {} }],
+    ['a string masquerading as bundles', { success: true, data: { bundles: 'not a catalogue' } }],
+    ['primitive bundle rows', { success: true, data: { bundles: ['unavailable'] } }],
+    ['a null bundle row', { success: true, data: { bundles: [null] } }],
+    ['unnamed error rows', { success: true, data: { bundles: [{ error: 'unavailable' }] } }],
+    ['a blank bundle name', { success: true, data: { bundles: [{ name: '  ' }] } }],
+    ['a mixed catalogue containing a null row', { success: true, data: { bundles: [bundleRows[0], null] } }],
+  ];
+  try {
+    for (const [label, payload] of invalidCatalogues) {
+      bundlePayload = payload;
+      r = await GET();
+      check('provider readiness rejects ' + label, [r.status, r.body.ready.provider, r.body.checks.provider.ok], [200, false, false]);
+      checkThat('the rejection reports unusable bundle data and preserves the other checks', /no usable bundle data/.test(r.body.checks.provider.detail) && r.body.ready.payer && r.body.ready.store && r.body.ready.allowances, JSON.stringify(r.body.checks));
+    }
+    for (const payload of [bundleRows, { success: true, data: bundleRows }, healthyBundlePayload]) {
+      bundlePayload = payload;
+      r = await GET();
+      check('a recognized nonempty bundle catalogue remains healthy', [r.body.ready.provider, r.body.checks.provider.detail], [true, 'catalogue answered, 8 bundles for germany']);
+    }
+    check('catalogue probes never create or complete a purchase', unexpectedProviderRequests, 0);
+  } finally { bundlePayload = healthyBundlePayload; }
 
   console.log('\na payer that cannot answer');
   mockPayer._state.mode = 'down';
