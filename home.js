@@ -32,9 +32,9 @@
         h('h1', { class: 'ott-hero-title' }, h('span', {}, 'A memecoin '), h('span', {}, 'with a '), h('span', {}, 'data plan.')),
         h('p', { class: 'ott-hero-sub' }, 'Weekly data credit for eligible OTT holders.', h('br'), 'At home or abroad. Funded by creator tax.'),
         h('div', { class: 'ott-hero-actions' },
-          h('a', { class: 'ott-primary-action', href: launched ? '#/data' : '#/status' }, launched ? 'Check my credit' : 'Check launch status'),
+          h('a', { class: 'ott-primary-action', href: launched ? '#/data' : '#/app' }, launched ? 'Check my credit' : 'Explore the app'),
           h('a', { class: 'ott-text-action', href: '#how-it-works' }, 'How it works ↗')),
-        h('p', { class: 'ott-hero-note' }, launched ? 'Weekly credit depends on collected fees and your eligible OTT balance.' : 'Prelaunch. Weekly credit and redemption are not available yet.')),
+        h('p', { class: 'ott-hero-note' }, launched ? 'Weekly credit depends on collected fees and your eligible OTT balance.' : 'Prelaunch. Explore plans and sample eSIM setup without a wallet. Weekly credit and redemption are not available yet.')),
       h('div', { class: 'ott-hero-art hero-visual' },
         h('figure', { class: 'ott-hero-scene' },
           h('figcaption', { class: 'ott-hero-caption' }, image(h, 'hero-touch-grass-lettering', 'Touch Grass, Stay Online.', { width: '1536', height: '768', fetchpriority: 'high' })),
@@ -283,7 +283,7 @@
           image(h, 'faq-clay-help', '', { width: '1254', height: '1254', loading: 'lazy' }))),
       h('div', { class: 'ott-close' }, h('h2', {}, 'Where are you heading?'),
         h('div', {}, h('a', { class: 'ott-primary-action', href: '#plans' }, 'Explore destinations'),
-          h('a', { class: 'ott-text-action', href: launched ? '#/data' : '#/status' }, launched ? 'Open My data ↗' : 'Check launch status ↗')))));
+          h('a', { class: 'ott-text-action', href: launched ? '#/data' : '#/app' }, launched ? 'Open My data ↗' : 'Explore the app ↗')))));
   }
 
   function animateJourney(section) {

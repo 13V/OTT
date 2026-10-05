@@ -246,8 +246,8 @@
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.' : active ? 'Check your weekly credit and eSIMs.' : 'Choose a plan and explore eSIM setup with a sample account.'),
-        h('div', { class: 'om-pass-action' }, primary));
-    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : 'Weekly credit', 'aria-live': 'polite' }, content);
+        preview || (active && account) ? h('div', { class: 'om-pass-action' }, primary) : null);
+    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : active ? 'Weekly credit' : 'App preview invitation', 'aria-live': 'polite' }, content);
     const realAccount = !preview && active && account;
     if (realAccount) {
       credit.setAttribute('aria-busy', 'true');
@@ -290,17 +290,17 @@
         h('span', {}, preview ? first.name + ' · ' + first.gb + ' GB package' : 'For everyday life or your next trip.')), icon('arrow')],
     () => go(preview ? 'esims' : 'plans'), 'om-connection-row');
     connection.setAttribute('aria-label', preview ? 'View sample eSIMs' : 'Find a data plan');
-    const introAction = preview || (active && !account)
-      ? h('a', { class: 'om-button', href: '#/app/plans' }, 'Browse plans ', icon('arrow'))
-      : action(h, [account ? 'Wallet settings' : 'Connect wallet', icon('arrow')],
-        event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget));
+    const introAction = !active && !preview ? primary
+      : preview || account ? h('a', { class: 'om-text-link', href: preview ? '#/app/plans' : '#/app/esims' },
+        preview ? 'Browse plans ' : 'Open my eSIMs ', icon('arrow'))
+        : action(h, ['Connect wallet', icon('arrow')], event => wallet(ctx, event.currentTarget));
     const intro = h('div', { class: 'om-home-intro' },
       h('p', { class: 'om-home-eyebrow' }, 'OT+T / YOUR DATA'),
       h('h1', {}, 'Touch grass.', h('br', {}), 'Stay online.'),
       h('p', { class: 'om-home-lede' }, 'Check your credit. Pick a data plan.', h('br', {}), 'Set up your eSIM.'),
       h('div', { class: 'om-home-actions' }, introAction,
-        h('a', { class: 'om-text-link', href: preview || (active && !account) ? '#/app/help' : '#/app/plans' },
-          preview || (active && !account) ? 'How to get online' : 'Browse plans', icon('arrow'))),
+        h('a', { class: 'om-text-link', href: preview || account ? '#/app/help' : '#/app/plans' },
+          preview || account ? 'How to get online' : 'Browse plans', icon('arrow'))),
       h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
         : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your wallet is your account. Connect to see your data.'
           : 'Explore now. Weekly credit starts when OTT launches.'), credit);
@@ -310,7 +310,9 @@
       h('div', { class: 'om-home-tools' }, connection,
         !preview && (!active || account) ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
-            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Connect to view your data when OTT launches.'))) : null,
+            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Weekly credit starts after launch.')),
+          action(h, account ? 'Wallet settings' : 'Connect wallet',
+            event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button')) : null,
         realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
         h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))));
     return result;
@@ -363,9 +365,11 @@
       coverage.replaceChildren(countryFlag(h, pkg), h('span', { class: 'om-coverage-name' }, pkg.name),
         h('span', { class: 'om-coverage-chevron', 'aria-hidden': 'true' }, '⌄'));
       coverage.setAttribute('aria-label', 'Choose coverage. ' + pkg.name);
-      feature.replaceChildren(coverage, world(h, pkg.slug === 'japan' ? 'japan' : pkg.slug === 'united-states' ? 'home' : 'travel', 'plans'));
+      feature.replaceChildren(coverage);
+      illustration.replaceChildren(world(h, pkg.slug === 'japan' ? 'japan' : pkg.slug === 'united-states' ? 'home' : 'travel', 'plans'));
       const sizes = h('div', { class: 'om-package-sizes', role: 'group', 'aria-label': 'Package size' }, packages.map(item => {
-        const button = action(h, item.gb + ' GB', () => { selectedCode = item.code; paintPackages(item.code); },
+        const button = action(h, [h('strong', {}, item.gb + ' GB'), h('span', {}, item.days + ' days'),
+          h('span', { class: 'om-option-price' }, h('span', {}, money(item.priceUsd)), ' ', h('span', {}, 'data credit'))], () => { selectedCode = item.code; paintPackages(item.code); },
           'om-size-button om-package-select' + (item.code === selectedCode ? ' is-selected' : ''));
         button.setAttribute('aria-pressed', String(item.code === selectedCode));
         button.setAttribute('aria-label', `${item.gb} GB, ${item.days} days, ${money(item.priceUsd)} data credit`);
@@ -408,8 +412,9 @@
         h('label', { for: 'om-search' }, 'Search a country or region'), search, count, list), source);
       search.focus();
     }
+    const illustration = h('div', { class: 'om-plan-illustration' });
     paintPackages();
-    return h('div', { class: 'om-plans-grid' }, feature, options);
+    return h('div', { class: 'om-plans-grid' }, feature, options, illustration);
   }
 
   function sampleSim(h, pkg) {
@@ -417,14 +422,14 @@
       h('div', { class: 'om-pass-heading' }, countryFlag(h, pkg), h('h2', {}, pkg.name)),
       h('p', { class: 'om-sim-package' }, h('strong', {}, pkg.gb + ' GB package'), h('span', {}, pkg.days + ' days')),
       h('span', { class: 'om-demo-label' }, 'SAMPLE eSIM'),
-      h('a', { class: 'om-button om-button-dark', href: '#/app/help' }, 'See setup guide ', icon('arrow'))));
+      h('a', { class: 'om-button', href: '#/app/help' }, 'See setup guide ', icon('arrow'))));
   }
 
   function esims(h, ctx, cfg) {
     if (preview && cfg) {
       const first = cfg.packages.find(pkg => pkg.slug === 'japan' && pkg.gb === 5) || cfg.packages[0];
       const samplePackages = [first, ...demoOrders].filter(Boolean);
-      return h('div', { class: 'om-kit-layout' }, world(h, 'kit'),
+      return h('div', { class: 'om-kit-layout' },
         h('div', { class: 'om-kit-account' },
           h('div', { class: 'om-sim-list' }, samplePackages.map(pkg => sampleSim(h, pkg))),
           h('div', { class: 'om-kit-links' },
@@ -432,7 +437,7 @@
               h('p', {}, 'These are sample package sizes, not live remaining-data readings. Real installation details appear after a confirmed redemption.')),
             h('a', { class: 'om-connection-row', href: '#/app/help' }, icon('help'), 'How to add an eSIM', icon('arrow'))),
           h('p', { class: 'om-plan-disclaimer' }, 'Illustration only. No active eSIM. No usable QR codes or activation details are created in preview mode.'),
-          action(h, 'Find another plan', () => go('plans'), 'om-text-button')));
+          action(h, 'Find another plan', () => go('plans'), 'om-text-button')), world(h, 'kit'));
     }
     if (launched(cfg)) {
       const container = h('div', { class: 'om-live-account' });
@@ -442,15 +447,15 @@
       });
       return container;
     }
-    return h('div', { class: 'om-kit-layout' }, world(h, 'kit'),
+    return h('div', { class: 'om-kit-layout' },
       h('div', { class: 'om-kit-account' }, h('section', { class: 'om-empty-state om-data-pass' }, h('div', { class: 'om-pass-content' }, chip(h),
         h('span', { class: 'om-kicker' }, 'YOUR CONNECTION KIT'), h('h2', {}, 'A place for your data.'),
         h('p', {}, cfg ? 'OTT is still in prelaunch. Try a sample account to see how packages and setup work.' : 'Go online to load your account. The setup guide still works.'),
         cfg ? action(h, 'Explore a sample account', () => enterPreview(ctx)) : action(h, 'Try again', () => ctx.refresh()))),
-      h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'See how eSIM setup works ', icon('arrow'))));
+      h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'See how eSIM setup works ', icon('arrow'))), world(h, 'kit'));
   }
 
-  function help(h) {
+  function help(h, cfg) {
     const guide = h('div', { class: 'om-setup-guide' });
     const ios = action(h, 'iPhone', () => { helpPlatform = 'iphone'; helpStep = 0; paintGuide(); }, 'om-platform-button');
     const android = action(h, 'Android', () => { helpPlatform = 'android'; helpStep = 0; paintGuide(); }, 'om-platform-button');
@@ -469,8 +474,9 @@
         ['Choose your data line', 'Select the new eSIM for mobile data. Keep your existing line for calls and texts. Follow the provider’s roaming instructions. Within coverage, turn Wi-Fi off and load a webpage to check the new connection.'],
       ];
       const step = Math.min(helpStep, steps.length - 1);
+      const labels = ['Prepare', 'Your eSIM', 'Add eSIM', 'Get online'];
       const progress = h('div', { class: 'om-step-progress', role: 'group', 'aria-label': 'Setup steps' }, steps.map(([title], index) => {
-        const button = action(h, String(index + 1), () => { helpStep = index; paintGuide(); guide.querySelectorAll('.om-step-progress button')[index].focus(); }, 'om-step-tab');
+        const button = action(h, [h('span', {}, String(index + 1)), h('span', {}, labels[index])], () => { helpStep = index; paintGuide(); guide.querySelectorAll('.om-step-progress button')[index].focus(); }, 'om-step-tab');
         button.setAttribute('aria-label', 'Step ' + (index + 1) + ': ' + title);
         button.setAttribute('aria-pressed', String(index === step));
         return button;
@@ -479,8 +485,9 @@
       back.disabled = step === 0;
       const next = step < steps.length - 1
         ? action(h, ['Next step', icon('arrow')], () => { helpStep++; paintGuide(); guide.querySelectorAll('.om-step-progress button')[helpStep].focus(); })
-        : h('a', { class: 'om-button', href: '#/app/esims' }, 'Open my eSIMs ', icon('arrow'));
-      guide.replaceChildren(progress,
+        : h('a', { class: 'om-button', href: preview || launched(cfg) ? '#/app/esims' : '#/app/plans' },
+          preview ? 'View sample eSIMs ' : launched(cfg) ? 'Open my eSIMs ' : 'Browse plans ', icon('arrow'));
+      guide.replaceChildren(progress, h('p', { class: 'om-step-count' }, 'Step ' + (step + 1) + ' of ' + steps.length),
         h('ol', { class: 'om-steps', start: step + 1, 'aria-live': 'polite' }, h('li', {},
           h('span', { class: 'om-step-number', 'aria-hidden': 'true' }, String(step + 1).padStart(2, '0')),
           h('div', {}, h('h3', {}, steps[step][0]), h('p', {}, steps[step][1])))),
@@ -489,7 +496,7 @@
     }
     paintGuide();
     return h('div', { class: 'om-help-grid' },
-      h('section', { class: 'om-panel om-guide-panel' }, h('h2', {}, 'Set up your eSIM'),
+      h('section', { class: 'om-panel om-guide-panel', 'aria-label': 'eSIM setup guide' },
         h('p', { class: 'om-screen-lede' }, 'OTT gives you the installation details. Your phone confirms and completes setup.'),
         action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-device-check-button'),
         h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ios, android), guide),
@@ -550,7 +557,7 @@
     const installButton = action(h, [icon('download'), h('span', {}, 'Add to phone')], event => install(h, event.currentTarget), 'om-install-button');
     const status = h('span', { class: 'om-status-pill' }, 'Loading');
     const header = h('header', { class: 'om-header' },
-      h('a', { class: 'om-brand', href: '#/', 'aria-label': 'OTT website' },
+      h('a', { class: 'om-brand', href: '#/app', 'aria-label': 'OTT app home' },
         h('img', { class: 'om-brand-art', src: './assets/app/app-clay-logo.webp', alt: 'OT+T', width: 1860, height: 845, decoding: 'async' })),
       h('div', { class: 'om-header-actions' }, status, installButton));
     const nav = h('nav', { class: 'om-nav', 'aria-label': 'App navigation' }, SCREENS.map(name => h('a', {
@@ -560,7 +567,7 @@
     const body = h('div', { class: 'om-body' });
     const heading = screen === 'home' ? null : h('div', { class: 'om-heading' },
       h('p', { class: 'om-home-eyebrow' }, 'OT+T / ' + LABELS[screen].toUpperCase()),
-      h('h1', {}, { plans: 'Where’s next?', esims: 'Your connection kit.', help: 'Let’s get you online.' }[screen]));
+      h('h1', {}, { plans: 'Find your data plan.', esims: 'Your eSIMs.', help: 'Set up your eSIM' }[screen]));
     const contents = h('div', { class: 'om-content' }, h('p', { class: 'om-loading', role: 'status' }, 'Loading OTT…'));
     shell.append(header, nav, body); if (heading) body.append(heading); body.append(contents); view.appendChild(shell);
     window.OTTPwa?.register?.();
@@ -579,11 +586,11 @@
     } catch { /* No saved financial state is used as an offline substitute. */ }
     finally { clearTimeout(timeout); }
     if (!ctx.isCurrent() || !view.contains(shell)) return;
-    status.textContent = cfg ? preview ? 'Sample preview' : launched(cfg) ? 'Programme configured' : 'Prelaunch' : 'Offline';
-    const screenContent = screen === 'plans' ? plans(h, ctx, cfg) : screen === 'esims' ? esims(h, ctx, cfg) : screen === 'help' ? help(h) : cfg ? home(h, ctx, cfg) : unavailable(h, ctx, 'Credit and orders need a live connection. The setup guide still works.');
+    status.textContent = cfg ? preview ? 'Preview' : launched(cfg) ? 'Configured' : 'Prelaunch' : 'Offline';
+    const screenContent = screen === 'plans' ? plans(h, ctx, cfg) : screen === 'esims' ? esims(h, ctx, cfg) : screen === 'help' ? help(h, cfg) : cfg ? home(h, ctx, cfg) : unavailable(h, ctx, 'Credit and orders need a live connection. The setup guide still works.');
     contents.replaceChildren(screenContent);
-    if (preview && cfg) body.appendChild(previewBanner(h, ctx));
-    else if (cfg && !launched(cfg)) body.appendChild(h('p', { class: 'om-prelaunch-note' }, 'Prelaunch. Weekly credit and redemption are not available yet.'));
+    if (preview && cfg) body.insertBefore(previewBanner(h, ctx), contents);
+    else if (cfg && !launched(cfg) && screen !== 'home') body.insertBefore(h('p', { class: 'om-prelaunch-note' }, 'Prelaunch. Weekly credit and redemption are not available yet.'), contents);
   }
 
   window.OTTMobileApp = {

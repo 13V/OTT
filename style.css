@@ -26,7 +26,7 @@
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   --wrap-width: 1232px;
-  --radius-button: 4px;
+  --radius-button: 8px;
   --radius-card: 5px;
   --radius-control: 4px;
 
@@ -99,8 +99,11 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 @media (max-width: 860px) { .mh-top { height: 56px; } }
 
 /* The plus is the brand's signal junction, repeated in the route diagram and section details. */
-.brand { font: 800 23px/1 var(--font-display); letter-spacing: -.05em; color: var(--text); flex: none; }
+.brand { display: inline-flex; align-items: center; min-height: 44px; font: 800 23px/1 var(--font-display); letter-spacing: -.05em; color: var(--text); flex: none; }
+.brand-art { display: block; width: 138px; height: auto; }
 .brand .dot-fun { color: var(--accent); }
+@media (max-width: 860px) { .brand-art { width: 110px; } }
+@media (max-width: 700px) { .brand-art { width: 96px; } }
 
 #nav { display: flex; gap: 24px; margin-left: 8px; }
 #nav a { font: 500 14px/1 var(--font-sans); color: var(--text-secondary); padding: 8px 2px; transition: color .15s ease; }
