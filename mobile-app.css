@@ -10,7 +10,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   --om-rim: #ee823a;
   --om-line: #c9cec6;
   --om-muted: #495b5b;
-  --om-gutter: clamp(24px,4vw,104px);
+  --om-gutter: clamp(24px,3.8vw,58px);
   width: 100%;
   max-width: none;
   min-height: 100dvh;
@@ -22,7 +22,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   color: var(--om-ink);
   font-family: var(--font-sans);
 }
-.om-header { grid-column: 1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-inline: var(--om-gutter); padding-block: max(16px,env(safe-area-inset-top)); border-bottom: 1px solid #a9aaa1; }
+.om-header { grid-column: 1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; width: calc(100% - 2 * var(--om-gutter)); max-width: 1420px; margin-inline: auto; padding-block: max(16px,env(safe-area-inset-top)); border-bottom: 1px solid #a9aaa1; }
 .om-brand { display: inline-flex; align-items: center; flex: none; }
 .om-brand-art { display: block; width: 138px; height: auto; }
 .om-header-actions { display: flex; align-items: center; gap: 10px; }
@@ -38,7 +38,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-nav > a.is-active { color: var(--om-orange); }
 .om-nav > a.is-active::after { content: ''; position: absolute; bottom: 2px; left: 0; right: 0; height: 2px; background: var(--om-orange); }
 .om-nav .om-website-link { color: var(--om-muted); font-size: 14px; font-weight: 400; }
-.om-body { grid-column: 1; grid-row: 2; min-width: 0; padding: 38px var(--om-gutter) 40px; }
+.om-body { grid-column: 1; grid-row: 2; min-width: 0; width: 100%; max-width: 1536px; margin-inline: auto; padding: 32px var(--om-gutter) 40px; }
 .om-heading { margin-bottom: 38px; }
 .om-heading h1 { margin: 0; font: 750 clamp(56px,5.3vw,96px)/1.02 var(--font-display); letter-spacing: -.035em; }
 .om-home-eyebrow { margin: 0 0 24px; color: var(--om-orange); font: 600 13px/1.35 var(--font-mono); letter-spacing: .16em; }
@@ -46,23 +46,24 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-content { min-width: 0; }
 .om-home-grid, .om-plans-grid { min-width: 0; }
 .om-plans-grid { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(320px,1fr); gap: clamp(36px,5vw,120px); align-items: center; }
-.om-home-feature { display: grid; grid-template-columns: minmax(0,43fr) minmax(0,57fr); align-items: center; min-height: calc(100svh - 270px); }
-.om-home-intro { position: relative; z-index: 2; padding-block: 42px; }
-.om-home-intro h1 { margin: 0; font: 800 clamp(64px,5.8vw,124px)/.96 var(--font-display); letter-spacing: -.035em; }
-.om-home-lede { margin-top: 30px; color: var(--om-ink); font-size: clamp(21px,1.55vw,30px); line-height: 1.4; letter-spacing: -.015em; }
-.om-home-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 28px; margin-top: 32px; }
-.om-home-actions .om-button { min-height: 62px; padding-inline: 30px; border-radius: 0; background: var(--om-orange); box-shadow: none; font-size: 19px; font-weight: 500; }
+.om-home-feature { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: clamp(28px,3vw,48px); align-items: center; }
+.om-home-intro { position: relative; z-index: 2; padding-block: 24px; }
+.om-home-intro h1 { margin: 0; font: 800 clamp(64px,5.6vw,96px)/.96 var(--font-display); letter-spacing: -.035em; }
+.om-home-lede { margin-top: 24px; color: var(--om-ink); font-size: clamp(21px,1.55vw,24px); line-height: 1.4; letter-spacing: -.015em; }
+.om-home-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 28px; margin-top: 26px; }
+.om-home-actions .om-button { min-height: 54px; padding-inline: 24px; border-radius: 0; background: var(--om-orange); box-shadow: none; font-size: 17px; font-weight: 500; }
 .om-home-actions .om-text-link { min-height: 44px; border-bottom: 1px solid var(--om-ink); color: var(--om-ink); font-size: 18px; font-weight: 500; }
-.om-home-context { max-width: 44ch; margin-top: 22px; color: var(--om-muted); font-size: 14px; line-height: 1.5; }
+.om-home-context { max-width: 44ch; margin-top: 16px; color: var(--om-muted); font-size: 14px; line-height: 1.5; }
 .om-home-visual { position: relative; min-width: 0; }
 .om-world { min-width: 0; position: relative; overflow: hidden; isolation: isolate; box-shadow: 0 0 0 1px #dbbd983d,0 8px 24px #7157360b; }
 .om-world-art { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
-.om-world-home { height: clamp(560px,43vw,950px); overflow: visible; border-radius: 0; box-shadow: none; }
+.om-world-home { width: 100%; max-width: 650px; height: clamp(420px,42vw,680px); margin-inline: auto; overflow: visible; border-radius: 0; box-shadow: none; }
 .om-world-home::before { content: ''; position: absolute; z-index: -1; left: 18%; right: 0; bottom: 0; height: 16%; border-radius: 50%; background: radial-gradient(ellipse,#ad977233,transparent 69%); }
-.om-world-home .om-world-art { object-fit: contain; object-position: right center; }
-.om-home-visual > .om-credit-card { position: absolute; z-index: 2; left: 0; bottom: 14px; width: clamp(320px,24vw,430px); }
-.om-home-visual .om-pass-content { padding: 23px; }
-.om-home-visual .om-pass-title { font-size: clamp(31px,2.2vw,38px); }
+.om-world-home .om-world-art { object-fit: contain; object-position: center; }
+/* Keep the account action with the copy; artwork never positions or obscures it. */
+.om-home-intro > .om-credit-card { width: min(100%,500px); margin-top: 28px; }
+.om-home-intro .om-pass-content { padding: 22px; }
+.om-home-intro .om-pass-title { font-size: 32px; }
 .om-world-plans { height: clamp(430px,36vw,780px); border-radius: 0; box-shadow: none; }
 .om-world-kit { height: clamp(430px,36vw,780px); border-radius: 0; box-shadow: none; }
 .om-data-pass { position: relative; min-width: 0; padding: 7px; background: var(--om-rim); border-radius: 26px; clip-path: polygon(0 0,calc(100% - 30px) 0,100% 30px,100% 100%,0 100%); filter: drop-shadow(0 4px 0 #a9472140) drop-shadow(0 8px 9px #71452b18); }
@@ -263,11 +264,10 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-shell { grid-template-rows: 80px 58px 1fr; }
   .om-header { border-bottom: 0; }
   .om-brand-art { width: 120px; }
-  .om-nav { grid-row: 2; justify-self: stretch; justify-content: center; margin-inline: var(--om-gutter); gap: clamp(28px,5vw,55px); border-top: 1px solid #a9aaa1; border-bottom: 1px solid var(--om-line); }
+  .om-nav { grid-row: 2; justify-self: center; width: calc(100% - 2 * var(--om-gutter)); justify-content: center; margin-inline: auto; gap: clamp(28px,5vw,55px); border-top: 1px solid #a9aaa1; border-bottom: 1px solid var(--om-line); }
   .om-nav > a { font-size: 16px; }
   .om-nav .om-website-link { font-size: 13px; }
   .om-body { grid-row: 3; padding-top: 28px; }
-  .om-home-feature { min-height: 580px; }
   .om-home-intro { padding-block: 24px; }
   .om-home-intro h1 { font-size: clamp(52px,6.4vw,70px); }
   .om-home-lede { margin-top: 24px; font-size: 19px; }
@@ -276,9 +276,8 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-home-actions .om-text-link { font-size: 15px; }
   .om-home-context { font-size: 12px; }
   .om-world-home { height: 530px; }
-  .om-home-visual > .om-credit-card { width: 300px; bottom: -20px; }
-  .om-home-visual .om-pass-content { padding: 19px; }
-  .om-home-visual .om-pass-title { font-size: 29px; }
+  .om-home-intro .om-pass-content { padding: 19px; }
+  .om-home-intro .om-pass-title { font-size: 29px; }
   .om-home-tools { gap: 24px; }
   .om-row-copy strong { font-size: 17px; }
   .om-row-copy span { font-size: 12px; }
@@ -294,8 +293,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-help-notes > img { width: 240px; height: 240px; }
 }
 @media (max-width: 850px) and (min-width: 701px) {
-  .om-home-visual > .om-credit-card { width: 280px; }
-  .om-home-visual .om-pass-title { font-size: 27px; }
+  .om-home-intro .om-pass-title { font-size: 27px; }
   .om-plans-grid, .om-kit-layout { grid-template-columns: 1fr; }
   .om-world-plans, .om-world-kit { height: 400px; }
   .om-plan-options { grid-column: 1; grid-row: 2; }
@@ -307,7 +305,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 @media (max-width: 700px) {
   .om-shell { display: block; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
   body.ott-app-mode #view > .om-shell { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
-  .om-header { min-height: 74px; margin-inline: 18px; padding: max(12px,env(safe-area-inset-top)) 0 12px; gap: 8px; border-bottom: 1px solid #a9aaa1; }
+  .om-header { min-height: 74px; width: auto; margin-inline: 18px; padding: max(12px,env(safe-area-inset-top)) 0 12px; gap: 8px; border-bottom: 1px solid #a9aaa1; }
   .om-brand-art { width: 96px; }
   .om-header-actions { gap: 6px; }
   .om-status-pill { font-size: 9px; padding: 7px 0; gap: 5px; }
@@ -327,13 +325,13 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-home-actions .om-button { min-height: 52px; padding-inline: 20px; font-size: 16px; }
   .om-home-actions .om-text-link { font-size: 15px; }
   .om-home-context { margin-top: 17px; font-size: 12px; }
-  .om-home-visual { display: flex; flex-direction: column; margin-top: 22px; }
+  .om-home-visual { margin-top: 22px; }
   .om-plan-feature { gap: 0; }
-  .om-world-home { order: 2; height: clamp(280px,82vw,380px); margin: 24px 0 0; }
+  .om-world-home { height: clamp(280px,82vw,380px); margin: 0; }
   .om-world-home .om-world-art { object-position: center; }
-  .om-home-visual > .om-credit-card { position: relative; order: 1; left: auto; bottom: auto; width: 100%; max-width: 430px; margin: 0 auto; }
-  .om-home-visual .om-pass-content { padding: 20px; }
-  .om-home-visual .om-pass-title { font-size: 31px; }
+  .om-home-intro > .om-credit-card { width: 100%; max-width: 430px; margin: 22px auto 0; }
+  .om-home-intro .om-pass-content { padding: 20px; }
+  .om-home-intro .om-pass-title { font-size: 31px; }
   .om-pass-content { padding: 18px 19px; }
   .om-kicker { font-size: 9px; letter-spacing: .11em; }
   .om-pass-heading { padding-right: 64px; }
@@ -352,7 +350,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-home-tools > .om-home-footnote { padding-top: 9px; font-size: 14px; }
   .om-home-footnote .om-text-link { font-size: 12px; }
   .om-preview-banner { margin-top: 14px; }
-  .om-nav { position: fixed; z-index: 50; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); margin: 0; gap: 5px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); border: 0; border-top: 1px solid #d9cebc; border-radius: 20px 20px 0 0; background: #f9f4e9; box-shadow: 0 -3px 15px #4b382a08; }
+  .om-nav { position: fixed; z-index: 50; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); width: auto; margin: 0; gap: 5px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); border: 0; border-top: 1px solid #d9cebc; border-radius: 20px 20px 0 0; background: #f9f4e9; box-shadow: 0 -3px 15px #4b382a08; }
   .om-nav > a { flex-direction: column; justify-content: center; gap: 4px; min-height: 58px; padding: 6px 4px; border-radius: 12px; font-size: 11px; }
   .om-nav > a svg { display: block; width: 22px; height: 22px; }
   .om-nav > a.is-active { background: #173b42; color: #fff8e8; box-shadow: inset 0 1px 0 #51706f; }

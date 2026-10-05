@@ -303,10 +303,10 @@
           preview || (active && !account) ? 'How to get online' : 'Browse plans', icon('arrow'))),
       h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
         : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your wallet is your account. Connect to see your data.'
-          : 'Explore now. Weekly credit starts when OTT launches.'));
+          : 'Explore now. Weekly credit starts when OTT launches.'), credit);
     const result = h('div', { class: 'om-home-grid' },
       h('div', { class: 'om-home-feature' + (realAccount ? ' om-home-account' : preview ? ' om-home-preview' : '') }, intro,
-        h('div', { class: 'om-home-visual' }, world(h, 'home'), credit)),
+        h('div', { class: 'om-home-visual' }, world(h, 'home'))),
       h('div', { class: 'om-home-tools' }, connection,
         !preview && (!active || account) ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
