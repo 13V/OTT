@@ -30,7 +30,10 @@ const URL = () => process.env.BLINK_API_URL || 'https://api.blink.sv/graphql';
 const KEY = () => process.env.BLINK_API_KEY || '';
 // a Lightning payment can take a few seconds to find its route; env-overridable, the same pattern
 // as URL()/KEY() above, so a test can shrink it rather than wait out a production-sized timeout.
-const FETCH_TIMEOUT_MS = () => Number(process.env.BLINK_FETCH_TIMEOUT_MS) || 25000;
+const FETCH_TIMEOUT_MS = () => {
+  const value = Number(process.env.BLINK_FETCH_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 25000) : 25000;
+};
 
 async function gql(query, variables, { auth = true } = {}) {
   if (auth && !KEY()) throw new Error('BLINK_API_KEY is not set');
@@ -82,7 +85,7 @@ module.exports = {
     const d = await gql('mutation ($input: LnInvoicePaymentInput!) { lnInvoicePaymentSend(input: $input) { status errors { message code } } }', { input });
     const r = d.lnInvoicePaymentSend || {};
     const error = r.errors && r.errors.length ? r.errors.map((e) => e.message).join('; ') : '';
-    return { status: r.status || (error ? 'FAILURE' : 'UNKNOWN'), error };
+    return { status: r.status || 'UNKNOWN', error };
   },
 
   /** Was this hash paid from our wallet: NONE | PENDING | SUCCESS | FAILURE, best attempt wins. */
@@ -90,8 +93,12 @@ module.exports = {
     const d = await gql(
       'query ($walletId: WalletId!, $hash: PaymentHash!) { me { defaultAccount { walletById(walletId: $walletId) { transactionsByPaymentHash(paymentHash: $hash) { status direction settlementAmount settlementFee createdAt } } } } }',
       { walletId: await walletId(), hash: paymentHash });
-    const txs = (((d.me || {}).defaultAccount || {}).walletById || {}).transactionsByPaymentHash || [];
-    const sends = txs.filter((t) => t.direction === 'SEND');
+    const txs = d.me?.defaultAccount?.walletById?.transactionsByPaymentHash;
+    if (!Array.isArray(txs)) return { status: 'UNKNOWN' };
+    const sends = txs.filter((t) => t && t.direction === 'SEND');
+    const uncertain = txs.some(t => !t || !['SEND', 'RECEIVE'].includes(t.direction))
+      || sends.some(t => !['SUCCESS', 'PENDING', 'FAILURE'].includes(t.status));
+    if (uncertain && !sends.some(t => ['SUCCESS', 'PENDING'].includes(t.status))) return { status: 'UNKNOWN' };
     if (!sends.length) return { status: 'NONE' };
     const rank = { SUCCESS: 3, PENDING: 2, FAILURE: 1 };
     const best = sends.reduce((m, t) => ((rank[t.status] || 0) > (rank[m.status] || 0) ? t : m));

@@ -197,10 +197,15 @@ async function checkStore() {
         written = true;
         const got = await s.get(key);
         if (got !== value) throw new Error('store did not return what was just written');
+        // Payment recovery requires Redis EVAL, not just ordinary GET/SET.
+        // Probe only this invocation's disposable key before reporting ready.
+        const updated = value + '-updated';
+        if (!(await s.compareSet(key, value, updated))) throw new Error('store did not accept an atomic update');
+        if (!(await s.compareDel(key, updated))) throw new Error('store did not accept an owned-key release');
       } finally {
         if (written) await s.del(key);
       }
-      return { ok: true, detail: 'read and wrote a probe key' };
+      return { ok: true, detail: 'read, wrote and atomically updated a probe key' };
     })(), CHECK_TIMEOUT_MS, 'store');
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
 }

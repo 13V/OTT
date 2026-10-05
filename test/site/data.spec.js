@@ -448,7 +448,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   // the past order's card repaints in place with its code, its QR and both fallbacks.
   await mine.getByRole('button', { name: 'Show my eSIM codes' }).click();
   await expect(pastCard.locator('.data-ac')).toHaveText('LPA:1$old.example$OLD');
-  await expect(pastCard.locator('img.data-qr')).toHaveAttribute('src', /qr-old\.png$/);
+  await expect(pastCard.locator('img.data-qr')).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(pastCard).toContainText('SM-DP+');
   await expect(pastCard).toContainText('smdp-old.example');
   await expect(pastCard).toContainText('OLD-MATCH');

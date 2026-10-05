@@ -140,8 +140,8 @@ async function main(argv = process.argv.slice(2)) {
   if (hasStore) deps.store = require('../site/api/_lib/store').store();
   if (opts.purchase) {
     process.env.LN_PAYER = 'blink';
-    // Guard + send must fit the provider's 45-second lease, including 5-second Redis calls.
-    // Five sequential Blink calls at 2 seconds leave time for the store reads/writes.
+    // Keep validation inside the provider's 20-second send-start window,
+    // including 5-second Redis calls. Its full lease lasts 120 seconds.
     process.env.BLINK_FETCH_TIMEOUT_MS = '2000';
     process.env.WHOLESALE_BASE_URL = 'https://nadanada.me/api/v2';
     const blink = require('../site/api/_lib/payers/blink');

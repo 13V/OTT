@@ -245,16 +245,17 @@ const RACER = '0x' + 'ace'.padStart(40, '0');
   // if a later write in the same race quietly papers back over it (as finish() being idempotent
   // would, if that were the only thing checked here).
   const RANK = { claiming: 0, invoiced: 1, paid: 2, done: 3, failed: 3 };
-  const rawSet = store().set.bind(store());
+  const rawCompareSet = store().compareSet.bind(store());
   const stepsWritten = [];
   let regression = null;
-  store().set = async (key, value, opts) => {
-    if (key === 'order:wf-race0001') {
+  store().compareSet = async (key, expected, value) => {
+    const applied = await rawCompareSet(key, expected, value);
+    if (applied && key === 'order:wf-race0001') {
       const prevStep = stepsWritten[stepsWritten.length - 1];
       if (prevStep !== undefined && RANK[value.step] < RANK[prevStep]) regression = { from: prevStep, to: value.step };
       stepsWritten.push(value.step);
     }
-    return rawSet(key, value, opts);
+    return applied;
   };
   const purchasesBeforeRace = purchases(), paidBeforeRace = mockPayer._state.log.length;
   let race1, race2;
@@ -265,14 +266,14 @@ const RACER = '0x' + 'ace'.padStart(40, '0');
     ]);
   } finally {
     mockPayer.pay = realPay;
-    store().set = rawSet;
+    store().compareSet = rawCompareSet;
   }
   check('both callers land on the identical done order', [race1.stage, race2.stage, race1.iccid === race2.iccid, race1.paymentHash === race2.paymentHash], ['done', 'done', true, true]);
   check('done, on the one pre-existing invoice, with no new purchase', [race1.stage, race2.stage, purchases() - purchasesBeforeRace], ['done', 'done', 0]);
   checkThat('exactly one payment reached the wallet — the other caller never even tried',
     mockPayer._state.log.length - paidBeforeRace === 1, JSON.stringify(mockPayer._state.log.slice(paidBeforeRace)));
   checkThat('no save ever stepped the record backwards (e.g. "done" regressed to "paid")',
-    !regression, JSON.stringify({ regression, stepsWritten }));
+    !regression && stepsWritten.includes('done'), JSON.stringify({ regression, stepsWritten }));
   const settled = await store().get('order:wf-race0001');
   check('the record left in the store is done, not regressed to paid or invoiced',
     [settled.step, settled.iccid, settled.iccid.length], ['done', race1.iccid, 19]);

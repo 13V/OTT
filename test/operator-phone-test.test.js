@@ -64,20 +64,23 @@ async function integration() {
       assert.equal(second.stage, 'invoiced');
       assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length, 1);
     });
-    await checkAsync('concurrent retries recheck a stale unpaid status inside the lease', async () => {
+    await checkAsync('concurrent retries preserve a pending payment despite stale empty history', async () => {
       const originalSent = mock.sent;
       let arrivals = 0, release;
       const bothRead = new Promise(resolve => { release = resolve; });
-      mock.sent = async () => {
-        arrivals++;
-        if (arrivals === 2) release();
-        await bothRead;
-        return { status: 'NONE' }; // Both pre-lease observations are deliberately stale.
+      mock.sent = async hash => {
+        const arrival = ++arrivals;
+        if (arrival <= 2) {
+          if (arrival === 2) release();
+          await bothRead;
+          return { status: 'NONE' }; // Both pre-lease observations are deliberately stale.
+        }
+        return originalSent(hash);
       };
       try {
         const results = await Promise.all([runTest(opts, deps), runTest(opts, deps)]);
         assert.ok(results.every(result => result.stage === 'invoiced'));
-        assert.equal(arrivals, 2);
+        assert.equal((await deps.store.get('order:operator-' + opts.runId)).paymentState, 'pending');
         assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length, 1);
       } finally { mock.sent = originalSent; }
     });

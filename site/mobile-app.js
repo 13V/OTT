@@ -137,10 +137,11 @@
     const smdp = String(sim.smdpAddress || (parts && parts[1]) || '');
     const matching = String(sim.matchingId || (parts && parts[2]) || '');
     let qr = '';
-    if (sim.qrCodeUrl && (/^data:image\/(png|jpeg|webp|svg\+xml)[;,]/i.test(sim.qrCodeUrl) || safeUrl(sim.qrCodeUrl))) qr = sim.qrCodeUrl;
-    if (!qr && ac && window.WhateverQr) {
+    if (ac && window.WhateverQr) {
       try { qr = window.WhateverQr.svg(ac); } catch { /* Manual fields still work when a QR cannot be drawn. */ }
     }
+    // Draw supplied activation details here first, without requesting a remote QR image.
+    if (!qr && sim.qrCodeUrl && (/^data:image\/(png|jpeg|webp|svg\+xml)[;,]/i.test(sim.qrCodeUrl) || safeUrl(sim.qrCodeUrl))) qr = sim.qrCodeUrl;
     function copyField(label, value) {
       const copy = action(h, 'Copy ' + label, async () => {
         if (!ctx.isCurrent() || !sheet.isConnected) return;
@@ -179,6 +180,7 @@
         panel = h('div', { class: 'om-install-step' }, h('h3', { tabindex: '-1' }, 'Choose it for mobile data'),
           h('p', {}, 'After your phone finishes installation, turn on this eSIM in its SIM settings and select it for mobile data. Follow the provider’s instructions if this data line needs roaming.'),
           h('p', {}, 'Use it within the package’s coverage. Your regular number can remain on your usual line.'),
+          h('p', {}, 'To check the connection, turn Wi-Fi off and open a webpage with this eSIM selected for mobile data. Loading the page confirms the data line is working.'),
           h('p', { class: 'om-inline-note' }, 'OTT can’t detect whether your phone has finished installation or connected. Check your phone’s SIM settings.'),
           h('a', { class: 'om-text-link', href: iphone ? 'https://support.apple.com/en-au/118669' : 'https://support.google.com/pixelphone/answer/16115470?hl=en', target: '_blank', rel: 'noopener noreferrer' }, os + ' setup support ↗'));
       }
@@ -224,9 +226,13 @@
       kit: ['app/app-kit-world', 'The OTT holder and his dog checking a phone beside his backpack and map.'],
       travel: ['ott/coverage-airport-world', 'The OTT holder looking up at a clay airport departures board.'],
     };
-    const [name, alt] = scenes[kind] || scenes.home;
+    const [name, alt] = kind === 'home' && !screenClass
+      ? ['ott/hero-touch-grass', 'The OTT holder and his dog on a handmade clay grass island, checking his phone.']
+      : scenes[kind] || scenes.home;
     return h('div', { class: 'om-world om-world-' + (screenClass || (kind === 'japan' ? 'plans' : kind)) },
-      h('img', { class: 'om-world-art', src: './assets/' + name + '.webp', alt, width: 1536, height: 1024, decoding: 'async', fetchpriority: 'high' }));
+      h('img', { class: 'om-world-art', src: './assets/' + name + '.webp', alt,
+        width: kind === 'home' && !screenClass ? 1122 : 1536, height: kind === 'home' && !screenClass ? 1402 : 1024,
+        decoding: 'async', fetchpriority: 'high' }));
   }
 
   function home(h, ctx, cfg) {
@@ -236,10 +242,10 @@
       : active ? action(h, [account ? 'View My data' : 'Connect wallet', icon('arrow')], event => account ? go('esims') : wallet(ctx, event.currentTarget))
         : action(h, ['Try the app preview', icon('arrow')], () => enterPreview(ctx));
     const content = h('div', { class: 'om-pass-content' }, chip(h),
-        h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'DATA FOR OTT HOLDERS'),
+        h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
-          : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Your next connection.'),
-        h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.' : active ? 'Check your weekly credit and eSIMs.' : 'Weekly data credit for eligible holders. At home or abroad.'),
+          : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
+        h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.' : active ? 'Check your weekly credit and eSIMs.' : 'Choose a plan and explore eSIM setup with a sample account.'),
         h('div', { class: 'om-pass-action' }, primary));
     const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : 'Weekly credit', 'aria-live': 'polite' }, content);
     const realAccount = !preview && active && account;
@@ -284,13 +290,27 @@
         h('span', {}, preview ? first.name + ' · ' + first.gb + ' GB package' : 'For everyday life or your next trip.')), icon('arrow')],
     () => go(preview ? 'esims' : 'plans'), 'om-connection-row');
     connection.setAttribute('aria-label', preview ? 'View sample eSIMs' : 'Find a data plan');
+    const introAction = preview || (active && !account)
+      ? h('a', { class: 'om-button', href: '#/app/plans' }, 'Browse plans ', icon('arrow'))
+      : action(h, [account ? 'Wallet settings' : 'Connect wallet', icon('arrow')],
+        event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget));
+    const intro = h('div', { class: 'om-home-intro' },
+      h('p', { class: 'om-home-eyebrow' }, 'OT+T / YOUR DATA'),
+      h('h1', {}, 'Touch grass.', h('br', {}), 'Stay online.'),
+      h('p', { class: 'om-home-lede' }, 'Check your credit. Pick a data plan.', h('br', {}), 'Set up your eSIM.'),
+      h('div', { class: 'om-home-actions' }, introAction,
+        h('a', { class: 'om-text-link', href: preview || (active && !account) ? '#/app/help' : '#/app/plans' },
+          preview || (active && !account) ? 'How to get online' : 'Browse plans', icon('arrow'))),
+      h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
+        : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your wallet is your account. Connect to see your data.'
+          : 'Explore now. Weekly credit starts when OTT launches.'));
     const result = h('div', { class: 'om-home-grid' },
-      h('div', { class: 'om-home-feature' }, world(h, 'home'), credit),
+      h('div', { class: 'om-home-feature' + (realAccount ? ' om-home-account' : preview ? ' om-home-preview' : '') }, intro,
+        h('div', { class: 'om-home-visual' }, world(h, 'home'), credit)),
       h('div', { class: 'om-home-tools' }, connection,
         !preview && (!active || account) ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
-            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Connect to view your data when OTT launches.')),
-          action(h, account ? 'Wallet settings' : 'Connect wallet', event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-secondary-button')) : null,
+            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Connect to view your data when OTT launches.'))) : null,
         realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
         h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))));
     return result;
@@ -441,12 +461,12 @@
         ['Get connected first', 'Use Wi-Fi or your existing mobile connection. Your iPhone must support eSIMs and be unlocked.'],
         ['Open your eSIM in OTT', 'After redeeming, open eSIMs and reveal your installation details with your wallet.'],
         ['Add the eSIM', 'If an iPhone install link is provided, open it and follow Apple’s prompts. On iOS 17.4 or later, you can also press and hold the QR code in Safari and choose Add eSIM.'],
-        ['Choose your data line', 'In Settings, open Cellular or Mobile Data and choose the new eSIM for mobile data. Keep your existing line for calls and texts. Follow the provider’s roaming instructions.'],
+        ['Choose your data line', 'In Settings, open Cellular or Mobile Data and choose the new eSIM for mobile data. Keep your existing line for calls and texts. Follow the provider’s roaming instructions. Within coverage, turn Wi-Fi off and load a webpage to check the new connection.'],
       ] : [
         ['Get connected first', 'Use Wi-Fi or your existing mobile connection. Check that your phone supports eSIMs and is unlocked.'],
         ['Open your eSIM in OTT', 'After redeeming, open eSIMs and reveal your installation details with your wallet.'],
         ['Add the eSIM in Settings', 'On Pixel, go to Network & internet, SIMs, Add SIM, then Set up an eSIM. On other Android phones, look for Add eSIM in SIM settings. Use the provider link where supported, scan the QR from another screen, or enter the manual details.'],
-        ['Choose your data line', 'Select the new eSIM for mobile data. Keep your existing line for calls and texts. Follow the provider’s roaming instructions.'],
+        ['Choose your data line', 'Select the new eSIM for mobile data. Keep your existing line for calls and texts. Follow the provider’s roaming instructions. Within coverage, turn Wi-Fi off and load a webpage to check the new connection.'],
       ];
       const step = Math.min(helpStep, steps.length - 1);
       const progress = h('div', { class: 'om-step-progress', role: 'group', 'aria-label': 'Setup steps' }, steps.map(([title], index) => {
@@ -538,10 +558,11 @@
       class: name === screen ? 'is-active' : '', 'aria-current': name === screen ? 'page' : null,
     }, icon(name), h('span', {}, LABELS[name]))), h('a', { class: 'om-website-link', href: '#/' }, 'Visit the website ↗'));
     const body = h('div', { class: 'om-body' });
-    const heading = h('div', { class: 'om-heading' }, h('h1', {}, screen === 'home' ? ['Touch grass.', h('br', {}), 'Stay online.']
-      : { plans: 'Where’s next?', esims: 'Your connection kit.', help: 'Let’s get you online.' }[screen]));
+    const heading = screen === 'home' ? null : h('div', { class: 'om-heading' },
+      h('p', { class: 'om-home-eyebrow' }, 'OT+T / ' + LABELS[screen].toUpperCase()),
+      h('h1', {}, { plans: 'Where’s next?', esims: 'Your connection kit.', help: 'Let’s get you online.' }[screen]));
     const contents = h('div', { class: 'om-content' }, h('p', { class: 'om-loading', role: 'status' }, 'Loading OTT…'));
-    shell.append(header, nav, body); body.append(heading, contents); view.appendChild(shell);
+    shell.append(header, nav, body); if (heading) body.append(heading); body.append(contents); view.appendChild(shell);
     window.OTTPwa?.register?.();
     let cfg = null;
     const controller = new AbortController();

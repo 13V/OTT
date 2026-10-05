@@ -109,6 +109,31 @@ test('unavailable or mismatched API responses never borrow a balance from the pu
   await expect(page.locator('.om-balance')).toHaveCount(0);
 });
 
+test('an unfunded wallet sees zero credit and can browse plans without a signature or order', async ({ page }) => {
+  await accountFixture(page);
+  await page.setViewportSize({ width: 360, height: 800 });
+  const requests = [];
+  await page.route('**/api/redeem**', route => {
+    requests.push(route.request().method());
+    return route.fulfill(json({ ...STANDING, tokens: '0', share: 0, allowanceUsd: 0, redeemedUsd: 0,
+      remainingUsd: 0, orders: [], history: [], sims: [] }));
+  });
+  await page.goto('/#/app');
+  await expect(page.locator('.om-balance')).toHaveText('$0.00');
+  await expect(page.locator('.om-credit-card')).not.toContainText('Sample');
+  await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
+  await expect(page.locator('.data-mine')).toContainText('This wallet holds no OTT, so it has no data this week.');
+  await expect(page.getByRole('button', { name: /^Redeem / })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Show my eSIM codes', exact: true })).toHaveCount(0);
+  await expect(page.locator('.data-qr')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click();
+  await page.getByRole('button', { name: 'Review package', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('Your wallet will confirm the exact package before a real redemption.');
+  expect(await page.evaluate(() => window.fixtureWalletMethods)).toEqual(['eth_accounts']);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every(method => method === 'GET')).toBe(true);
+});
+
 test('WalletConnect reaches real account reads and rejects private codes returned after disconnect', async ({ page }) => {
   await accountFixture(page, { remote: true });
   let releaseCodes;

@@ -58,6 +58,15 @@ function stubNetwork(page, opts = {}) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
   });
 
+  // Deployment settings can enable a real wallet relay and remote API. A fixture must choose
+  // its own transport and backend instead of inheriting those settings from the checkout.
+  // Specs testing remote connections register their explicit config after stubNetwork.
+  page.route('**/config/app.json', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ walletConnect: { projectId: '' }, apiBaseUrl: '' }),
+  }));
+
   return seen;
 }
 

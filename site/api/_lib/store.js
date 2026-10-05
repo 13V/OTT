@@ -7,9 +7,10 @@
  * an order is a Lightning invoice, a payment, and a completion call, and nothing on their side
  * says which wallet any of it belonged to. So the redeem function keeps that record itself, in a
  * Redis it reaches over HTTPS (Upstash, which Vercel's marketplace provisions and configures with
- * the KV_REST_API_URL / KV_REST_API_TOKEN pair this file reads). Four commands are all it needs:
+ * the KV_REST_API_URL / KV_REST_API_TOKEN pair this file reads). The ordinary commands it needs are
  * GET, SET (with NX, which is what makes a transactionId claimable exactly once across function
- * instances), ZADD and ZRANGEBYSCORE for a recent-orders index the treasury monitor reads.
+ * instances), DEL, ZADD and ZRANGEBYSCORE for a recent-orders index the treasury monitor reads.
+ * EVAL provides atomic comparisons when advancing an order or taking over/releasing a lease.
  *
  * The in-memory store behind STORE=memory is for tests and for a keyless deploy with the mock
  * provider. It forgets on every cold start, which is why the wholesale provider will not run on it
@@ -18,6 +19,17 @@
 const FETCH_TIMEOUT_MS = 5000;
 const { isProduction } = require('./request-origin');
 const PREFIX = () => process.env.STORE_PREFIX || 'wf:';
+// Compare and mutate in one Redis operation. A separate GET followed by SET/DEL
+// can overwrite a newer order or release another caller's payment lease.
+const COMPARE_SET = `local current = redis.call('GET', KEYS[1])
+if (ARGV[1] == 'missing' and not current) or (ARGV[1] == 'value' and current == ARGV[2]) then
+  redis.call('SET', KEYS[1], ARGV[3]); return 1
+end
+return 0`;
+const COMPARE_DEL = `if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0`;
 
 function memoryStore() {
   const kv = new Map();
@@ -31,6 +43,15 @@ function memoryStore() {
       return true;
     },
     async del(key) { kv.delete(key); },
+    async compareSet(key, expected, value) {
+      if (expected === null ? kv.has(key) : kv.get(key) !== JSON.stringify(expected)) return false;
+      kv.set(key, JSON.stringify(value));
+      return true;
+    },
+    async compareDel(key, expected) {
+      if (kv.get(key) !== JSON.stringify(expected)) return false;
+      return kv.delete(key);
+    },
     async zadd(set, score, member) {
       if (!zs.has(set)) zs.set(set, new Map());
       zs.get(set).set(member, Number(score));
@@ -74,6 +95,13 @@ function restStore({ url, token }) {
       return (await cmd(args)) === 'OK';
     },
     async del(key) { await cmd(['DEL', key]); },
+    async compareSet(key, expected, value) {
+      return Number(await cmd(['EVAL', COMPARE_SET, '1', key, expected === null ? 'missing' : 'value',
+        expected === null ? '' : JSON.stringify(expected), JSON.stringify(value)])) === 1;
+    },
+    async compareDel(key, expected) {
+      return Number(await cmd(['EVAL', COMPARE_DEL, '1', key, JSON.stringify(expected)])) === 1;
+    },
     async zadd(set, score, member) { await cmd(['ZADD', set, String(score), member]); },
     async zrange(set, min, max, { limit = 1000 } = {}) {
       return (await cmd(['ZRANGEBYSCORE', set, String(min), String(max), 'LIMIT', '0', String(limit)])) || [];
@@ -90,6 +118,8 @@ function prefixed(inner) {
     get: (k) => inner.get(p(k)),
     set: (k, v, o) => inner.set(p(k), v, o),
     del: (k) => inner.del(p(k)),
+    compareSet: (k, expected, v) => inner.compareSet(p(k), expected, v),
+    compareDel: (k, expected) => inner.compareDel(p(k), expected),
     zadd: (s, score, m) => inner.zadd(p(s), score, m),
     zrange: (s, min, max, o) => inner.zrange(p(s), min, max, o),
     _reset: () => (inner._reset ? inner._reset() : undefined),
@@ -97,6 +127,7 @@ function prefixed(inner) {
 }
 
 let cached = null;
+let cachedToken = '';
 
 /**
  * The configured store. Read per call so a test can switch it; cached per URL so a warm function
@@ -118,7 +149,10 @@ function store() {
   const url = process.env.STORE_URL || process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '';
   const token = process.env.STORE_TOKEN || process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '';
   if (!url || !token) throw new Error('no store configured: set KV_REST_API_URL and KV_REST_API_TOKEN (Upstash Redis), or STORE=memory for a demo');
-  if (!cached || cached.name !== 'upstash' || cached.url !== String(url).replace(/\/$/, '')) cached = prefixed(restStore({ url, token }));
+  if (!cached || cached.name !== 'upstash' || cached.url !== String(url).replace(/\/$/, '') || cachedToken !== token) {
+    cached = prefixed(restStore({ url, token }));
+    cachedToken = token;
+  }
   return cached;
 }
 

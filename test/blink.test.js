@@ -122,7 +122,7 @@ async function main() {
   check('an insufficient-balance failure reads like any other refusal, not a crash', await payer.pay({ paymentRequest: 'lnfake1broke' }), { status: 'FAILURE', error: 'Payment amount exceeds wallet balance' });
 
   fake.state.payHandler = () => ({ status: null, errors: [{ message: 'first problem' }, { message: 'second problem' }] });
-  check('several errors join with "; ", and a null status still reads as FAILURE since there is an error to show', await payer.pay({ paymentRequest: 'lnfake1multi' }), { status: 'FAILURE', error: 'first problem; second problem' });
+  check('several errors join with "; ", while a missing status remains UNKNOWN', await payer.pay({ paymentRequest: 'lnfake1multi' }), { status: 'UNKNOWN', error: 'first problem; second problem' });
 
   fake.state.payHandler = () => ({ status: null, errors: [] });
   check('a null status with nothing else to go on is UNKNOWN — not a crash, and not a false FAILURE', await payer.pay({ paymentRequest: 'lnfake1blank' }), { status: 'UNKNOWN', error: '' });
@@ -176,6 +176,19 @@ async function main() {
   check('an inbound transaction on the hash does not count as us having paid it', await payer.sent(hReceiveOnly), { status: 'NONE' });
   fake.addSend(hReceiveOnly, { status: 'PENDING', direction: 'SEND', settlementAmount: -500, settlementFee: 0 });
   check('once a real SEND shows up on the same hash, that is the one that counts', await payer.sent(hReceiveOnly), { status: 'PENDING', sats: 500, feeSats: 0 });
+
+  fake.state.forceBody = JSON.stringify({ data: {} });
+  check('missing payment history is UNKNOWN rather than an empty unpaid history', await payer.sent(hUnknown), { status: 'UNKNOWN' });
+  fake.state.forceBody = JSON.stringify({ data: { me: { defaultAccount: { walletById: { transactionsByPaymentHash: null } } } } });
+  check('null payment history cannot permit a retry', await payer.sent(hUnknown), { status: 'UNKNOWN' });
+  const hFuture = hash('future-send-status');
+  fake.addSend(hFuture, { status: 'SOME_FUTURE_STATUS', settlementAmount: -500, settlementFee: 0 });
+  fake.addSend(hFuture, { status: 'FAILURE', settlementAmount: 0, settlementFee: 0 });
+  check('an unknown send outcome is not hidden by a known failed attempt', await payer.sent(hFuture), { status: 'UNKNOWN' });
+  fake.addSend(hFuture, { status: 'SUCCESS', settlementAmount: -500, settlementFee: -5 });
+  check('a proven successful send still prevents duplicate payment despite an unknown attempt', await payer.sent(hFuture), { status: 'SUCCESS', sats: 500, feeSats: 5 });
+  fake.state.forceBody = JSON.stringify({ data: { me: { defaultAccount: { walletById: { transactionsByPaymentHash: [null] } } } } });
+  check('malformed transaction entries cannot look unpaid', await payer.sent(hUnknown), { status: 'UNKNOWN' });
 
   console.log('\nreceived() — public, no key, and the fix for the shape found live on 16 Sep 2026');
   const rPaid = hash('recv-paid'), rPending = hash('recv-pending'), rExpired = hash('recv-expired'), rUnknown = hash('recv-unknown');

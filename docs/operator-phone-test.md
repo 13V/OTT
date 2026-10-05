@@ -73,7 +73,14 @@ The operator CLI pins each Blink request to a two-second timeout so the extra va
 and send fit inside the supplier adapter's payment lease. A slow or ambiguous response requires
 resuming the same run and checking its payment status; it is not permission for another purchase.
 Immediately before sending, it verifies the stored lease still belongs to this caller and is
-younger than 20 seconds, leaving time for payment and persistence before the 45-second expiry.
+younger than 20 seconds, leaving time for payment and persistence before the 120-second expiry.
+The public adapter independently rechecks payment status inside the same lease and uses atomic
+Redis comparisons when taking over or releasing it and advancing or replacing an order. A
+missing supplier checkout never erases a paid, pending or uncertain wallet payment.
+The adapter records a durable send reservation before calling the wallet. A lost response, crash
+or delayed empty wallet history keeps that reservation and the original checkout. It does not
+release holder credit or authorize another send. An ambiguous reservation needs payment-state
+review; only a confirmed settlement or the exact send's explicit failure resolves it automatically.
 
 The run ID is bound to its package, catalogue price and cap. Reuse the **same** ID and settings
 after an interruption. A failed record with an invoice requires payment-state review before a

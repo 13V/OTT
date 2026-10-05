@@ -79,6 +79,10 @@ A Lightning balance is not needed to deploy the API, verify the provider catalog
 
 The prelaunch report explicitly defers token launch, wallet funding/payment validation, funded holder allocations and installation on a real phone. A passing prelaunch report does not allow live redemption. Keep the public `coin`, `curve` and `treasury` fields empty until the actual token launches.
 
+The storage status probe also checks the atomic Redis comparisons used to recover payment leases
+and advance orders safely. A connection that accepts ordinary reads and writes but refuses these
+`EVAL` operations cannot pass readiness. The probe uses only its own disposable key.
+
 ## Hosted configuration
 
 Deploy this repository to a Node host that supports a persistent HTTP process, or retain the existing serverless handlers on a compatible host. For the portable server, the start command is:

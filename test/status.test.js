@@ -217,7 +217,7 @@ async function main() {
 
   console.log('\nconcurrent health checks own separate throwaway store keys');
   const probeStore = require(path.join(API, '_lib', 'store.js')).store();
-  const probeSet = probeStore.set, probeGet = probeStore.get, probeDel = probeStore.del;
+  const probeSet = probeStore.set, probeGet = probeStore.get, probeDel = probeStore.del, probeCompareSet = probeStore.compareSet;
   const probesWritten = [], probesDeleted = [];
   probeStore.set = async (key, value, opts) => {
     probesWritten.push(key);
@@ -238,7 +238,14 @@ async function main() {
     check('an interrupted probe marks the store unavailable', r.body.ready.store, false);
     check('the interrupted probe still cleans up its owned key', probesDeleted, probesWritten);
     check('its scratch value was removed', await probeGet(probesWritten[0]), null);
-  } finally { probeStore.set = probeSet; probeStore.get = probeGet; probeStore.del = probeDel; }
+    probeStore.get = probeGet;
+    probesWritten.length = 0; probesDeleted.length = 0;
+    probeStore.compareSet = async () => { throw new Error('atomic updates unavailable'); };
+    r = await GET();
+    check('ordinary GET/SET without atomic comparisons cannot report a ready store', r.body.ready.store, false);
+    check('an unsupported atomic probe still cleans up its owned key', probesDeleted, probesWritten);
+    check('the unsupported atomic probe leaves no scratch value', await probeGet(probesWritten[0]), null);
+  } finally { probeStore.set = probeSet; probeStore.get = probeGet; probeStore.del = probeDel; probeStore.compareSet = probeCompareSet; }
 
   console.log('\nHTTP 200 is not proof that the provider has a usable catalogue');
   const invalidCatalogues = [
@@ -327,11 +334,23 @@ async function main() {
   process.env.REDEMPTIONS_ENABLED = '1';
   global.fetch = async (url, opts = {}) => {
     if (url === process.env.STORE_URL) {
-      const [command, key, value] = JSON.parse(opts.body);
+      const [command, key, value, ...rest] = JSON.parse(opts.body);
       let result = null;
       if (command === 'SET') { restValues.set(key, value); result = 'OK'; }
       else if (command === 'GET') result = restValues.get(key) || null;
       else if (command === 'DEL') result = Number(restValues.delete(key));
+      else if (command === 'EVAL') {
+        const [script, actualKey, ...argv] = [key, ...rest];
+        if (script.includes("redis.call('SET'")) {
+          const matches = argv[0] === 'missing' ? !restValues.has(actualKey) : restValues.get(actualKey) === argv[1];
+          if (matches) restValues.set(actualKey, argv[2]);
+          result = Number(matches);
+        } else if (script.includes("redis.call('DEL'")) {
+          const matches = restValues.get(actualKey) === argv[0];
+          if (matches) restValues.delete(actualKey);
+          result = Number(matches);
+        }
+      }
       return { ok: true, status: 200, json: async () => ({ result }) };
     }
     if (url === process.env.BLINK_API_URL) {

@@ -1118,12 +1118,12 @@
       setTimeout(() => { copy.textContent = 'Copy'; }, 1800);
     } }, 'Copy');
 
-    // nadanada usually sends a picture of the QR; when it does not, the activation code alone is
-    // enough to draw the same one here — a phone only ever reads the code, never the provider's PNG.
-    let qrSrc = safeInstallImage(sim.qrCodeUrl);
-    if (!qrSrc && activation && window.WhateverQr) {
+    // Prefer encoding the supplied activation code here. No remote image request is needed.
+    let qrSrc = '';
+    if (activation && window.WhateverQr) {
       try { qrSrc = window.WhateverQr.svg(activation); } catch (e) { qrSrc = ''; }
     }
+    if (!qrSrc) qrSrc = safeInstallImage(sim.qrCodeUrl);
     const appleInstallUrl = safeInstallHref(sim.appleInstallUrl);
     const androidInstallUrl = safeInstallHref(sim.androidInstallUrl);
     const install = [

@@ -109,6 +109,43 @@ test('missing mobile wallet opens an honest handoff instead of pretending to con
   await expect(page.getByRole('button', { name: 'Connect wallet', exact: true })).toBeFocused();
 });
 
+test('declining a wallet connection leaves the app usable and a later connection never asks for a signature', async ({ page }) => {
+  stubNetwork(page);
+  const address = '0x4444444444444444444444444444444444444444';
+  const writes = [];
+  page.on('request', request => { if (request.method() !== 'GET' && new URL(request.url()).pathname.includes('/api/')) writes.push(request.url()); });
+  await page.addInitScript(address => {
+    window.fixtureConnectionMethods = [];
+    window.declineFixtureConnection = true;
+    window.ethereum = { request: async ({ method }) => {
+      window.fixtureConnectionMethods.push(method);
+      if (method === 'eth_accounts') return [];
+      if (method === 'eth_chainId') return '0x1237';
+      if (method === 'eth_requestAccounts') {
+        if (window.declineFixtureConnection) throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
+        return [address];
+      }
+      throw new Error('A prelaunch connection must not request a signature');
+    } };
+  }, address);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto('/#/app');
+  const connect = page.getByRole('button', { name: 'Connect wallet', exact: true });
+  await connect.click();
+  await expect(page.locator('#toasts')).toContainText('Could not connect');
+  await expect(page.locator('#toasts')).toContainText('User rejected the request.');
+  await expect(connect).toBeEnabled();
+  expect(await page.evaluate(() => window.OTT_STATE.account)).toBeNull();
+  await page.evaluate(() => { window.declineFixtureConnection = false; });
+  await connect.click();
+  await expect(page.getByRole('button', { name: 'Wallet settings', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(address);
+  expect(await page.evaluate(() => window.fixtureConnectionMethods)).toEqual(['eth_accounts', 'eth_requestAccounts', 'eth_requestAccounts', 'eth_chainId']);
+  expect(writes).toEqual([]);
+  await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Review package', exact: true })).toBeEnabled();
+});
+
 test('browser back dismisses package review and returns to the previous app screen', async ({ page }) => {
   stubNetwork(page);
   await page.goto('/#/app');
@@ -235,4 +272,75 @@ test('Home and Plans put their primary action within the first phone screen', as
   await homeAction.click();
   await expect(page.locator('.om-status-pill')).not.toHaveText('Loading');
   await actionIsOnScreen(page.getByRole('button', { name: 'Review package', exact: true }));
+});
+
+test('the last screen control clears fixed bottom navigation on small phones', async ({ page }) => {
+  stubNetwork(page);
+  for (const viewport of [{ width: 320, height: 568 }, { width: 360, height: 640 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    for (const screen of ['', '/plans', '/esims', '/help']) {
+      await page.goto('/#/app' + screen);
+      await expect(page.locator('.om-status-pill')).not.toHaveText('Loading');
+      await page.evaluate(() => document.fonts.ready);
+      const lastControl = page.locator('.om-content').locator('a:visible, button:visible, summary:visible').last();
+      await lastControl.focus();
+      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+      const control = await lastControl.boundingBox();
+      const nav = await page.getByRole('navigation', { name: 'App navigation' }).boundingBox();
+      expect(control).not.toBeNull();
+      expect(nav).not.toBeNull();
+      expect(control.y).toBeGreaterThanOrEqual(0);
+      expect(control.y + control.height).toBeLessThanOrEqual(nav.y);
+      expect(await lastControl.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return element === hit || element.contains(hit);
+      })).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+});
+
+test('desktop app fills wide viewports, keeps the home title on two lines, and exposes clickable header navigation', async ({ page }) => {
+  stubNetwork(page);
+  for (const width of [1440, 2549]) {
+    await page.setViewportSize({ width, height: 1080 });
+    await page.goto('/#/app');
+    await expect(page.locator('.om-status-pill')).not.toHaveText('Loading');
+    await page.evaluate(() => document.fonts.ready);
+    const shell = await page.locator('.om-shell').boundingBox();
+    expect(shell.width).toBeGreaterThanOrEqual(width * 0.95);
+    const textLines = await page.locator('.om-home-intro h1').evaluate(heading => {
+      const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+      const positions = new Set();
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects()) if (rect.height > 0) positions.add(Math.round(rect.top));
+      }
+      return positions.size;
+    });
+    expect(textLines).toBe(2);
+    const hitTest = async link => {
+      await page.evaluate(() => scrollTo(0, 0));
+      expect(await link.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return element === hit || element.contains(hit);
+      })).toBe(true);
+    };
+    for (const [label, screen] of [['Plans', '/plans'], ['eSIMs', '/esims'], ['Help', '/help'], ['Home', '']]) {
+      const link = page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: label, exact: true });
+      await hitTest(link);
+      await link.click();
+      await expect(page).toHaveURL(new RegExp('#/app' + screen + '$'));
+      await expect(link).toHaveAttribute('aria-current', 'page');
+    }
+    const website = page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Visit the website ↗', exact: true });
+    await hitTest(website);
+    await website.click();
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(page.locator('#masthead')).toBeVisible();
+  }
 });

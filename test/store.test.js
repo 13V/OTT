@@ -44,6 +44,21 @@ const server = http.createServer((req, res) => {
       fake.kv.set(a[0], a[1]); return reply(200, { result: 'OK' });
     }
     if (cmd === 'DEL') { const had = fake.kv.delete(a[0]); return reply(200, { result: had ? 1 : 0 }); }
+    if (cmd === 'EVAL') {
+      const [script, count, key, ...argv] = a;
+      if (count !== '1') return reply(400, { error: 'one key required' });
+      if (script.includes("redis.call('SET'")) {
+        const matches = argv[0] === 'missing' ? !fake.kv.has(key) : fake.kv.get(key) === argv[1];
+        if (matches) fake.kv.set(key, argv[2]);
+        return reply(200, { result: matches ? 1 : 0 });
+      }
+      if (script.includes("redis.call('DEL'")) {
+        const matches = fake.kv.get(key) === argv[0];
+        if (matches) fake.kv.delete(key);
+        return reply(200, { result: matches ? 1 : 0 });
+      }
+      return reply(400, { error: 'unsupported script' });
+    }
     if (cmd === 'ZADD') { if (!fake.zs.has(a[0])) fake.zs.set(a[0], new Map()); fake.zs.get(a[0]).set(a[2], Number(a[1])); return reply(200, { result: 1 }); }
     if (cmd === 'ZRANGEBYSCORE') {
       const z = fake.zs.get(a[0]) || new Map();
@@ -71,6 +86,17 @@ async function exercise(store, label) {
   check('and by limit', await store.zrange('orders:recent', 0, 1000, { limit: 2 }), ['a', 'b']);
   await store.del('order:wf-1');
   check('DEL removes', await store.get('order:wf-1'), null);
+  check('atomic compareSet can create only a missing key', await store.compareSet('lease', null, rec), true);
+  check('atomic compareSet cannot replace an occupied key as missing', await store.compareSet('lease', null, { changed: true }), false);
+  const replacement = { ...rec, attempt: 'replacement' };
+  const other = { attempt: 'other' };
+  const contenders = await Promise.all([store.compareSet('lease', rec, replacement), store.compareSet('lease', rec, other)]);
+  const winner = contenders[0] ? replacement : other;
+  check('two stale lease contenders have exactly one winner', contenders.filter(Boolean).length, 1);
+  check('obsolete owner cannot delete a replacement lease', await store.compareDel('lease', rec), false);
+  check('replacement remains intact', await store.get('lease'), winner);
+  check('current owner can release its own lease', await store.compareDel('lease', winner), true);
+  check('released lease is missing', await store.get('lease'), null);
 }
 
 (async () => {
@@ -92,16 +118,14 @@ async function exercise(store, label) {
   process.env.STORE_PREFIX = 'test:';
   check('Vercel\'s KV_REST_API_* pair gives the REST store', S.store().name, 'upstash');
   await exercise(S.store(), 'over Upstash REST');
-  check('every key the server saw wore the prefix', fake.log.every((a) => String(a[1]).startsWith('test:')), true);
+  check('every key the server saw wore the prefix', fake.log.every((a) => String(a[a[0] === 'EVAL' ? 3 : 1]).startsWith('test:')), true);
+  check('conditional mutations use one-key EVAL over the REST adapter', fake.log.some(a => a[0] === 'EVAL' && a[2] === '1'), true);
   check('SET NX went over the wire as NX', fake.log.some((a) => a[0] === 'SET' && a[3] === 'NX'), true);
   check('ZRANGEBYSCORE went with a LIMIT', fake.log.some((a) => a[0] === 'ZRANGEBYSCORE' && a[4] === 'LIMIT'), true);
 
   console.log('\nrefusals');
   process.env.KV_REST_API_TOKEN = 'wrong';
-  process.env.KV_REST_API_URL = base;   // a different normalised url is the same; force a rebuild via prefix of url change
-  process.env.STORE_URL = base + '//';   // STORE_URL wins and differs -> a fresh client with the wrong token
-  await rejects('a bad token is an error naming the status', S.store().get('x'), /HTTP 401/);
-  delete process.env.STORE_URL;
+  await rejects('a rotated token rebuilds the client at the same URL', S.store().get('x'), /HTTP 401/);
   process.env.KV_REST_API_TOKEN = TOKEN;
 
   server.close();

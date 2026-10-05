@@ -40,6 +40,7 @@ async function setupFixture(page, { order = ORDER, prelaunch = false } = {}) {
         if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [address];
         if (method === 'eth_chainId') return '0x1237';
         if (method === 'personal_sign') {
+          if (window.rejectSetupSignature) throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
           if (window.deferSetupSignature) return new Promise(resolve => { window.finishSetupSignature = () => resolve('0xfixture-setup-signature'); });
           return '0xfixture-setup-signature';
         }
@@ -114,6 +115,20 @@ test('manual setup parses the supplied LPA string without inventing an install l
   await expect(sheet).toContainText('SETUP-CODE');
   await sheet.getByRole('button', { name: 'Copy Activation code', exact: true }).click();
   expect(await page.evaluate(() => window.fixtureSetupCopies)).toEqual(['SETUP-CODE']);
+});
+
+test('supplied activation strings generate local QR codes for the card and phone guide without requesting a provider image', async ({ page }) => {
+  const remoteQR = 'https://qr.fixture.example/activation.svg?profile=fixture-only';
+  await setupFixture(page, { order: { ...ORDER, qrCodeUrl: remoteQR } });
+  const remoteRequests = [];
+  page.on('request', request => { if (request.url().startsWith('https://qr.fixture.example/')) remoteRequests.push(request.url()); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await reveal(page);
+  await expect(page.locator('.data-qr')).toHaveAttribute('src', /^data:image\/svg\+xml/);
+  const sheet = await openSetup(page);
+  await sheet.getByRole('button', { name: 'Next step', exact: true }).click();
+  await expect(sheet.getByRole('img', { name: 'Installation QR code for United States', exact: true })).toHaveAttribute('src', /^data:image\/svg\+xml/);
+  expect(remoteRequests).toEqual([]);
 });
 
 test('a signed profile with only a manual LPA code still supports guided setup', async ({ page }) => {
@@ -317,4 +332,69 @@ test('a closed redemption gate reports no order while signed installation reads 
   expect(posts.filter(body => body.packageCode)).toHaveLength(1);
   expect(posts.filter(body => !body.packageCode)).toHaveLength(1);
   await expect(page.locator('.data-order-progress')).not.toContainText('Setup details available');
+});
+
+test('declining an order restores the picker and a deliberate retry issues only the approved package', async ({ page }) => {
+  await setupFixture(page);
+  const orders = [];
+  await page.route('**/api/redeem**', route => {
+    const request = route.request();
+    if (request.method() === 'GET') return route.fulfill(json(standing([redacted(ORDER)])));
+    const body = request.postDataJSON();
+    orders.push(body);
+    const pkg = CFG.packages.find(pkg => pkg.code === body.packageCode);
+    return route.fulfill(json({ ok: true, order: { ...ORDER, n: body.n, transactionId: 'fixture-retry',
+      iccid: 'fixture-retry-iccid', packageCode: pkg.code, priceUsd: pkg.priceUsd }, remainingUsd: 12.01 - pkg.priceUsd }));
+  });
+  await page.goto('/#/app/esims');
+  await page.evaluate(() => { window.rejectSetupSignature = true; });
+  await page.getByRole('button', { name: /^Redeem / }).click();
+  await expect(page.locator('.data-redeem')).toContainText('Could not redeem: User rejected the request.');
+  await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'select');
+  await expect(page.locator('#f-place')).toBeEnabled();
+  await expect(page.locator('.data-sizes button').first()).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^Redeem / })).toBeEnabled();
+  expect(orders).toEqual([]);
+  await page.locator('#f-place').selectOption('united-states');
+  const code = await page.locator('#f-package').inputValue();
+  await page.evaluate(() => { window.rejectSetupSignature = false; window.deferSetupSignature = true; });
+  await page.getByRole('button', { name: /^Redeem / }).click();
+  await expect(page.getByRole('button', { name: /^Redeem / })).toBeDisabled();
+  await expect(page.locator('#f-place')).toBeDisabled();
+  await expect(page.locator('.data-sizes button').first()).toBeDisabled();
+  expect(orders).toEqual([]);
+  await expect.poll(() => page.evaluate(() => typeof window.finishSetupSignature)).toBe('function');
+  await page.evaluate(() => window.finishSetupSignature());
+  await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'setup');
+  expect(orders).toHaveLength(1);
+  expect(orders[0]).toMatchObject({ address: ADDRESS, packageCode: code, n: 1, signature: '0xfixture-setup-signature' });
+  expect(orders[0].message).toContain('Plan: ' + code);
+  expect(orders[0].message).toContain('Slot: 1');
+  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(2);
+});
+
+test('failed authorized code reads keep installation private and recover without placing an order', async ({ page }) => {
+  await setupFixture(page);
+  let fail = true;
+  const posts = [];
+  await page.route('**/api/redeem**', route => {
+    const request = route.request();
+    if (request.method() === 'GET') return route.fulfill(json(standing([redacted(ORDER)])));
+    posts.push(request.postDataJSON());
+    if (fail) return route.fulfill({ status: 502, contentType: 'text/html', body: '<h1>SETUP-CODE gateway failure</h1>' });
+    return route.fulfill(json(standing([ORDER])));
+  });
+  await reveal(page);
+  await expect(page.locator('.data-actions')).toContainText('Could not read your codes: redeem API answered HTTP 502');
+  await expect(page.getByRole('button', { name: 'Show my eSIM codes', exact: true })).toBeEnabled();
+  await expect(page.locator('body')).not.toContainText('SETUP-CODE');
+  await expect(page.locator('.data-qr')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toHaveCount(0);
+  fail = false;
+  await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
+  await expect(page.locator('.data-ac')).toContainText('SETUP-CODE');
+  await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toBeVisible();
+  expect(posts).toHaveLength(2);
+  expect(posts.every(body => !body.packageCode)).toBe(true);
+  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(1);
 });
