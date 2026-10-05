@@ -97,6 +97,56 @@ async function integration() {
       assert.ok(!('paymentRequest' in exported));
       assert.equal((await provider.sims('')).length, 0);
     });
+    for (const [name, sats] of [['insufficient', 0], ['oversized', 50000]]) {
+      await checkAsync(name + ' balance refusal retains an unpaid invoice that the same run can retry', async () => {
+        const guardedOpts = { ...opts, runId: opts.runId + '-' + name };
+        const key = 'order:operator-' + guardedOpts.runId;
+        const purchases = fake.purchases(), sends = mock._state.log.length;
+        mock._state.sats = sats;
+        await assert.rejects(runTest(guardedOpts, deps), /before any send/);
+        const refused = await deps.store.get(key);
+        assert.equal(refused.step, 'invoiced');
+        assert.equal(refused.paymentState, 'failed');
+        assert.equal(mock._state.log.length, sends);
+        mock._state.sats = 10000; mock._state.mode = 'pending';
+        const retry = await runTest(guardedOpts, deps);
+        const pending = await deps.store.get(key);
+        assert.equal(retry.stage, 'invoiced');
+        assert.equal(pending.paymentState, 'pending');
+        assert.equal(pending.paymentHash, refused.paymentHash);
+        assert.equal(fake.purchases(), purchases + 1);
+        assert.equal(mock._state.log.length, sends + 1);
+      });
+    }
+    for (const mode of ['lost', 'unknown']) {
+      await checkAsync('a ' + mode + ' operator send response stays reserved despite empty or failed wallet history', async () => {
+        const uncertainOpts = { ...opts, runId: opts.runId + '-' + mode };
+        const key = 'order:operator-' + uncertainOpts.runId;
+        const originalGuardedPay = deps.payer.pay, originalSent = mock.sent;
+        const purchases = fake.purchases();
+        let sends = 0;
+        deps.payer.pay = async () => {
+          sends++;
+          if (mode === 'lost') throw new Error('response lost after dispatch');
+          return { status: 'UNKNOWN' };
+        };
+        try {
+          await assert.rejects(runTest(uncertainOpts, deps), mode === 'lost' ? /wallet did not answer/ : /result is uncertain/);
+          const reserved = await deps.store.get(key);
+          assert.equal(reserved.paymentState, 'uncertain');
+          for (const status of ['NONE', 'FAILURE']) {
+            mock.sent = async () => ({ status });
+            const retry = await runTest(uncertainOpts, deps);
+            const current = await deps.store.get(key);
+            assert.equal(retry.stage, 'invoiced');
+            assert.equal(current.paymentState, 'uncertain');
+            assert.equal(current.paymentHash, reserved.paymentHash);
+          }
+          assert.equal(fake.purchases(), purchases + 1);
+          assert.equal(sends, 1);
+        } finally { deps.payer.pay = originalGuardedPay; mock.sent = originalSent; }
+      });
+    }
   } finally {
     await fake.close();
     if (restorePay) mock.pay = restorePay;
@@ -151,7 +201,10 @@ async function main() {
     let sends = 0;
     await assert.rejects(runTest(options, { store: fresh,
       payer: { ...payer, sent: async () => ({ status: 'UNKNOWN' }), pay: async () => { sends++; } },
-      order: async (_args, guardedPay) => guardedPay({ paymentRequest }) }), /uncertain/);
+      order: async (_args, guardedPay) => {
+        const result = await guardedPay({ paymentRequest });
+        assert.equal(result.status, 'FAILURE'); throw new Error(result.error);
+      } }), /before any send/);
     assert.equal(sends, 0);
   });
   await checkAsync('expired or replaced payment lease cannot send', async () => {
@@ -162,7 +215,10 @@ async function main() {
       let sends = 0;
       await assert.rejects(runTest(options, { store: fresh,
         payer: { ...payer, sent: async () => ({ status: 'NONE' }), pay: async () => { sends++; } },
-        order: async (_args, guardedPay) => guardedPay({ paymentRequest, paymentLease: lease }) }), /lease changed/);
+        order: async (_args, guardedPay) => {
+          const result = await guardedPay({ paymentRequest, paymentLease: lease });
+          assert.equal(result.status, 'FAILURE'); throw new Error(result.error);
+        } }), /before any send/);
       assert.equal(sends, 0);
     }
   });

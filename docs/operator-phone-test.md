@@ -69,6 +69,10 @@ The cap applies to the supplier invoice, including a fresh BTC/USD check before 
 Lightning routing fees are additional. The test refuses a default BTC balance above $20, checks
 the stored invoice's expiry and payment hash, and rechecks payment status inside the supplier's
 payment lease. Pending, already successful or uncertain payments cannot trigger another send.
+If the operator's balance, invoice or lease checks refuse payment before invoking the payer,
+the original unpaid invoice remains available for retry with the same run ID after correction.
+Thrown or uncertain responses after invoking the payer retain the send reservation; this retry
+path does not clear them or permit another send.
 The operator CLI pins each Blink request to a two-second timeout so the extra validation reads
 and send fit inside the supplier adapter's payment lease. A slow or ambiguous response requires
 resuming the same run and checking its payment status; it is not permission for another purchase.

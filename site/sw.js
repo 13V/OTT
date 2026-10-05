@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v4';
+const CACHE_NAME = CACHE_PREFIX + 'v5';
 const SHELL = [
   'index.html', 'fonts.css', 'style.css', 'ui.css', 'home.css', 'account-preview.css',
-  'mobile-app.css?v=d3f80e6', 'ui.js', 'qr.js', 'esim.js?v=d3f80e6', 'clay-type.js', 'account-preview.js',
-  'home.js', 'status.js', 'holders.js', 'mobile-app.js?v=d3f80e6', 'app.js', 'pwa.js',
+  'mobile-app.css?v=20261006-layout', 'ui.js', 'qr.js', 'esim.js?v=d3f80e6', 'clay-type.js', 'account-preview.js',
+  'home.js', 'status.js', 'holders.js', 'mobile-app.js?v=20261006-layout', 'app.js', 'pwa.js',
   'client-config.js', 'wallet.js',
   'manifest.webmanifest',
 ];

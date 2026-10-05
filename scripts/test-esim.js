@@ -84,18 +84,26 @@ async function runTest(opts, deps = {}) {
   if (JSON.stringify(saved) !== JSON.stringify(manifest)) throw new Error('Run ID is already bound to different package or spending settings.');
   if (record?.step === 'failed' && record.paymentHash) throw new Error('Previous checkout failed. Inspect its payment state before creating another test.');
   const pay = async args => {
-    const current = await deps.store.get('order:' + transactionId);
-    await checkedPay({ record: current, paymentRequest: args.paymentRequest, p, payer: deps.payer });
-    // This callback runs inside wholesale's payment lease. Its earlier status read can be stale.
-    const sent = await deps.payer.sent(current.paymentHash);
-    if (sent.status === 'SUCCESS') return { status: 'ALREADY_PAID', error: '' };
-    if (sent.status === 'PENDING') return { status: 'PENDING', error: '' };
-    if (!['NONE', 'FAILURE'].includes(sent.status)) throw new Error('Payment status is uncertain. Resume this run after checking the wallet.');
-    const lease = await deps.store.get('paylease:' + transactionId);
-    if (!args.paymentLease || !lease || lease.attempt !== args.paymentLease.attempt ||
-        lease.at !== args.paymentLease.at || !Number.isFinite(lease.at) || Date.now() - lease.at >= 20000) {
-      throw new Error('Payment lease changed or its safe send window elapsed. Resume the same run.');
+    try {
+      const current = await deps.store.get('order:' + transactionId);
+      await checkedPay({ record: current, paymentRequest: args.paymentRequest, p, payer: deps.payer });
+      // This callback runs inside wholesale's payment lease. Its earlier status read can be stale.
+      const sent = await deps.payer.sent(current.paymentHash);
+      if (sent.status === 'SUCCESS') return { status: 'ALREADY_PAID', error: '' };
+      if (sent.status === 'PENDING') return { status: 'PENDING', error: '' };
+      if (!['NONE', 'FAILURE'].includes(sent.status)) throw new Error('Payment status is uncertain. Resume this run after checking the wallet.');
+      const lease = await deps.store.get('paylease:' + transactionId);
+      if (!args.paymentLease || !lease || lease.attempt !== args.paymentLease.attempt ||
+          lease.at !== args.paymentLease.at || !Number.isFinite(lease.at) || Date.now() - lease.at >= 20000) {
+        throw new Error('Payment lease changed or its safe send window elapsed. Resume the same run.');
+      }
+    } catch {
+      // The real payer has not been invoked. An explicit local refusal lets wholesale
+      // retain the unpaid invoice for retry instead of stranding a send reservation.
+      return { status: 'FAILURE', error: 'Operator checks prevented payment before any send. Resume the same run after reviewing its balance, invoice and payment status.' };
     }
+    // A thrown or ambiguous wallet response may follow a dispatch. Leave it to wholesale
+    // to preserve that reservation; never convert it into a known unpaid refusal.
     return deps.payer.pay(args);
   };
   const order = await deps.order({ transactionId, packageCode: p.sku, slug: p.slug,

@@ -8,7 +8,7 @@ const { stubNetwork } = require('./support/network.js');
 // tests. This fixture uses the same render(view, ctx, screen) entry point as mobile-app.js.
 async function stubMobileApp(page) {
   stubNetwork(page);
-  await page.route('**/mobile-app.js', (route) => route.fulfill({
+  await page.route(url => url.pathname.endsWith('/mobile-app.js'), (route) => route.fulfill({
     status: 200,
     contentType: 'application/javascript',
     body: `(function () {
