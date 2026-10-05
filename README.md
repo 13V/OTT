@@ -1,11 +1,16 @@
 # OT+T
 
-OT+T — Onchain Telephone + Telegraph, ticker OTT — is a phone carrier whose network is a bonding
-curve. One coin, launched on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax. **Holding
-the coin is the plan**: the tax the coin collected last week becomes this week's data budget, and a
-wallet's allowance is its share of the circulating supply times that budget — in dollars of
-mobile-data credit, spent on eSIMs from wholesale: 28 places at 1, 5 or 10 GB, 84 packages in all.
-Connect a wallet, sign a message, pick a place, scan the QR at the airport.
+OT+T (Onchain Telephone + Telegraph, ticker OTT) is a prelaunch project that turns token trading
+fees into mobile-data credit for eligible holders. The planned token uses Pons on Robinhood Chain
+(chain id 4663) with a 10% creator tax. Under the current allocation model, the previous week's
+collected tax funds a weekly budget, split by each eligible wallet's share of the circulating
+supply. Holders would use that credit for eSIM packages at home or abroad. The verified catalogue
+currently includes 84 packages across 28 countries and regions.
+
+**Current status:** OTT has not launched. The public app offers a sample account and phone setup
+guidance; weekly holder credit and real eSIM redemption are unavailable. Production purchases
+remain disabled during setup. See [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
+for the remaining hosting, storage and mobile wallet configuration.
 
 The allowance expires at the end of the week. That is not meanness, it is what makes the promise
 affordable: the pool never owes more than one week of tax it has already collected, so there is no
@@ -258,7 +263,7 @@ npm run allowances                                   # rebuild this week's plan 
 npm run allowances -- --week 2957                    # rebuild a specific week
 npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from wholesale's portfolio
 npm run check:prelaunch -- --remote                  # verify setup with redemption disabled; no funding required
-npm run treasury                                     # rebuild site/data/treasury.json (the pool side needs ESIM_PROVIDER and its keys)
+npm run treasury                                     # rebuild treasury status; pool reads need ESIM_PROVIDER and BLINK_API_KEY
 PRIVATE_KEY=<treasury> npm run claim -- --dry-run    # what the sweep would do
 PRIVATE_KEY=<treasury> npm run fund -- --dry-run     # what the next top-up would move, nothing sent
 
@@ -266,13 +271,13 @@ npm run serve                                        # serve site/ on http://127
 npm run test:site                                    # the browser suite (needs `npm install` for @playwright/test first)
 ```
 
-Everything above `npm run serve` is read-only or dry by default: `allowances`, `catalogue` and
-`treasury` need no API key, and only write a file when the configured provider or chain answers;
-`catalogue` reads nadanada's public portfolio by default; `WHOLESALE_BASE_URL` or
-`WHOLESALE_PORTFOLIO_URL` can override the endpoint;
-`claim` and `fund` need `PRIVATE_KEY` even to price a dry run, but move nothing without it and a
-real one. Before a coin is launched, `allowances` and `treasury` still run — they write an empty
-ledger and an "unknown" pool rather than fail, which is what a fresh clone actually sees.
+The chain reads in `allowances` and the public portfolio read in `catalogue` need no API key.
+`WHOLESALE_BASE_URL` or `WHOLESALE_PORTFOLIO_URL` can override the catalogue endpoint. The
+Lightning pool read in `treasury` requires `BLINK_API_KEY` on the host; without it the pool is
+reported as unknown. These commands update local files but do not buy eSIMs or move funds.
+`claim` and `fund` need `PRIVATE_KEY` even for a dry run. The commands shown above explicitly use
+`--dry-run`; keep that flag until live transactions are intended. Before token launch, `allowances`
+and `treasury` can publish an empty ledger and an unknown pool without inventing holder credit.
 
 ## To turn it on
 

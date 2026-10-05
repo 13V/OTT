@@ -69,6 +69,7 @@ const API_OK = {
   config: { launched: true, coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'wholesale', packages: 5, places: 3, catalogueAt: '2026-09-01', budgetBps: 10000, taxBps: 1000 },
   wiring: { provider: 'wholesale', payer: 'blink', store: 'vercel-kv' },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
+  redemption: { enabled: true, ready: true },
   checks: {
     store: { ok: true, detail: 'vercel-kv reachable' },
     payer: { ok: true, detail: 'blink wallet reachable, balance readable' },
@@ -149,9 +150,9 @@ test('fully wired and launched: every health row is ok, and every section shows 
   await expect(page).toHaveTitle('Status — OT+T');
   await expect(page.locator('.page-head .label')).toHaveText('OT+T · NETWORK STATUS');
 
-  // Health strip: seven rows, every one of them ok.
-  await expect(page.locator('.status-strip .status-row')).toHaveCount(7);
-  await expect(page.locator('.status-dot.ok')).toHaveCount(7);
+  // Health strip: eight rows, every one of them ok.
+  await expect(page.locator('.status-strip .status-row')).toHaveCount(8);
+  await expect(page.locator('.status-dot.ok')).toHaveCount(8);
   await expect(page.locator('.status-dot.warn')).toHaveCount(0);
   await expect(page.locator('.status-dot.off')).toHaveCount(0);
   await expect(rowByName(page, 'The coin')).toContainText('launched');
@@ -159,6 +160,7 @@ test('fully wired and launched: every health row is ok, and every section shows 
   await expect(rowByName(page, 'Network partner')).toContainText('catalogue reachable');
   await expect(rowByName(page, 'Lightning wallet')).toContainText('Lightning wallet · blink');
   await expect(rowByName(page, 'Store')).toContainText('Store · vercel-kv');
+  await expect(rowByName(page, 'Data redemption')).toContainText('Purchases are enabled. Funding and service checks passed.');
   await expect(rowByName(page, 'Indexer')).toContainText(/updated .*ago/);
   await expect(rowByName(page, 'Claim keeper')).toContainText('$41.70 USDG');
   await expect(rowByName(page, 'Funding keeper')).toContainText('$50.00');
@@ -232,6 +234,7 @@ test('nothing configured: the store and payer checks fail, and the page shows th
   const api = JSON.parse(JSON.stringify(API_OK));
   api.ready.payer = false;
   api.ready.store = false;
+  api.redemption.ready = false;
   api.checks.payer = { ok: false, detail: 'BLINK_API_KEY is not set' };
   api.checks.store = { ok: false, detail: 'KV_REST_API_URL is not set' };
   await stubAllFresh(page, { api });
@@ -251,6 +254,28 @@ test('nothing configured: the store and payer checks fail, and the page shows th
   expect(errors).toEqual([]);
 });
 
+for (const [name, redemption, state, detail] of [
+  ['paused', { enabled: false, ready: false }, 'off', 'Purchases are paused. Account and installation reads remain available.'],
+  ['enabled but not ready', { enabled: true, ready: false }, 'warn', 'Purchases are enabled, but the service is not ready.'],
+  ['unknown', undefined, 'warn', 'Redemption readiness is unavailable. Purchases have not been verified.'],
+]) {
+  test('healthy dependencies do not conceal ' + name + ' redemption', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    stubNetwork(page, { calls: CALLS });
+    const api = JSON.parse(JSON.stringify(API_OK));
+    if (redemption === undefined) delete api.redemption; else api.redemption = redemption;
+    await stubAllFresh(page, { api });
+    await page.goto('/index.html#/status');
+    const row = rowByName(page, 'Data redemption');
+    await expect(row).toContainText(detail);
+    await expect(row.locator('.status-dot')).toHaveClass(new RegExp(state));
+    await expect(page.locator('.status-strip .status-dot.ok')).toHaveCount(7);
+    await expect(row).not.toContainText('checks passed');
+    expect(errors).toEqual([]);
+  });
+}
+
 test('the health endpoint is absent (404): the page still renders every section, with one warn row about the health check', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
@@ -264,7 +289,7 @@ test('the health endpoint is absent (404): the page still renders every section,
   await stubFunding(page, FUNDING_FRESH);
 
   await page.goto('/index.html#/status');
-  // One row stands in for the four /api/status would have answered, not four unknown rows.
+  // One row stands in for the five /api/status would have answered, not five unknown rows.
   await expect(page.locator('.status-strip .status-row')).toHaveCount(4);
   const healthCheckRow = rowByName(page, 'Health check');
   await expect(healthCheckRow.locator('.status-dot')).toHaveClass(/warn/);
@@ -298,6 +323,7 @@ test('not launched: the coin section is the honest line plus a link out to the l
   stubNetwork(page, { calls: flagged });
   const api = JSON.parse(JSON.stringify(API_OK));
   api.config.launched = false;
+  api.redemption = { enabled: false, ready: false };
   await stubConfig(page, NOT_LAUNCHED);
   await stubAllowances(page, {
     asOf: NOW - 60, block: 1, week: CUR_WEEK, weekStart: CUR_WEEK_START, weekEnd: weekEndOf(CUR_WEEK),
@@ -321,6 +347,8 @@ test('not launched: the coin section is the honest line plus a link out to the l
   // The health strip agrees: the coin row says not launched, and the two daily keepers say there
   // is nothing to do yet rather than treating an empty log as a problem.
   await expect(rowByName(page, 'The coin')).toContainText('not launched yet');
+  await expect(rowByName(page, 'Data redemption')).toContainText('Prelaunch. Data redemption is disabled.');
+  await expect(rowByName(page, 'Data redemption').locator('.status-dot')).toHaveClass(/off/);
   await expect(rowByName(page, 'Claim keeper')).toContainText('nothing to claim yet');
   await expect(rowByName(page, 'Funding keeper')).toContainText('nothing to fund yet');
 
@@ -345,7 +373,7 @@ test('every data file is missing (404): each section names what is missing and t
 
   await page.goto('/index.html#/status');
   await expect(page.locator('#view h1')).toHaveText('Everything, and whether it is running.');
-  // The four /api/status-backed rows collapse to one, and the three file-backed rows each name
+  // The five /api/status-backed rows collapse to one, and the three file-backed rows each name
   // their own missing file and the command that writes it.
   await expect(page.locator('.status-strip .status-row')).toHaveCount(4);
   await expect(rowByName(page, 'Indexer')).toContainText('node scripts/allowances.js');
