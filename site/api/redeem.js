@@ -117,8 +117,12 @@ function scrubbed(message) {
   let out = String(message || 'redeem failed');
   for (const [name, value] of Object.entries(process.env)) {
     if (!value || value.length < 8) continue;
-    if (!/_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_CODE$|PRIVATE_KEY/i.test(name)) continue;
-    out = out.split(value).join('[' + name + ']');
+    const privateUrl = /^WHOLESALE_(BASE|PORTFOLIO)_URL$/i.test(name);
+    if (!privateUrl && !/_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_CODE$|PRIVATE_KEY/i.test(name)) continue;
+    // The provider normalizes whitespace and a trailing slash before fetching; scrub that
+    // normalized prefix too, rather than expose the private endpoint on a failed request.
+    const values = privateUrl ? [value, value.trim().replace(/\/+$/, '')] : [value];
+    for (const secret of values) if (secret.length >= 8) out = out.split(secret).join('[' + name + ']');
   }
   return out.slice(0, 160);
 }
@@ -275,7 +279,7 @@ function publicOrder(o, config, { codes = false } = {}) {
     stage: o.stage || o.step || (o.pending ? 'pending' : 'done'),
     smdpAddress: c(o.smdpAddress), matchingId: c(o.matchingId),
     appleInstallUrl: safeHref(c(o.appleInstallUrl)), androidInstallUrl: safeHref(c(o.androidInstallUrl)),
-    note: String(o.error || '').slice(0, 200),
+    note: o.error ? scrubbed(o.error) : '',
     codes,
   };
 }
@@ -407,10 +411,22 @@ async function standing(prov, config, allowances, address, week, treasury = null
   };
 }
 
-/** This wallet's eSIMs, for a response that has just changed them. Never fatal: codes also ride on the order. */
-async function simsFor(prov, address, codes) {
+/**
+ * A redemption signs for one order, not the wallet's full roster. Include public profile details,
+ * but reveal installation codes only for the exact profile this order issued or topped up. A
+ * pending order without an identifier, or a record naming conflicting profiles, grants none.
+ * Never fatal: a new profile's codes also ride on the order itself.
+ */
+async function simsFor(prov, address, order) {
   if (typeof prov.sims !== 'function') return [];
-  try { return (await prov.sims(address)).map((x) => publicSim(x, { codes })); } catch (e) { return []; }
+  const issued = String(order && order.iccid || '');
+  const target = String(order && order.topupOf || '');
+  const authorized = issued && target && issued !== target ? '' : issued || target;
+  try {
+    return (await prov.sims(address)).map((x) => publicSim(x, {
+      codes: !!authorized && String(x.iccid || '') === authorized,
+    }));
+  } catch (e) { return []; }
 }
 
 /** The standing as the wire shows it — the shape both GET and a signed read answer with. */
@@ -535,7 +551,7 @@ module.exports = async (req, res) => {
       if (done && done.packageCode === pkg.code) {
         return send(res, 200, {
           ok: true, order: publicOrder(done, config, { codes: true }), remainingUsd: s.remainingUsd,
-          sims: await simsFor(prov, address, true), replayed: true,
+          sims: await simsFor(prov, address, done), replayed: true,
         });
       }
       return fail(res, 409, 'your orders have changed since; reload');
@@ -557,10 +573,10 @@ module.exports = async (req, res) => {
     const order = existing || await prov.order({ transactionId, packageCode: pkg.packageCode || pkg.code, slug: pkg.slug || pkg.code, code: pkg.code, priceUsd, address });
     const remainingUsd = round6(Math.max(0, s.remainingUsd - priceOf(order, config)));
     // The eSIMs after this order, not before: a wallet's first claim mints the profile this very
-    // call created, and the page needs its code without another round trip.
+    // call created. Its signature authorizes that profile's code, never unrelated profile codes.
     return send(res, 200, {
       ok: true, order: publicOrder(Object.assign({ n, week }, order), config, { codes: true }),
-      remainingUsd, sims: await simsFor(prov, address, true),
+      remainingUsd, sims: await simsFor(prov, address, order),
     });
   } catch (e) {
     // Provider and config failures land here. The message is the provider's or ours, never a

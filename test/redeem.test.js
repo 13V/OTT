@@ -380,6 +380,64 @@ async function main() {
   check('order() on an existing id does not mint a second profile', (await GET(addr(RICH))).body.orders.length, mintedBefore);
   check('and the existing package code is kept', (await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 1))).packageCode, 'EU-35_1_7');
 
+  console.log('\na redemption reveals only the profile its order authorizes');
+  mock._reset(); redeem._resetCaches();
+  // The wallet already owns another destination's profile from last week. Its installation
+  // fields must never ride along on a captured signature approving this week's Europe order.
+  await mock.order({ transactionId: redeem.transactionIdFor(addr(RICH), CUR - 1, 0), packageCode: 'GL-120_1_7', address: addr(RICH) });
+  const unrelated = (await mock.sims(addr(RICH)))[0];
+  const secretFields = ['qrCodeUrl', 'ac', 'manualCode', 'smdpAddress', 'matchingId', 'appleInstallUrl', 'androidInstallUrl'];
+  const enrichProfile = (profile, label) => Object.assign(profile, {
+    manualCode: 'LPA:1$' + label + '.invalid$' + profile.iccid,
+    smdpAddress: label + '.invalid', matchingId: label + '-matching-secret',
+    appleInstallUrl: 'https://' + label + '.invalid/apple', androidInstallUrl: 'https://' + label + '.invalid/android',
+  });
+  enrichProfile(unrelated, 'unrelated-profile');
+  const redacted = (sim) => sim && sim.codes === false && secretFields.every((field) => sim[field] === '');
+  const visible = (sim, profile) => sim && sim.codes === true && secretFields.every((field) => sim[field] === (profile[field] || ''));
+  const privacyRequest = signed(RICH, 'EU-35_1_7');
+  const privacyFirst = await POST(privacyRequest);
+  const authorized = (await mock.sims(addr(RICH))).find((sim) => sim.iccid === privacyFirst.body.order.iccid);
+  check('a fresh redemption retains both public roster entries', [privacyFirst.status, privacyFirst.body.sims.length], [200, 2]);
+  checkThat('the newly issued profile keeps its own installation details', visible(privacyFirst.body.sims.find((sim) => sim.iccid === authorized.iccid), authorized));
+  checkThat('every installation field on the unrelated profile is redacted after fresh success', redacted(privacyFirst.body.sims.find((sim) => sim.iccid === unrelated.iccid)));
+  checkThat('the response cannot contain the unrelated profile activation string anywhere', !JSON.stringify(privacyFirst.body).includes(unrelated.ac));
+
+  enrichProfile(authorized, 'authorized-profile');
+  const privacyReplay = await POST(privacyRequest);
+  check('replaying the captured request returns its own order', [privacyReplay.status, privacyReplay.body.replayed, privacyReplay.body.order.transactionId], [200, true, privacyFirst.body.order.transactionId]);
+  checkThat('the matching profile retains all installation methods on replay', visible(privacyReplay.body.sims.find((sim) => sim.iccid === authorized.iccid), authorized));
+  checkThat('the unrelated profile remains fully redacted on replay', redacted(privacyReplay.body.sims.find((sim) => sim.iccid === unrelated.iccid)));
+
+  const topupRequest = signed(RICH, 'EU-35_1_7', { n: 1 });
+  const privacyTopup = await POST(topupRequest);
+  check('another Europe order tops up the authorized profile', [privacyTopup.status, privacyTopup.body.order.topupOf, privacyTopup.body.order.toppedUp, privacyTopup.body.order.ac], [200, authorized.iccid, true, '']);
+  checkThat('a top-up retains installation details only for its target profile', visible(privacyTopup.body.sims.find((sim) => sim.iccid === authorized.iccid), authorized) && redacted(privacyTopup.body.sims.find((sim) => sim.iccid === unrelated.iccid)));
+  const topupRecord = await mock.find(privacyTopup.body.order.transactionId);
+  topupRecord.iccid = ''; // A pending top-up can identify its target before completion gives it an ICCID.
+  const targetOnlyReplay = await POST(topupRequest);
+  checkThat('a top-up replay can authorize its exact target when the order ICCID is not available', targetOnlyReplay.body.replayed && visible(targetOnlyReplay.body.sims.find((sim) => sim.iccid === authorized.iccid), authorized) && redacted(targetOnlyReplay.body.sims.find((sim) => sim.iccid === unrelated.iccid)));
+  topupRecord.iccid = unrelated.iccid;
+  const conflictingReplay = await POST(topupRequest);
+  checkThat('conflicting order identifiers fail closed instead of revealing either profile', conflictingReplay.status === 200 && conflictingReplay.body.sims.length === 2 && conflictingReplay.body.sims.every(redacted));
+  topupRecord.iccid = authorized.iccid;
+
+  // A new order may still be issuing. Without a confirmed profile identifier, neither the
+  // wallet's existing roster nor a matching destination name grants installation access.
+  const orderBeforePending = mock.order;
+  const pendingRequest = signed(RICH, 'EU-35_1_7', { n: 2 });
+  try {
+    mock.order = async (args) => Object.assign(await orderBeforePending(args), { iccid: '', topupOf: '', pending: true });
+    const privacyPending = await POST(pendingRequest);
+    checkThat('fresh pending orders without profile identifiers reveal no roster codes', privacyPending.status === 200 && privacyPending.body.order.pending && privacyPending.body.sims.length === 2 && privacyPending.body.sims.every(redacted));
+    mock.order = orderBeforePending;
+    const pendingReplay = await POST(pendingRequest);
+    checkThat('replays of unidentified pending orders also reveal no roster codes', pendingReplay.status === 200 && pendingReplay.body.replayed && pendingReplay.body.sims.length === 2 && pendingReplay.body.sims.every(redacted));
+  } finally { mock.order = orderBeforePending; }
+  const fullPrivacyRead = await POST(signed(RICH, null));
+  checkThat('a separate signed account read still authorizes every profile', fullPrivacyRead.status === 200 && fullPrivacyRead.body.sims.length === 2 && visible(fullPrivacyRead.body.sims.find((sim) => sim.iccid === authorized.iccid), authorized) && visible(fullPrivacyRead.body.sims.find((sim) => sim.iccid === unrelated.iccid), unrelated));
+  mock._reset(); redeem._resetCaches();
+
   console.log('\na wallet that holds no OTT');
   r = await GET(addr(POOR));
   check('GET is a clean zero, and says the wallet holds nothing', [r.status, r.body.tokens, r.body.allowanceUsd, r.body.remainingUsd, r.body.orders], [200, '0', 0, 0, []]);
@@ -427,6 +485,34 @@ async function main() {
   mock._reset(); redeem._resetCaches();
   r = await call(redeem, { method: 'POST', url: '/api/redeem', rawBody: signed(RICH, 'EU-35_1_7') });
   check('an object body works the same as a string', [r.status, r.body.order.n], [200, 0]);
+
+  console.log('\nprivate provider endpoints stay out of account errors and order notes');
+  const privateBaseBefore = process.env.WHOLESALE_BASE_URL;
+  const privatePortfolioBefore = process.env.WHOLESALE_PORTFOLIO_URL;
+  const privateBase = 'https://private-provider.ott.test/operator-path';
+  const privatePortfolio = 'https://private-portfolio.ott.test/operator-path';
+  process.env.WHOLESALE_BASE_URL = '  ' + privateBase + '/  ';
+  process.env.WHOLESALE_PORTFOLIO_URL = '  ' + privatePortfolio + '/  ';
+  const findBeforePrivateUrl = mock.find;
+  mock.find = async () => { throw new Error('provider refused ' + privateBase + '/account and ' + privatePortfolio + '/portfolio'); };
+  try {
+    r = await POST(signed(RICH, null));
+    check('a provider read failure is returned as an API error', r.status, 502);
+    checkThat('neither normalized private endpoint reaches the account error', !JSON.stringify(r.body).includes(privateBase) && !JSON.stringify(r.body).includes(privatePortfolio), JSON.stringify(r.body));
+    checkThat('the account error retains useful redacted context', /provider refused.*WHOLESALE_BASE_URL/.test(r.body.error), r.body.error);
+    mock.find = findBeforePrivateUrl;
+    const storedOrder = await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0));
+    storedOrder.error = 'failed at ' + privateBase + '/complete';
+    redeem._resetCaches();
+    r = await GET(addr(RICH));
+    checkThat('a saved provider failure cannot expose its private endpoint in a public order note', !JSON.stringify(r.body).includes(privateBase) && /WHOLESALE_BASE_URL/.test(r.body.orders[0].note), JSON.stringify(r.body));
+    delete storedOrder.error;
+  } finally {
+    mock.find = findBeforePrivateUrl;
+    redeem._resetCaches();
+    if (privateBaseBefore === undefined) delete process.env.WHOLESALE_BASE_URL; else process.env.WHOLESALE_BASE_URL = privateBaseBefore;
+    if (privatePortfolioBefore === undefined) delete process.env.WHOLESALE_PORTFOLIO_URL; else process.env.WHOLESALE_PORTFOLIO_URL = privatePortfolioBefore;
+  }
 
   console.log('\nbefore the coin is launched');
   process.env.ESIM_CONFIG_URL = base + '/config/esim-unlaunched.json';

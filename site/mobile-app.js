@@ -116,6 +116,85 @@
       h('div', { class: 'om-wallet-actions' }, copy, disconnect)), source);
   }
 
+  /** Installation uses only details already revealed by this wallet's signed read. */
+  function openSetup(ctx, sim, source, placeName) {
+    if (!ctx.isCurrent() || !source.isConnected || !ctx.currentAccount() || sim.codes !== true) return;
+    const { h } = ctx;
+    let platform = /Android/i.test(navigator.userAgent) ? 'android' : 'iphone';
+    let step = 0;
+    let sheet;
+    const content = h('div', { class: 'om-guide-copy om-install-guide' });
+    const safeUrl = value => {
+      try {
+        const url = new URL(value);
+        return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+      } catch { return ''; }
+    };
+    // No installation URL is invented from an activation string.
+    const urls = { iphone: safeUrl(sim.appleInstallUrl), android: safeUrl(sim.androidInstallUrl) };
+    const ac = String(sim.ac || sim.manualCode || '');
+    const parts = ac.match(/^LPA:1\$([^$\s]+)\$([^$\s]+)(?:\$.*)?$/);
+    const smdp = String(sim.smdpAddress || (parts && parts[1]) || '');
+    const matching = String(sim.matchingId || (parts && parts[2]) || '');
+    let qr = '';
+    if (sim.qrCodeUrl && (/^data:image\/(png|jpeg|webp|svg\+xml)[;,]/i.test(sim.qrCodeUrl) || safeUrl(sim.qrCodeUrl))) qr = sim.qrCodeUrl;
+    if (!qr && ac && window.WhateverQr) {
+      try { qr = window.WhateverQr.svg(ac); } catch { /* Manual fields still work when a QR cannot be drawn. */ }
+    }
+    function copyField(label, value) {
+      const copy = action(h, 'Copy ' + label, async () => {
+        if (!ctx.isCurrent() || !sheet.isConnected) return;
+        try { await navigator.clipboard.writeText(value); if (copy.isConnected) copy.textContent = 'Copied'; }
+        catch { if (copy.isConnected) copy.textContent = 'Select and copy'; }
+      }, 'om-secondary-button');
+      return h('div', { class: 'om-install-field' }, h('div', {}, h('span', {}, label), h('code', {}, value)), copy);
+    }
+    function paint() {
+      if (!ctx.isCurrent()) { sheet?.close(); return; }
+      const iphone = platform === 'iphone';
+      const os = iphone ? 'iPhone' : 'Android';
+      const ios = action(h, 'iPhone', () => { platform = 'iphone'; paint(); }, 'om-platform-button');
+      const android = action(h, 'Android', () => { platform = 'android'; paint(); }, 'om-platform-button');
+      ios.setAttribute('aria-pressed', String(iphone)); android.setAttribute('aria-pressed', String(!iphone));
+      const labels = ['Prepare', 'Add eSIM', 'Get online'];
+      const progress = h('ol', { class: 'om-install-progress', 'aria-label': 'eSIM setup progress' }, labels.map((label, index) =>
+        h('li', { class: index === step ? 'is-current' : '', 'aria-current': index === step ? 'step' : null }, h('span', {}, String(index + 1)), label)));
+      let panel;
+      if (step === 0) {
+        panel = h('div', { class: 'om-install-step' }, h('h3', { tabindex: '-1' }, 'Before you start'),
+          h('p', {}, 'Connect to Wi-Fi or another working internet connection. Your phone needs to support eSIMs and be unlocked for other carriers.'),
+          h('p', {}, 'You’re setting up your ' + placeName + ' data eSIM. Your phone will confirm the installation.'),
+          h('p', { class: 'om-muted' }, 'Weekly credit expiry is separate from the package’s validity and activation rules.'));
+      } else if (step === 1) {
+        panel = h('div', { class: 'om-install-step' }, h('h3', { tabindex: '-1' }, 'Add the eSIM'),
+          urls[platform] ? h('a', { class: 'om-button', href: urls[platform], target: '_blank', rel: 'noopener noreferrer' }, 'Open ' + os + ' installation') : null,
+          h('p', {}, iphone ? 'In Settings, open Cellular or Mobile Data, then Add eSIM. Choose the QR option or enter the details manually.' : 'On Pixel, open Settings, then Network & internet, SIMs, Add SIM and Set up an eSIM. Names vary on other Android phones.'),
+          qr ? h('img', { class: 'om-install-qr', src: qr, alt: 'Installation QR code for ' + placeName, width: 240, height: 240 }) : null,
+          qr ? h('p', { class: 'om-muted' }, iphone ? 'In Safari on iOS 17.4 or later, touch and hold the QR, then choose Add eSIM. You can also show it on another screen and scan it.' : 'Show the QR on another screen to scan it, or use the manual details below on this phone.') : null,
+          h('div', { class: 'om-install-details' }, smdp ? copyField('SM-DP+ address', smdp) : null,
+            matching ? copyField('Activation code', matching) : ac ? copyField('Activation string', ac) : null),
+          !qr && !ac && !smdp && !urls[platform] ? h('p', { class: 'om-inline-note' }, 'The provider hasn’t supplied installation details for this method. Try the other phone option or refresh your eSIMs.') : null,
+          h('p', { class: 'om-muted' }, 'These details can install your eSIM. Keep them private.'));
+      } else {
+        panel = h('div', { class: 'om-install-step' }, h('h3', { tabindex: '-1' }, 'Choose it for mobile data'),
+          h('p', {}, 'After your phone finishes installation, turn on this eSIM in its SIM settings and select it for mobile data. Follow the provider’s instructions if this data line needs roaming.'),
+          h('p', {}, 'Use it within the package’s coverage. Your regular number can remain on your usual line.'),
+          h('p', { class: 'om-inline-note' }, 'OTT can’t detect whether your phone has finished installation or connected. Check your phone’s SIM settings.'),
+          h('a', { class: 'om-text-link', href: iphone ? 'https://support.apple.com/en-au/118669' : 'https://support.google.com/pixelphone/answer/16115470?hl=en', target: '_blank', rel: 'noopener noreferrer' }, os + ' setup support ↗'));
+      }
+      const back = action(h, 'Back', () => { step--; paint(); content.querySelector('h3')?.focus(); }, 'om-secondary-button');
+      back.disabled = step === 0;
+      const next = action(h, step === 2 ? 'Back to eSIMs' : 'Next step', () => {
+        if (step === 2) { sheet.close(); return; }
+        step++; paint(); content.querySelector('h3')?.focus();
+      });
+      content.replaceChildren(h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ios, android), progress, panel,
+        h('div', { class: 'om-step-controls' }, back, next));
+    }
+    paint();
+    sheet = dialog(h, 'Set up your ' + placeName + ' eSIM', content, source);
+  }
+
   function previewBanner(h, ctx) {
     return h('div', { class: 'om-preview-banner', role: 'status' },
       h('span', {}, h('strong', {}, 'App preview'), 'Sample credit and eSIMs. No real orders.'),
@@ -448,7 +527,7 @@
   }
 
   window.OTTMobileApp = {
-    render,
+    render, openSetup,
     dispose: () => document.querySelectorAll('.om-dialog').forEach(sheet => { sheet.close(); sheet.remove(); }),
   };
 })();

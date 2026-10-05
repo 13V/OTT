@@ -118,8 +118,12 @@ function withTimeout(promise, ms, label) {
 const SECRET_NAME_RE = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CODE)$/i;
 function secretValues() {
   return Object.keys(process.env)
-    .filter((k) => SECRET_NAME_RE.test(k))
-    .map((k) => process.env[k])
+    .filter((k) => SECRET_NAME_RE.test(k) || /^WHOLESALE_(BASE|PORTFOLIO)_URL$/i.test(k))
+    .flatMap((k) => {
+      const value = process.env[k];
+      return /^WHOLESALE_(BASE|PORTFOLIO)_URL$/i.test(k) && value
+        ? [value, value.trim().replace(/\/+$/, '')] : [value];
+    })
     .filter((v) => typeof v === 'string' && v.length >= 6);
 }
 function scrub(text) {

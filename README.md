@@ -196,6 +196,17 @@ separate wallet approvals. Remaining-GB telemetry is not implemented, so package
 presented as live usage readings. Physical-device wallet handoff and real eSIM installation still
 need testing after live configuration.
 
+Each authorized eSIM in the app offers **Set up this eSIM**, a three-step guide for iPhone or
+Android. It uses only provider-supplied installation links, QR codes and manual details; links
+must use HTTPS without URL credentials. Codes remain hidden on unsigned reads. Account changes
+close the guide and remove its private details. Completing the guide does not mark the eSIM as
+installed or active. The instructions follow [Apple's setup guide](https://support.apple.com/en-au/118669)
+and [Google's Pixel guide](https://support.google.com/pixelphone/answer/16115470?hl=en).
+The order tracker distinguishes wallet approval, provider issuance and available setup details.
+Pending issuance can be refreshed without approving another order or signing again.
+An order approval reveals installation details only for that order's eSIM profile. Other
+profiles remain redacted until the holder separately approves an account read.
+
 Set the public settings in `site/config/app.json`:
 
 ```json
@@ -225,6 +236,13 @@ GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committin
 Vercel configuration and untracked files, adds `.nojekyll`, and does not change the current checkout.
 Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
 using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
+
+`npm run serve:api` runs the same redemption/status handlers as a portable Node server. It listens
+on `127.0.0.1:3000` by default and serves only those two API routes. A public `HOST` forces
+production safeguards. Use a HTTPS hosting platform or reverse proxy for a real deployment.
+See [docs/backend-deployment.md](docs/backend-deployment.md) for the environment settings,
+current-ledger URLs and deployment checks. No backend host or private credentials are configured
+by publishing the frontend.
 
 ```
 node scripts/lint.js                                # every script parses, every config is JSON

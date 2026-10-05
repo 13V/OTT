@@ -138,6 +138,35 @@
   }
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
   const errText = (e) => (e && e.message ? e.message : String(e)).slice(0, 200);
+  const inApp = () => document.body.classList.contains('ott-app-mode');
+  function safeInstallHref(value) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+    } catch (_) { return ''; }
+  }
+
+  function safeInstallImage(value) {
+    return typeof value === 'string' && (/^data:image\/(png|jpeg|webp|svg\+xml)[;,]/i.test(value) || safeInstallHref(value)) ? value : '';
+  }
+
+  function hasInstallDetails(sim) {
+    return !!sim && sim.codes === true && !!(sim.ac || sim.manualCode || safeInstallImage(sim.qrCodeUrl)
+      || sim.smdpAddress && sim.matchingId || safeInstallHref(sim.appleInstallUrl) || safeInstallHref(sim.androidInstallUrl));
+  }
+
+  function orderProgress(ctx, phase, order, sim = order) {
+    const labels = ['Select plan', 'Wallet approval', 'Provider issuing', 'Setup details'];
+    const stages = ['select', 'wallet', 'issuing', 'setup'];
+    const notes = ['Choose a package to begin.', 'Approve this order in your wallet.', 'The provider is issuing your data package.', 'Setup details available. Your phone still needs to add the eSIM.'];
+    if (!hasInstallDetails(sim)) notes[3] = 'Package issued. Installation details haven’t been supplied yet. Refresh your eSIMs.';
+    if (order?.toppedUp || order?.topupOf) notes[3] = 'Top-up issued. Your existing eSIM does not need another installation.';
+    return ctx.h('div', { class: 'data-order-progress', role: 'status', 'aria-live': 'polite', 'aria-label': 'Order progress', 'data-phase': stages[phase] },
+      ctx.h('ol', {}, labels.map((label, i) => ctx.h('li', { 'data-step': stages[i], 'aria-current': i === phase ? 'step' : null, class: i < phase ? 'complete' : '' },
+        ctx.h('span', { 'aria-hidden': 'true' }, String(i + 1)), ctx.h('span', {}, label)))),
+      ctx.h('p', { class: 'data-order-progress-note' }, notes[phase]));
+  }
 
   // The bytes of a UTF-8 string as 0x-hex, which is what personal_sign wants in params[0]. A
   // wallet handed the plain string would sign it too, but some hex-decode anything that looks like
@@ -645,7 +674,7 @@
 
     if (!Number.isFinite(tokens)) {
       body.appendChild(notice('Your holding and weekly credit are not available right now. Try again when the programme data is published.', 'warn'));
-      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
+      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
       return;
     }
     if (!(tokens > 0)) {
@@ -655,7 +684,7 @@
       // A wallet that now holds nothing can still have an eSIM from a week it did — simsSection
       // shows it, and quietly shows nothing when there truly is none, the same hasAny guard always
       // gated this on.
-      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
+      if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
       return;
     }
 
@@ -672,9 +701,9 @@
     if (!((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length)) {
       body.appendChild(notice('No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
     }
-    body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder));
+    body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
     if (stale) return;
-    body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel));
+    body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel, freshOrder));
   }
 
   // A live countdown reads at most one at a time on this single-page app, so one module-level timer
@@ -727,8 +756,13 @@
   // A picker for which package: first the place, then the size sold at that place, then the one
   // button. The button says what the pick costs, and is disabled with a reason rather than hidden
   // when the balance is short, so a wallet can see how far off it is.
-  function redeemForm(ctx, cfg, addr, standing, allow, panel) {
+  function redeemForm(ctx, cfg, addr, standing, allow, panel, freshOrder) {
     const { h, notice } = ctx;
+    const app = inApp();
+    let busy = false;
+    const progressOrder = freshOrder || [...standing.orders || [], ...standing.history || []].find((order) => order.pending);
+    const progressSim = progressOrder && groupIntoSims(cfg, standing).find((group) => group.bundles.some((order) => order.transactionId === progressOrder.transactionId))?.sim;
+    let progress = app ? orderProgress(ctx, progressOrder ? progressOrder.pending ? 2 : 3 : 0, progressOrder, progressSim) : null;
     const plist = places(cfg);
     const regions = plist.filter((p) => p.kind === 'region');
     const countries = plist.filter((p) => p.kind === 'country');
@@ -759,7 +793,7 @@
       h('div', { class: 'field' }, h('label', { for: 'f-place' }, 'Place'), placeSelect),
       placeNote,
       sizes, packageInput,
-      btn, hint, result);
+      btn, hint, progress, result);
     if (!walletAvailable()) wrap.appendChild(notice('Redeeming needs a wallet that can sign a message.', 'plain'));
 
     function picked() { return packageByCode(cfg, packageInput.value); }
@@ -768,11 +802,12 @@
       if (!p) { btn.textContent = 'Redeem'; btn.disabled = true; hint.textContent = 'No packages are configured.'; return; }
       btn.textContent = 'Redeem ' + p.name + ' · ' + (Number(p.gb) || 1) + ' GB — ' + fmtPrice(p.priceUsd);
       const short = remaining + 1e-9 < p.priceUsd;
-      btn.disabled = short;
+      btn.disabled = short || busy;
       hint.textContent = short ? 'You have ' + fmtMoney(remaining) + ' left this week; this package costs ' + fmtPrice(p.priceUsd) + '.' : '';
       hint.classList.toggle('err', false);
     }
     function selectSize(code) {
+      if (busy) return;
       packageInput.value = code;
       for (const el of sizes.children) el.classList.toggle('active', el.dataset.code === code);
       paintButton();
@@ -804,11 +839,17 @@
     paintSizes();
 
     async function doRedeem() {
+      if (busy) return;
       const pkg = picked();
       if (!pkg) return;
       if (!walletAvailable()) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
       hint.textContent = ''; hint.classList.remove('err');
+      busy = true;
       btn.disabled = true;
+      if (app) {
+        placeSelect.disabled = true;
+        for (const control of sizes.children) control.disabled = true;
+      }
       clear(result);
       // n names the slot this redeem means to fill — the count of orders the panel was painted
       // from — so a picture that has gone stale is refused rather than risking two eSIMs for one
@@ -817,9 +858,11 @@
       const n = (standing.orders || []).length;
       // A redemption always prompts — its signature is spent on this one order and never reused.
       result.appendChild(notice('Approve the order in your wallet — it names the plan and costs nothing to sign.', 'plain'));
+      setProgress(1);
       try {
         const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n });
         clear(result);
+        setProgress(2);
         result.appendChild(notice('Ordering your eSIM… the pool pays our network partner over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
         clear(result);
@@ -832,7 +875,9 @@
         });
         const previewGroup = groupIntoSims(cfg, previewed).find((g) => g.bundles.some((o) => o.transactionId === out.order.transactionId));
         if (previewGroup) result.appendChild(simCard(ctx, cfg, previewGroup, out.order));
-        if (typeof ctx.toast === 'function') ctx.toast(out.order && out.order.pending ? 'eSIM ordered' : 'eSIM ready', packageLabel(pkg), 'success');
+        setProgress(out.order && out.order.pending ? 2 : 3, out.order, previewGroup?.sim);
+        const issuedLabel = out.order?.toppedUp || out.order?.topupOf ? 'Top-up issued' : hasInstallDetails(previewGroup?.sim) ? 'Setup details available' : 'Package issued';
+        if (typeof ctx.toast === 'function') ctx.toast(out.order && out.order.pending ? 'eSIM ordered' : app ? issuedLabel : 'eSIM ready', packageLabel(pkg), 'success');
         // A redemption signature authorizes that order only. Read codes use a separate signature.
         {
           const spent = Number(out.order && out.order.priceUsd) || pkg.priceUsd;
@@ -846,6 +891,12 @@
         }
       } catch (e) {
         const msg = errText(e);
+        busy = false;
+        if (app) {
+          placeSelect.disabled = false;
+          for (const control of sizes.children) control.disabled = false;
+        }
+        setProgress(0);
         // A stale picture of the wallet's own orders is the one failure worth recovering from
         // without being asked twice: the panel is about to be rebuilt from scratch, so the message
         // goes to a toast, which outlives that rebuild, rather than into the result block paintMine
@@ -859,6 +910,12 @@
         result.appendChild(notice('Could not redeem: ' + msg, 'error'));
         paintButton();
       }
+    }
+    function setProgress(phase, order, sim) {
+      if (!app || !progress) return;
+      const next = orderProgress(ctx, phase, order, sim);
+      progress.replaceWith(next);
+      progress = next;
     }
     return wrap;
   }
@@ -897,7 +954,7 @@
    * Nothing is shown here at all for a wallet that has never redeemed — the plan picker below is
    * the whole of that state, exactly as it always was.
    */
-  function simsSection(ctx, cfg, addr, standing, freshOrder) {
+  function simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel) {
     const { h } = ctx;
     const groups = groupIntoSims(cfg, standing);
     // The reveal button — and the section itself — only appear when there is something to reveal.
@@ -934,6 +991,16 @@
 
     const actions = h('div', { class: 'data-actions' }, hint);
     if (stillHidden(groups)) actions.insertBefore(btn, hint);
+    if (inApp() && ([...standing.orders || [], ...standing.history || []].some((order) => order.pending) || groups.some((group) => group.sim?.codes === true && !hasInstallDetails(group.sim)))) {
+      const refresh = h('button', { class: 'btn btn-sm', onclick: async () => {
+        if (!panel?.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
+        refresh.disabled = true;
+        refresh.textContent = 'Refreshing…';
+        try { await paintMine(ctx, cfg, allow, panel); }
+        finally { refresh.disabled = false; refresh.textContent = 'Refresh eSIMs'; }
+      } }, 'Refresh eSIMs');
+      actions.insertBefore(refresh, hint);
+    }
     return h('div', { class: 'data-sims' },
       h('div', { class: 'divider' }), label, cards, actions);
   }
@@ -980,7 +1047,7 @@
       qrCodeUrl: o.qrCodeUrl || '', ac: o.ac || '', manualCode: o.manualCode || '',
       smdpAddress: o.smdpAddress || '', matchingId: o.matchingId || '',
       appleInstallUrl: o.appleInstallUrl || '', androidInstallUrl: o.androidInstallUrl || '',
-      codes: !!o.codes,
+      codes: o.codes === true,
     };
   }
 
@@ -1019,7 +1086,11 @@
    */
   function simCard(ctx, cfg, group, freshOrder) {
     const { h, notice } = ctx;
-    const sim = group.sim;
+    // Unsigned metadata never grants permission to display installation details,
+    // even if a malformed provider/API response accidentally includes fields.
+    const sim = group.sim && group.sim.codes !== true ? Object.assign({}, group.sim, {
+      qrCodeUrl: '', ac: '', manualCode: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '',
+    }) : group.sim;
     const bundles = group.bundles.slice().sort(bundleNewestFirst);
     // The card itself only reads as "new" when the fresh claim minted it — a top-up onto an eSIM
     // already in the holder's phone does not get the same highlight; the bundle row below still
@@ -1039,28 +1110,37 @@
         h('div', { class: 'data-bundles' }, bundles.map((o) => bundleRow(ctx, cfg, o, freshOrder))));
     }
 
-    const code = h('code', { class: 'mono data-ac' }, sim.ac || '—');
+    const activation = sim.ac || sim.manualCode || '';
+    const code = h('code', { class: 'mono data-ac' }, activation || '—');
     const copy = h('button', { class: 'btn btn-sm', onclick: async () => {
-      try { await navigator.clipboard.writeText(sim.ac || ''); copy.textContent = 'Copied'; }
+      try { await navigator.clipboard.writeText(activation); copy.textContent = 'Copied'; }
       catch (e) { copy.textContent = 'Select and copy'; }
       setTimeout(() => { copy.textContent = 'Copy'; }, 1800);
     } }, 'Copy');
 
     // nadanada usually sends a picture of the QR; when it does not, the activation code alone is
     // enough to draw the same one here — a phone only ever reads the code, never the provider's PNG.
-    let qrSrc = sim.qrCodeUrl || '';
-    if (!qrSrc && sim.ac && window.WhateverQr) {
-      try { qrSrc = window.WhateverQr.svg(sim.ac); } catch (e) { qrSrc = ''; }
+    let qrSrc = safeInstallImage(sim.qrCodeUrl);
+    if (!qrSrc && activation && window.WhateverQr) {
+      try { qrSrc = window.WhateverQr.svg(activation); } catch (e) { qrSrc = ''; }
     }
+    const appleInstallUrl = safeInstallHref(sim.appleInstallUrl);
+    const androidInstallUrl = safeInstallHref(sim.androidInstallUrl);
     const install = [
-      sim.appleInstallUrl ? h('a', { class: 'btn btn-sm', href: sim.appleInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on iPhone') : null,
-      sim.androidInstallUrl ? h('a', { class: 'btn btn-sm', href: sim.androidInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on Android') : null,
+      appleInstallUrl ? h('a', { class: 'btn btn-sm', href: appleInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on iPhone') : null,
+      androidInstallUrl ? h('a', { class: 'btn btn-sm', href: androidInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on Android') : null,
     ].filter(Boolean);
+    let setup = null;
+    const allBundlesPending = bundles.length > 0 && bundles.every((order) => order.pending);
+    if (inApp() && !allBundlesPending && hasInstallDetails(sim) && typeof window.OTTMobileApp?.openSetup === 'function') {
+      setup = h('button', { class: 'btn btn-primary data-setup', onclick: () => window.OTTMobileApp.openSetup(ctx, sim, setup, placeName) }, 'Set up this eSIM');
+    }
 
     return h('div', { class: 'card-quiet data-sim' + (mintedByFresh ? ' fresh' : '') },
       h('div', { class: 'data-sim-head' },
         h('span', { class: 'cc-sym' }, title),
         sim.iccid ? h('span', { class: 'small mono' }, 'ICCID ' + sim.iccid) : null),
+      setup,
       qrSrc ? h('img', { class: 'data-qr', src: qrSrc, alt: 'eSIM QR code for ' + placeName, width: '180', height: '180' }) : null,
       install.length ? h('div', { class: 'data-install' }, install) : null,
       h('div', { class: 'data-ac-row' }, code, copy),

@@ -332,7 +332,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
 
   const past = {
     n: 0, transactionId: 'ott-' + 'a'.repeat(32), packageCode: 'fixed_1GB_7D_DE', priceUsd: 1.99, week: CUR_WEEK,
-    qrCodeUrl: './qr-old.png', ac: 'LPA:1$old.example$OLD', iccid: '8900000000000000001',
+    qrCodeUrl: 'https://provider.fixture.example/qr-old.png', ac: 'LPA:1$old.example$OLD', iccid: '8900000000000000001',
     createdAt: '2026-09-01T00:00:00Z', pending: false, stage: 'done',
     smdpAddress: 'smdp-old.example', matchingId: 'OLD-MATCH',
     appleInstallUrl: 'https://esimsetup.apple.com/es?a=old', androidInstallUrl: 'https://provider.example/install/android/old',

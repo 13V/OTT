@@ -263,6 +263,29 @@ async function main() {
   checkThat('the wiring still names what was actually asked for', r.body.wiring.provider === 'atlantis', r.body.wiring.provider);
   process.env.ESIM_PROVIDER = 'wholesale';
 
+  console.log('\na provider failure cannot reveal its private endpoint');
+  const fetchBeforePrivateUrl = global.fetch;
+  const privateBaseBefore = process.env.WHOLESALE_BASE_URL;
+  const privatePortfolioBefore = process.env.WHOLESALE_PORTFOLIO_URL;
+  const privateBase = 'https://private-provider.ott.test/operator-path';
+  const privatePortfolio = 'https://private-portfolio.ott.test/operator-path';
+  process.env.WHOLESALE_BASE_URL = '  ' + privateBase + '/  ';
+  process.env.WHOLESALE_PORTFOLIO_URL = '  ' + privatePortfolio + '/  ';
+  global.fetch = async (...args) => {
+    if (String(args[0]).startsWith(privateBase)) throw new Error('provider refused ' + privateBase + '/esim/bundles and ' + privatePortfolio + '/portfolio');
+    return fetchBeforePrivateUrl(...args);
+  };
+  try {
+    r = await GET();
+    check('the private provider failure still reports an unavailable provider', r.body.ready.provider, false);
+    checkThat('neither normalized private endpoint reaches the status response', !JSON.stringify(r.body).includes(privateBase) && !JSON.stringify(r.body).includes(privatePortfolio), JSON.stringify(r.body));
+    checkThat('the redacted response retains useful failure context', /provider refused.*redacted/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
+  } finally {
+    global.fetch = fetchBeforePrivateUrl;
+    process.env.WHOLESALE_BASE_URL = privateBaseBefore;
+    if (privatePortfolioBefore === undefined) delete process.env.WHOLESALE_PORTFOLIO_URL; else process.env.WHOLESALE_PORTFOLIO_URL = privatePortfolioBefore;
+  }
+
   console.log('\nscrubbing a secret');
   process.env.LN_PAYER = 'blink';
   const SECRET = 'sk-distinctive-937zx-do-not-leak';
