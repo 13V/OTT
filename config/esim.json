@@ -11,7 +11,7 @@
  "taxBps": 1000,
  "budgetBps": 10000,
  "provider": "wholesale",
- "catalogueAt": "2026-09-16",
+ "catalogueAt": "2026-10-05",
  "packages": [
   { "code": "fixed_1GB_7D_EUROPE", "slug": "europe", "name": "Europe",
    "flag": "", "kind": "region", "gb": 1, "days": 7, "priceUsd": 1.19, "regions": "38 countries" },
@@ -174,7 +174,7 @@
   { "code": "fixed_5GB_30D_BR", "slug": "brazil", "name": "Brazil",
    "flag": "🇧🇷", "kind": "country", "gb": 5, "days": 30, "priceUsd": 8.99, "regions": "BR" },
   { "code": "fixed_10GB_30D_BR", "slug": "brazil", "name": "Brazil",
-   "flag": "🇧🇷", "kind": "country", "gb": 10, "days": 30, "priceUsd": 14.99, "regions": "BR" },
+   "flag": "🇧🇷", "kind": "country", "gb": 10, "days": 30, "priceUsd": 17.99, "regions": "BR" },
   { "code": "fixed_1GB_7D_CA", "slug": "canada", "name": "Canada",
    "flag": "🇨🇦", "kind": "country", "gb": 1, "days": 7, "priceUsd": 3.99, "regions": "CA" },
   { "code": "fixed_5GB_30D_CA", "slug": "canada", "name": "Canada",

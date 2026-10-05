@@ -23,7 +23,7 @@
   let helpStep = 0;
 
   const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-  const launched = cfg => cfg && ['coin', 'curve', 'treasury'].every(key => /^0x[0-9a-fA-F]{40}$/.test(cfg[key] || ''));
+  const launched = cfg => cfg && ['coin', 'curve', 'treasury'].every(key => /^0x[0-9a-fA-F]{40}$/.test(cfg[key] || '') && !/^0x0{40}$/i.test(cfg[key]));
   const go = screen => { location.hash = screen === 'home' ? '#/app' : '#/app/' + screen; };
 
   function icon(name) {
@@ -471,6 +471,7 @@
     return h('div', { class: 'om-help-grid' },
       h('section', { class: 'om-panel om-guide-panel' }, h('h2', {}, 'Set up your eSIM'),
         h('p', { class: 'om-screen-lede' }, 'OTT gives you the installation details. Your phone confirms and completes setup.'),
+        action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-device-check-button'),
         h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ios, android), guide),
       h('section', { class: 'om-panel om-help-notes' },
         h('img', { src: './assets/ott/faq-clay-help.webp', alt: '', loading: 'lazy', width: 720, height: 720 }),
@@ -480,6 +481,41 @@
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
         h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home. A browser wallet connects directly; mobile wallets open through WalletConnect when enabled. Return to OTT after approving the connection. You can disconnect in Wallet settings. If mobile connection hasn’t been enabled yet, open OTT in your wallet’s browser.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
+  }
+
+  function checkPhone(h, source) {
+    let device = /Android/i.test(navigator.userAgent) ? 'pixel' : 'iphone';
+    const content = h('div', { class: 'om-guide-copy om-device-guide' });
+    const devices = { iphone: 'iPhone', pixel: 'Google Pixel', samsung: 'Samsung Galaxy' };
+    function support(title, href) {
+      return h('a', { class: 'om-text-link', href, target: '_blank', rel: 'noopener noreferrer' }, title + ' ↗');
+    }
+    function paint() {
+      const chooser = h('div', { class: 'om-device-switch', role: 'group', 'aria-label': 'Device to check' }, Object.entries(devices).map(([key, name]) => {
+        const button = action(h, name, () => { device = key; paint(); content.querySelector('[aria-pressed="true"]').focus(); }, 'om-platform-button');
+        button.setAttribute('aria-pressed', String(device === key));
+        return button;
+      }));
+      const path = device === 'iphone' ? 'Settings → Cellular or Mobile Data → Add eSIM'
+        : device === 'pixel' ? 'Settings → Network & internet → SIMs → Add SIM → Set up an eSIM'
+          : 'Settings → Connections → SIM manager → Add eSIM';
+      content.replaceChildren(
+        h('p', {}, 'Do these checks before choosing a real package. You can check now, while OTT is in prelaunch.'), chooser,
+        h('ol', { class: 'om-device-checklist' },
+          h('li', {}, h('h3', {}, 'Find the eSIM option'), h('p', { class: 'om-settings-path' }, path),
+            h('p', {}, device === 'samsung' ? 'Older Galaxy software may say SIM card manager or Add mobile plan. Support varies by model, region and carrier.' : 'Look for this option without starting an installation. Support varies by model and region.'),
+            support(devices[device] + ' eSIM guidance', device === 'iphone' ? 'https://support.apple.com/en-us/118669'
+              : device === 'pixel' ? 'https://support.google.com/pixelphone/answer/16115470?hl=en'
+                : 'https://www.samsung.com/us/support/answer/ANS10001619/')),
+          h('li', {}, h('h3', {}, 'Check your carrier lock'),
+            device === 'iphone' ? h('p', {}, 'Open Settings → General → About. Under Carrier Lock, look for “No SIM restrictions”.')
+              : h('p', {}, 'Ask your current carrier whether this phone is unlocked for another provider’s data eSIM. An Add eSIM option alone does not confirm that it is unlocked.'),
+            device === 'iphone' ? support('Apple’s carrier lock guide', 'https://support.apple.com/en-us/109316') : null),
+          h('li', {}, h('h3', {}, 'Keep a connection for setup'), h('p', {}, 'Use Wi-Fi or another working internet connection when adding the eSIM. Keep your current line until the new data line works.'))),
+        h('p', { class: 'om-inline-note' }, 'OTT cannot detect your phone’s eSIM support or carrier lock. If an option is missing or you’re unsure, confirm your exact model with the manufacturer and carrier before redeeming.'));
+    }
+    paint();
+    dialog(h, 'Check your phone', content, source);
   }
 
   function unavailable(h, ctx, message) {
@@ -515,7 +551,10 @@
       if (!response.ok) throw new Error('Configuration unavailable');
       const json = await response.json();
       if (!Array.isArray(json.packages)) throw new Error('Catalogue unavailable');
-      cfg = json;
+      const packages = json.packages.filter(pkg => pkg && ['code', 'slug', 'name'].every(key => typeof pkg[key] === 'string' && pkg[key].trim())
+        && Number.isFinite(pkg.gb) && pkg.gb > 0 && Number.isFinite(pkg.priceUsd) && pkg.priceUsd > 0 && Number.isInteger(pkg.days) && pkg.days > 0);
+      if (!packages.length) throw new Error('Catalogue unavailable');
+      cfg = { ...json, packages };
     } catch { /* No saved financial state is used as an offline substitute. */ }
     finally { clearTimeout(timeout); }
     if (!ctx.isCurrent() || !view.contains(shell)) return;
