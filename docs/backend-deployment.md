@@ -156,6 +156,12 @@ the isolated test tooling. No payment or real phone installation has been perfor
 
 ## Connect the frontend
 
+When changing public app scripts or styles, update their release versions in
+`site/index.html` and the matching public entries in `site/sw.js`, and bump the
+worker's cache version. Keep those URLs identical so installed apps can load
+offline. Only exact listed public release URLs may be cached with a query;
+configuration, account data and arbitrary query URLs must continue to bypass it.
+
 After the host has issued its real HTTPS API origin, put that origin in the public `apiBaseUrl` field of `site/config/app.json`. Use only the origin, without `/api`, a query, credentials or a fragment. The app resolves the two API paths against it and refuses redirects for account requests.
 
 Mobile WalletConnect also needs the separate public Reown project ID in the same file. The checked-in

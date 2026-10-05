@@ -138,7 +138,7 @@ test('iPhone installation guidance explains Safari Share rather than offering an
   } finally { await context.close(); }
 });
 
-test('the service worker caches public files but never configuration, ledgers, account APIs, query URLs or activation images', async ({ page, context }) => {
+test('the service worker caches public release files but never configuration, ledgers, account APIs, arbitrary queries or activation images', async ({ page, context }) => {
   await visitApp(page);
   await controlled(page);
   const result = await page.evaluate(async (base) => {
@@ -158,7 +158,11 @@ test('the service worker caches public files but never configuration, ledgers, a
   expect(urls).toContain(base + 'assets/flags/jp.svg');
   expect(urls).toContain(base + 'fonts/InstrumentSans-latin-variable.woff2');
   for (const url of result) expect(urls).not.toContain(url);
-  expect(urls.some((url) => new URL(url).search || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);
+  const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
+    .map(el => el.src || el.href).filter(url => new URL(url).search));
+  expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual(['esim.js', 'mobile-app.css', 'mobile-app.js']);
+  for (const url of publicVersions) expect(urls).toContain(url);
+  expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);
   expect(urls.every((url) => new URL(url).origin === origin && new URL(url).pathname.startsWith('/OTT/'))).toBe(true);
   await context.setOffline(true);
   const failures = await page.evaluate(async (base) => Promise.all(['config/esim.json', 'data/allowances.json', 'api/status'].map(async (rel) => {

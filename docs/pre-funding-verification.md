@@ -8,6 +8,10 @@ test; it does not certify live purchases, phone connectivity or token launch.
 The app now shares the website's cream canvas, display typography and clay
 character artwork. Desktop uses the available width with horizontal navigation;
 phones retain bottom tabs and put wallet and credit actions before artwork.
+The changed app files have explicit release versions, also listed in the service
+worker's public precache, so an existing browser cache cannot hide this redesign.
+Public shell refreshes revalidate HTTP responses. Arbitrary queries and private
+requests still bypass the service-worker cache.
 
 The 107 browser checks cover Home, Plans, eSIMs, Help, sample orders, wallet
 connection and signature failures, retrying private reads, installation-detail
