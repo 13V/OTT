@@ -257,6 +257,7 @@ npm test                                             # the ledger, the redeem fu
 npm run allowances                                   # rebuild this week's plan from chain
 npm run allowances -- --week 2957                    # rebuild a specific week
 npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from wholesale's portfolio
+npm run check:prelaunch -- --remote                  # verify setup with redemption disabled; no funding required
 npm run treasury                                     # rebuild site/data/treasury.json (the pool side needs ESIM_PROVIDER and its keys)
 PRIVATE_KEY=<treasury> npm run claim -- --dry-run    # what the sweep would do
 PRIVATE_KEY=<treasury> npm run fund -- --dry-run     # what the next top-up would move, nothing sent
@@ -267,7 +268,8 @@ npm run test:site                                    # the browser suite (needs 
 
 Everything above `npm run serve` is read-only or dry by default: `allowances`, `catalogue` and
 `treasury` need no API key, and only write a file when the configured provider or chain answers;
-`catalogue` does require the private `WHOLESALE_BASE_URL` or `WHOLESALE_PORTFOLIO_URL` endpoint;
+`catalogue` reads nadanada's public portfolio by default; `WHOLESALE_BASE_URL` or
+`WHOLESALE_PORTFOLIO_URL` can override the endpoint;
 `claim` and `fund` need `PRIVATE_KEY` even to price a dry run, but move nothing without it and a
 real one. Before a coin is launched, `allowances` and `treasury` still run — they write an empty
 ledger and an "unknown" pool rather than fail, which is what a fresh clone actually sees.
@@ -275,9 +277,9 @@ ledger and an "unknown" pool rather than fail, which is what a fresh clone actua
 ## To turn it on
 
 In the backend host's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
-`KV_REST_API_URL` and `KV_REST_API_TOKEN` (Upstash for Redis, provisioned from the Vercel
-Marketplace, sets the last two itself). Keep `WHOLESALE_BASE_URL` private — it is deliberately not
-present in the source tree. For the Pages frontend set `FRONTEND_ORIGINS=https://13v.github.io`
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` (the Redis REST endpoint and its server-only token).
+The Render Blueprint selects nadanada's public base `https://nadanada.me/api/v2`; an operator-specific
+override belongs in the host's environment settings. For the Pages frontend set `FRONTEND_ORIGINS=https://13v.github.io`
 and `SIGNIN_HOST=13v.github.io`. The origin has no `/OTT/` path, and the signed host is the frontend
 host even when the API uses another host. CORS permits that exact origin, accepts only the
 supported preflight methods and JSON content header, and never uses a wildcard or cookies.
@@ -286,6 +288,12 @@ Production refuses missing/mock providers, mock payers, memory stores and unsign
 configuration. `WHOLESALE_ALLOW_MEMORY_STORE` cannot bypass that production requirement. As
 repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
 `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`.
+
+New purchases also default to closed in production. Keep `REDEMPTIONS_ENABLED=0` through setup;
+only exact `1` permits orders. Account and signed installation reads remain available while closed.
+`npm run check:prelaunch -- --remote` verifies setup without treating wallet funding or token launch
+as completed. Follow [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
+before enabling live redemption.
 
 The indexer workflow refreshes files on `main`, while Pages is published separately. Point the
 backend at the refreshed ledger instead of a stale Pages copy:

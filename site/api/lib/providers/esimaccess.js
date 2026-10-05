@@ -1,4 +1,5 @@
 'use strict';
+const { requireRedemptionsEnabled } = require('../redemption-policy');
 /**
  * esimaccess — the real reseller. Written against the eSIM Access Partner API as documented in its
  * Postman collection (docs.esimaccess.com) and checked against the live endpoint on 14 Sep 2026.
@@ -180,6 +181,7 @@ module.exports = {
    * reseller rather than paid at the new rate.
    */
   async order({ transactionId, packageCode, slug, priceUsd }) {
+    requireRedemptionsEnabled();
     const existing = await lookup(transactionId);
     if (existing) return existing;
     if (!packageCode) throw new Error('order needs the catalogue packageCode');

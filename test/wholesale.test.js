@@ -86,6 +86,30 @@ const RACER = '0x' + 'ace'.padStart(40, '0');
   check('and the balance is the wallet\'s, in dollars', await prov.balanceUsd(), round2((1000000 - 2363) * 0.0008));
   check('status() reads the profile', (await prov.status(o1.iccid)).profileStatus, 'Released');
 
+  console.log('\nredemption stays closed until the operator enables it');
+  const gateSetting = process.env.REDEMPTIONS_ENABLED;
+  const nodeEnv = process.env.NODE_ENV, vercelEnv = process.env.VERCEL_ENV;
+  const beforeGate = [purchases(), mockPayer._state.log.length, state.log.length];
+  try {
+    process.env.REDEMPTIONS_ENABLED = '0';
+    await rejects('a direct wholesale order also honors the closed gate', prov.order(Object.assign({ transactionId: 'wf-gate0001' }, DE)), /not enabled yet/, 503);
+    const alternative = require(path.join(LIB, 'providers', 'esimaccess.js'));
+    await rejects('the alternative real provider honors the same closed gate', alternative.order(Object.assign({ transactionId: 'wf-gate0002' }, DE)), /not enabled yet/, 503);
+    check('the closed gate makes no catalogue purchase, payment or provider call', [purchases(), mockPayer._state.log.length, state.log.length], beforeGate);
+    check('already-issued installation details remain readable', (await prov.find(o1.transactionId)).ac, o1.ac);
+    delete process.env.REDEMPTIONS_ENABLED;
+    process.env.NODE_ENV = 'production';
+    await rejects('production defaults to closed before even choosing a store', prov.order(Object.assign({ transactionId: 'wf-gate0003' }, DE)), /not enabled yet/, 503);
+    delete process.env.NODE_ENV; process.env.VERCEL_ENV = 'production';
+    await rejects('Vercel production defaults to the same closed policy', prov.order(Object.assign({ transactionId: 'wf-gate0004' }, DE)), /not enabled yet/, 503);
+    process.env.REDEMPTIONS_ENABLED = '1';
+    await rejects('explicit enablement still requires durable production storage', prov.order(Object.assign({ transactionId: 'wf-gate0005' }, DE)), /durable store/, 503);
+  } finally {
+    for (const [name, value] of Object.entries({ REDEMPTIONS_ENABLED: gateSetting, NODE_ENV: nodeEnv, VERCEL_ENV: vercelEnv })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+
   console.log('\nidempotence');
   const p0 = purchases(), paid0 = mockPayer._state.log.length;
   const again = await prov.order(Object.assign({ transactionId: 'wf-aaaa0001' }, EU));

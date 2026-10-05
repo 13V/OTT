@@ -8,6 +8,19 @@ const { weekOf } = require('../site/api/lib/week');
 const FRONTEND = 'https://13v.github.io';
 const address = value => /^0x[\da-f]{40}$/i.test(value || '') && !/^0x0{40}$/i.test(value);
 const row = (id, label, ok, detail) => ({ id, label, ok: !!ok, detail });
+const tokenKeys = ['coin', 'curve', 'treasury'];
+const unlaunched = esim => tokenKeys.every(key => esim?.[key] === '');
+function catalogueReady(esim) {
+  const packages = esim?.packages;
+  return Array.isArray(packages) && packages.length > 0 && new Set(packages.map(item => item?.code)).size === packages.length
+    && packages.every(item => item && ['code', 'slug', 'name', 'regions'].every(key => typeof item[key] === 'string' && item[key].trim())
+      && ['country', 'region'].includes(item.kind) && Number.isFinite(item.gb) && item.gb > 0
+      && Number.isSafeInteger(item.days) && item.days > 0 && Number.isFinite(item.priceUsd) && item.priceUsd > 0);
+}
+function freshStatus(body, now) {
+  const asOf = Number(body?.asOf);
+  return body?.ok === true && !body.error && Number.isFinite(asOf) && asOf <= now / 1000 + 30 && now / 1000 - asOf < 180;
+}
 function httpsRpc(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; }
   catch (_) { return false; }
@@ -28,20 +41,37 @@ function publicChecks({ app, esim, chain }) {
     row('api', 'HTTPS backend origin', !!apiOrigin(app?.apiBaseUrl), 'Configure the real API origin, without a path or credentials.'),
     row('contracts', 'Token launch addresses', launched, 'Publish the real coin, curve and treasury addresses after launch.'),
     row('chain', 'Wallet network', Number.isSafeInteger(chain?.chainId) && chain.chainId > 0 && httpsRpc(chain.rpc), 'Use the configured chain ID and HTTPS RPC.'),
-    row('catalogue', 'Data catalogue', Array.isArray(esim?.packages) && esim.packages.length > 0, 'Publish the provider catalogue before redemption.'),
+    row('catalogue', 'Data catalogue', catalogueReady(esim), 'Publish valid, uniquely named provider packages with data, duration and price.'),
+  ];
+}
+
+function prelaunchPublicChecks(config) {
+  return publicChecks(config).map(check => check.id === 'contracts'
+    ? row('prelaunch-contracts', 'Token launch remains pending', unlaunched(config.esim), 'All three token launch addresses must remain blank during prelaunch.') : check)
+    .concat(row('provider-selection', 'Provider selection', config.esim?.provider === 'wholesale', 'Use the verified nadanada wholesale catalogue.'));
+}
+
+function prelaunchStatusChecks(body, esim, now = Date.now()) {
+  return [
+    row('status', 'Backend status response', freshStatus(body, now), 'A fresh, valid status response is required; HTTP 200 alone is insufficient.'),
+    row('prelaunch-contracts-match', 'Backend remains prelaunch', unlaunched(body?.config) && body?.config?.launched === false, 'The backend must also keep all three token launch addresses blank.'),
+    row('redemption-paused', 'Redemption remains disabled', body?.redemption?.enabled === false && body?.redemption?.ready === false, 'Disable redemption while preparing the service.'),
+    row('backend-config', 'Backend catalogue', body?.ready?.config === true && body?.config?.packages === esim?.packages?.length && body?.config?.catalogueAt === esim?.catalogueAt, 'Deploy the same reviewed catalogue as the frontend.'),
+    row('backend-provider', 'Provider catalogue access', body?.ready?.provider === true && body?.wiring?.provider === 'wholesale', 'The real provider catalogue must answer without placing an order.'),
+    row('backend-store', 'Durable order storage', body?.ready?.store === true && body?.wiring?.store === 'upstash', 'Connect the durable Redis REST store before live use.'),
+    row('payer-selection', 'Lightning payer selection', body?.wiring?.payer === 'blink', 'Select Blink; funding and payment validation are deferred.'),
   ];
 }
 
 function statusChecks(body, esim, now = Date.now()) {
   const sameContracts = ['coin', 'curve', 'treasury'].every(key => address(body?.config?.[key])
     && String(body.config[key]).toLowerCase() === String(esim?.[key] || '').toLowerCase());
-  const asOf = Number(body?.asOf);
-  const timely = Number.isFinite(asOf) && asOf <= now / 1000 + 30 && now / 1000 - asOf < 180;
   const currentWeek = weekOf(Math.floor(now / 1000));
   const allocation = body?.allowances;
   const rows = [
-    row('status', 'Backend status response', body?.ok === true && timely, 'A fresh, valid status response is required; HTTP 200 alone is insufficient.'),
+    row('status', 'Backend status response', freshStatus(body, now), 'A fresh, valid status response is required; HTTP 200 alone is insufficient.'),
     row('contracts-match', 'Backend token addresses', sameContracts && body?.config?.launched === true, 'The backend must use the same launched token addresses as the app.'),
+    row('redemption-enabled', 'Redemption enabled', body?.redemption?.enabled === true && body?.redemption?.ready === true, 'Enable redemption only after validating the launched, funded service.'),
   ];
   for (const key of ['config', 'provider', 'payer', 'store', 'allowances']) {
     rows.push(row('backend-' + key, 'Backend ' + key, body?.ready?.[key] === true, 'Check this dependency in the hosting environment.'));
@@ -53,7 +83,7 @@ function statusChecks(body, esim, now = Date.now()) {
   return rows;
 }
 
-async function probeBackend(origin, esim, fetcher = fetch) {
+async function probeBackend(origin, esim, fetcher = fetch, prelaunch = false) {
   const requests = await Promise.allSettled([
     fetcher(origin + '/api/status', { method: 'GET', headers: { Origin: FRONTEND }, redirect: 'error', credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(12000) }),
     fetcher(origin + '/api/redeem', { method: 'OPTIONS', headers: { Origin: FRONTEND, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' }, redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(12000) }),
@@ -65,7 +95,7 @@ async function probeBackend(origin, esim, fetcher = fetch) {
     rows.push(row('status-cors', 'GitHub Pages status access', response.headers.get('access-control-allow-origin') === FRONTEND, 'Allow exactly the GitHub Pages frontend origin.'));
     try {
       const body = response.ok && /^application\/json\b/i.test(response.headers.get('content-type') || '') ? await response.json() : null;
-      rows.push(...statusChecks(body, esim));
+      rows.push(...(prelaunch ? prelaunchStatusChecks(body, esim) : statusChecks(body, esim)));
     } catch (_) { rows.push(row('status', 'Backend status response', false, 'The backend did not return valid JSON.')); }
   } else rows.push(row('status', 'Backend status response', false, 'The HTTPS backend could not be reached without redirects.'));
   const preflight = requests[1];
@@ -77,9 +107,9 @@ async function probeBackend(origin, esim, fetcher = fetch) {
 }
 
 async function main(args = process.argv.slice(2), root = path.resolve(__dirname, '..')) {
-  if (args.some(arg => !['--remote', '--json', '--help'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Use check:launch with --remote, --json or --help only.');
+  if (args.some(arg => !['--remote', '--json', '--prelaunch', '--help'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Use check:launch with --remote, --json, --prelaunch or --help only.');
   if (args.includes('--help')) {
-    console.log('npm run check:launch [-- --remote] [--json]\nChecks public settings; --remote also reads backend status and CORS preflight. No wallet or redemption requests.');
+    console.log('npm run check:launch -- [--remote] [--json] [--prelaunch]\nChecks public settings; --remote also reads backend status and CORS preflight.\n--prelaunch checks preparation with redemption disabled. Funding, token launch and live allocations are deferred.\nNo signatures, orders or payments.');
     return 0;
   }
   let config;
@@ -87,20 +117,23 @@ async function main(args = process.argv.slice(2), root = path.resolve(__dirname,
     const read = name => JSON.parse(fs.readFileSync(path.join(root, 'site/config', name), 'utf8'));
     config = { app: read('app.json'), esim: read('esim.json'), chain: read('addresses.json') };
   } catch (_) { throw new Error('The public app configuration is missing or invalid JSON.'); }
-  const checks = publicChecks(config);
+  const prelaunch = args.includes('--prelaunch');
+  const checks = prelaunch ? prelaunchPublicChecks(config) : publicChecks(config);
   const configured = checks.every(check => check.ok);
   const remote = args.includes('--remote');
   const origin = apiOrigin(config.app?.apiBaseUrl);
-  if (remote && origin) checks.push(...await probeBackend(origin, config.esim));
+  if (remote && origin) checks.push(...await probeBackend(origin, config.esim, fetch, prelaunch));
   const passed = checks.every(check => check.ok);
-  const report = { configured, remoteChecked: remote && !!origin, checksPassed: remote && !!origin && passed, checks };
+  const deferred = prelaunch ? ['Token launch addresses', 'Funded Lightning wallet and real payment', 'Funded holder allocations', 'Installation on a real phone'] : [];
+  const report = { stage: prelaunch ? 'prelaunch' : 'launch', configured, remoteChecked: remote && !!origin, checksPassed: remote && !!origin && passed, liveRedemptionReady: !prelaunch && remote && !!origin && passed, checks, deferred };
   if (args.includes('--json')) console.log(JSON.stringify(report, null, 2));
   else {
     for (const check of checks) console.log((check.ok ? 'PASS ' : 'WAIT ') + check.label + (check.ok ? '' : ': ' + check.detail));
+    if (prelaunch) console.log('Prelaunch setup only. Still deferred: ' + deferred.join('; ') + '.');
     console.log(remote && origin ? 'These checks do not validate allocation economics, actual coverage or a real phone installation.' : 'Remote dependencies have not been checked. Run with --remote after configuring the API origin.');
   }
   return passed ? 0 : 1;
 }
 
-module.exports = { apiOrigin, publicChecks, statusChecks, probeBackend, main };
+module.exports = { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend, main };
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(() => { console.error('Launch check failed. Check the public configuration and supported flags.'); process.exitCode = 1; });

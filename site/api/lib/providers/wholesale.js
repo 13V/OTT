@@ -40,6 +40,7 @@
 const bolt11 = require('../bolt11');
 const { store: chooseStore } = require('../store');
 const { payer: choosePayer } = require('../payers');
+const { requireRedemptionsEnabled } = require('../redemption-policy');
 
 function BASE() {
   const value = String(process.env.WHOLESALE_BASE_URL || '').trim();
@@ -470,6 +471,7 @@ module.exports = {
    * replaced; nothing was paid on it.
    */
   async order({ transactionId, packageCode, slug, priceUsd, address }) {
+    requireRedemptionsEnabled();
     const store = storeFor();
     const waitMs = COMPLETE_WAIT_MS();
     const key = keyOf(transactionId);

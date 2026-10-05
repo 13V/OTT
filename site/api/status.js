@@ -42,11 +42,13 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { provider: chooseProvider } = require('./lib/providers');
 const { payer: choosePayer } = require('./lib/payers');
 const { store: chooseStore } = require('./lib/store');
 const { weekOf } = require('./lib/week');
 const { allowRequestOrigin } = require('./lib/request-origin');
+const { redemptionsEnabled } = require('./lib/redemption-policy');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -60,7 +62,7 @@ const RESPONSE_CACHE_MS = 20 * 1000;
 // WHOLESALE_COMPLETE_WAIT_MS, so a test can shrink it rather than sleep through a production-sized
 // window — Number.isFinite rather than `|| 5000` so a test can set it to exactly 0, too.
 const FRESH_MIN_MS = () => { const n = Number(process.env.STATUS_FRESH_MIN_MS); return Number.isFinite(n) ? n : 5000; };
-const PROBE_KEY = 'status:probe';
+const PROBE_KEY = 'status:probe:';
 const DETAIL_MAX = 200;
 
 // ---------------------------------------------------------------------------------------------
@@ -136,7 +138,7 @@ const messageOf = (e) => (e && e.message) || String(e || 'failed');
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers on the config.
 // ---------------------------------------------------------------------------------------------
-const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
+const isAddress = (a) => typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a);
 
 function summariseConfig(config) {
   const packages = Array.isArray(config.packages) ? config.packages : [];
@@ -186,11 +188,19 @@ async function checkStore() {
   try {
     return await withTimeout((async () => {
       const s = chooseStore();
-      const value = 'probe-' + Date.now();
-      await s.set(PROBE_KEY, value);
-      const got = await s.get(PROBE_KEY);
-      await s.del(PROBE_KEY);
-      if (got !== value) throw new Error('store did not return what was just written');
+      // Different instances may check status at once. Each probe owns its key, including its
+      // cleanup, so it cannot replace or delete a concurrent instance's test value.
+      const key = PROBE_KEY + randomUUID();
+      const value = 'probe-' + randomUUID();
+      let written = false;
+      try {
+        if (!(await s.set(key, value))) throw new Error('store did not accept the probe');
+        written = true;
+        const got = await s.get(key);
+        if (got !== value) throw new Error('store did not return what was just written');
+      } finally {
+        if (written) await s.del(key);
+      }
       return { ok: true, detail: 'read and wrote a probe key' };
     })(), CHECK_TIMEOUT_MS, 'store');
   } catch (e) { return { ok: false, detail: messageOf(e) }; }
@@ -294,6 +304,14 @@ async function computeStatus() {
   // can show them without parsing the detail sentence.
   const allowances = checks.allowances.info || null;
   const brand = config.brand || {};
+  const summary = summariseConfig(config);
+  const ready = { config: configOk, provider: checks.provider.ok, payer: checks.payer.ok, store: checks.store.ok, allowances: checks.allowances.ok };
+  const enabled = redemptionsEnabled();
+  const redemptionReady = enabled && summary.launched && isAddress(config.treasury) && summary.packages > 0
+    && Object.values(ready).every(Boolean)
+    && providerName === 'wholesale' && payerName === 'blink' && storeName === 'upstash'
+    && !!pool && pool.sats > 0 && pool.usd > 0
+    && !!allowances && allowances.budgetUsd > 0;
 
   // Every detail string, from whatever it came from, passes through scrub() exactly once, here,
   // so there is one place to trust rather than one per check.
@@ -303,9 +321,10 @@ async function computeStatus() {
     ok: true,
     asOf,
     brand: { name: String(brand.name || ''), full: String(brand.full || ''), ticker: String(brand.ticker || '') },
-    config: summariseConfig(config),
+    config: summary,
     wiring: { provider: providerName, payer: payerName, store: storeName },
-    ready: { config: configOk, provider: checks.provider.ok, payer: checks.payer.ok, store: checks.store.ok, allowances: checks.allowances.ok },
+    ready,
+    redemption: { enabled, ready: redemptionReady },
     checks: {
       store: { ok: checks.store.ok, detail: checks.store.detail },
       payer: { ok: checks.payer.ok, detail: checks.payer.detail },

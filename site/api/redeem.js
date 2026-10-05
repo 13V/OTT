@@ -71,6 +71,7 @@ const eip191 = require('./lib/eip191');
 const { provider: chooseProvider } = require('./lib/providers');
 const { weekOf, weekEnd: weekEndOf } = require('./lib/week');
 const { allowRequestOrigin, isProduction } = require('./lib/request-origin');
+const { redemptionsEnabled } = require('./lib/redemption-policy');
 
 const MESSAGE_HEAD = 'OT+T';
 const SIGNIN_WINDOW_S = 10 * 60;
@@ -180,6 +181,7 @@ async function readTreasury() {
 // Small pure helpers.
 // ---------------------------------------------------------------------------------------------
 const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
+const isLaunchAddress = (a) => typeof a === 'string' && isAddress(a) && !/^0x0{40}$/.test(a);
 // Anything that becomes an href or an <img src> on the page is scheme-checked HERE as well as
 // where it was written, so a record stored before the provider checked — or by a provider that
 // never did — cannot put a "javascript:" link on the page that is showing a wallet's codes.
@@ -459,10 +461,10 @@ module.exports = async (req, res) => {
   try {
     const config = await readConfig().catch(() => null);
     if (!config || !Array.isArray(config.packages)) return fail(res, 503, 'data config unavailable');
-    // Empty coin/curve is the checked-in state until launch day. Everything downstream would
+    // Empty, zero or malformed coin/curve is not a launched configuration. Everything downstream would
     // "work" against an empty allowances file, but the honest answer is that there is nothing to
     // redeem yet, and the page shows the rules and the launch link instead.
-    if (!config.coin || !config.curve) return fail(res, 409, 'coin not launched yet');
+    if (!isLaunchAddress(config.coin) || !isLaunchAddress(config.curve)) return fail(res, 409, 'coin not launched yet');
 
     if (req.method === 'GET') {
       const url = new URL(req.url || '/', 'http://local');
@@ -509,6 +511,10 @@ module.exports = async (req, res) => {
     // is has to be settled BEFORE the signature is checked, because the signature says which one it
     // authorises — that is the whole point of binding the action into it.
     const reading = body.packageCode === undefined || body.packageCode === null || body.packageCode === '';
+
+    // A host can be fully configured and funded while purchases are still closed. Keep account
+    // and installation reads available, but refuse every package POST before provider work.
+    if (!reading && !redemptionsEnabled()) return fail(res, 503, 'data redemption is not enabled yet');
 
     // The shape of the request is settled before the signature, because the signature now names
     // the plan and the slot: a body missing either is a malformed request, not a bad signature,

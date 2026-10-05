@@ -33,6 +33,7 @@ const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  o
 // --------------------------------------------------------------------------- fixtures
 const COIN = '0x1111111111111111111111111111111111111111';
 const CURVE = '0x2222222222222222222222222222222222222222';
+const TREASURY = '0x3333333333333333333333333333333333333333';
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT' };
 // Four packages across three places, so packages/places are two different numbers and a mistake
 // between them (counting rows instead of distinct slugs) would be caught.
@@ -43,7 +44,7 @@ const PACKAGES = [
   { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', priceUsd: 8.99 },
 ];
 const LAUNCHED_CONFIG = {
-  coin: COIN, curve: CURVE, treasury: '', provider: 'wholesale', catalogueAt: '2026-09-15',
+  coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'wholesale', catalogueAt: '2026-09-15',
   budgetBps: 10000, taxBps: 1000, brand: BRAND, packages: PACKAGES,
 };
 const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
@@ -168,6 +169,7 @@ async function main() {
   process.env.NODE_ENV = 'production';
   try {
     r = await GET();
+    check('production begins with redemption closed', r.body.redemption, { enabled: false, ready: false });
     check('production rejects a memory store despite the development override', [r.body.ready.store, /durable store/.test(r.body.checks.store.detail)], [false, true]);
     check('production rejects the mock Lightning payer', [r.body.ready.payer, /real Lightning payer/.test(r.body.checks.payer.detail)], [false, true]);
     process.env.ESIM_PROVIDER = 'mock';
@@ -190,10 +192,53 @@ async function main() {
   check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
   check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'wholesale', payer: 'mock', store: 'memory' });
+  check('healthy development fixtures never claim live redemption is ready', r.body.redemption, { enabled: true, ready: false });
   checkThat('the allowances check names the holder count and the budget for the current week', new RegExp('3 holders?, \\$412\\.50 budget, week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
   check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances, { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3 });
   checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
   checkThat('and wholesale saw only the bundle listing, never purchase or complete', bundleHits > 0);
+
+  console.log('\nstatus distinguishes configured dependencies from permission to purchase');
+  const gateSetting = process.env.REDEMPTIONS_ENABLED;
+  try {
+    process.env.REDEMPTIONS_ENABLED = '0';
+    r = await GET();
+    check('the explicit closed gate is visible in the status response', r.body.redemption, { enabled: false, ready: false });
+    checkThat('closing purchases still runs harmless dependency checks', Object.values(r.body.ready).every(Boolean));
+    process.env.REDEMPTIONS_ENABLED = 'true';
+    r = await GET();
+    check('noncanonical enablement values fail closed', r.body.redemption.enabled, false);
+    process.env.REDEMPTIONS_ENABLED = '1';
+    r = await GET();
+    check('enabling a fixture does not bypass real infrastructure readiness', r.body.redemption, { enabled: true, ready: false });
+  } finally {
+    if (gateSetting === undefined) delete process.env.REDEMPTIONS_ENABLED; else process.env.REDEMPTIONS_ENABLED = gateSetting;
+  }
+
+  console.log('\nconcurrent health checks own separate throwaway store keys');
+  const probeStore = require(path.join(API, 'lib', 'store.js')).store();
+  const probeSet = probeStore.set, probeGet = probeStore.get, probeDel = probeStore.del;
+  const probesWritten = [], probesDeleted = [];
+  probeStore.set = async (key, value, opts) => {
+    probesWritten.push(key);
+    const written = await probeSet(key, value, opts);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return written;
+  };
+  probeStore.del = async (key) => { probesDeleted.push(key); return probeDel(key); };
+  try {
+    const concurrent = await Promise.all([GET(), GET()]);
+    check('both concurrent probes return a healthy store', concurrent.map((x) => x.body.ready.store), [true, true]);
+    check('each probe wrote a different key', new Set(probesWritten).size, 2);
+    check('each probe deleted only its own key', [...probesDeleted].sort(), [...probesWritten].sort());
+    check('neither probe key remains afterward', await Promise.all(probesWritten.map((key) => probeGet(key))), [null, null]);
+    probesWritten.length = 0; probesDeleted.length = 0;
+    probeStore.get = async () => { throw new Error('probe read interrupted'); };
+    r = await GET();
+    check('an interrupted probe marks the store unavailable', r.body.ready.store, false);
+    check('the interrupted probe still cleans up its owned key', probesDeleted, probesWritten);
+    check('its scratch value was removed', await probeGet(probesWritten[0]), null);
+  } finally { probeStore.set = probeSet; probeStore.get = probeGet; probeStore.del = probeDel; }
 
   console.log('\nHTTP 200 is not proof that the provider has a usable catalogue');
   const invalidCatalogues = [
@@ -265,6 +310,80 @@ async function main() {
   check('the request still succeeds and says the coin is not launched', [r.status, r.body.ok, r.body.config.launched], [200, true, false]);
   check('but the config itself still loaded fine', r.body.ready.config, true);
   process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+
+  console.log('\nredemption readiness needs both enablement and usable funding');
+  const productionSettings = ['NODE_ENV', 'VERCEL_ENV', 'STORE', 'STORE_URL', 'STORE_TOKEN', 'LN_PAYER', 'BLINK_API_KEY', 'BLINK_API_URL', 'REDEMPTIONS_ENABLED'];
+  const settingsBeforeReadiness = Object.fromEntries(productionSettings.map((name) => [name, process.env[name]]));
+  const fetchBeforeReadiness = global.fetch;
+  const restValues = new Map();
+  let btcSats = 1000000, blinkMutations = 0;
+  process.env.NODE_ENV = 'production';
+  delete process.env.STORE;
+  process.env.STORE_URL = 'https://readiness-store.test';
+  process.env.STORE_TOKEN = 'offline-readiness-store-token';
+  process.env.LN_PAYER = 'blink';
+  process.env.BLINK_API_KEY = 'offline-readiness-wallet-key';
+  process.env.BLINK_API_URL = 'https://readiness-blink.test';
+  process.env.REDEMPTIONS_ENABLED = '1';
+  global.fetch = async (url, opts = {}) => {
+    if (url === process.env.STORE_URL) {
+      const [command, key, value] = JSON.parse(opts.body);
+      let result = null;
+      if (command === 'SET') { restValues.set(key, value); result = 'OK'; }
+      else if (command === 'GET') result = restValues.get(key) || null;
+      else if (command === 'DEL') result = Number(restValues.delete(key));
+      return { ok: true, status: 200, json: async () => ({ result }) };
+    }
+    if (url === process.env.BLINK_API_URL) {
+      const { query } = JSON.parse(opts.body);
+      if (/mutation/.test(query)) { blinkMutations++; throw new Error('status must not create an invoice or pay'); }
+      const data = /realtimePrice/.test(query)
+        ? { realtimePrice: { btcSatPrice: { base: 8, offset: 2 } } }
+        : { me: { defaultAccount: { wallets: [{ id: 'offline-btc', walletCurrency: 'BTC', balance: btcSats }] } } };
+      return { ok: true, status: 200, json: async () => ({ data }) };
+    }
+    return fetchBeforeReadiness(url, opts);
+  };
+  try {
+    r = await GET();
+    check('real adapter wiring with healthy dependencies can report enabled and ready', r.body.redemption, { enabled: true, ready: true });
+    for (const field of ['coin', 'curve']) {
+      for (const [label, invalid] of [['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['short', '0x1234'], ['wrapped in an array', [COIN]]]) {
+        const route = '/config/esim-invalid-' + field + '-' + label.replace(/ /g, '-') + '.json';
+        FILES[route] = Object.assign({}, LAUNCHED_CONFIG, { [field]: invalid });
+        process.env.ESIM_CONFIG_URL = fileBase + route;
+        r = await GET();
+        check('a ' + label + ' ' + field + ' cannot report launched or ready', [r.body.config.launched, r.body.redemption.ready], [false, false]);
+      }
+    }
+    for (const [label, invalid] of [['missing', ''], ['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['array', [TREASURY]]]) {
+      const route = '/config/esim-invalid-treasury-' + label + '.json';
+      FILES[route] = Object.assign({}, LAUNCHED_CONFIG, { treasury: invalid });
+      process.env.ESIM_CONFIG_URL = fileBase + route;
+      r = await GET();
+      check('a ' + label + ' treasury prevents ready without mislabelling the token launch', [r.body.config.launched, r.body.redemption.ready], [true, false]);
+    }
+    process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+    process.env.REDEMPTIONS_ENABLED = '0';
+    r = await GET();
+    check('a funded configured deployment remains closed when permission is withheld', r.body.redemption, { enabled: false, ready: false });
+    process.env.REDEMPTIONS_ENABLED = '1'; btcSats = 0;
+    r = await GET();
+    check('an accessible unfunded wallet is a working dependency, but cannot make redemption ready', [r.body.ready.payer, r.body.redemption], [true, { enabled: true, ready: false }]);
+    btcSats = 1000000;
+    process.env.ESIM_CONFIG_URL = fileBase + '/config/esim-unlaunched.json';
+    r = await GET();
+    check('even healthy funded adapters cannot make an unlaunched token ready', r.body.redemption, { enabled: true, ready: false });
+    process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+    check('readiness checks created no invoice and sent no payment', blinkMutations, 0);
+    check('all readiness scratch keys were removed', restValues.size, 0);
+  } finally {
+    global.fetch = fetchBeforeReadiness;
+    for (const [name, value] of Object.entries(settingsBeforeReadiness)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
+  }
 
   console.log('\nthe cache, and the floor under an unauthenticated ?fresh=1');
   await GET('?fresh=1');

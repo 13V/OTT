@@ -220,8 +220,10 @@ async function main() {
   const signinHost = process.env.SIGNIN_HOST;
   const vercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
   const vercelEnv = process.env.VERCEL_ENV;
+  const redemptionSetting = process.env.REDEMPTIONS_ENABLED;
   process.env.NODE_ENV = 'production';
   process.env.SIGNIN_HOST = 'ott.test';
+  process.env.REDEMPTIONS_ENABLED = '1';
   try {
     r = await POST(signed(RICH, 'EU-35_1_7'));
     check('an explicit mock provider in production fails closed', [r.status, /real eSIM provider/.test(r.body.error)], [503, true]);
@@ -238,7 +240,7 @@ async function main() {
     r = await POST(signed(RICH, 'EU-35_1_7'));
     check('Vercel production also rejects an omitted real provider', r.status, 503);
   } finally {
-    for (const [name, value] of Object.entries({ NODE_ENV: nodeEnv, SIGNIN_HOST: signinHost, VERCEL_PROJECT_PRODUCTION_URL: vercelProductionUrl, VERCEL_ENV: vercelEnv })) {
+    for (const [name, value] of Object.entries({ NODE_ENV: nodeEnv, SIGNIN_HOST: signinHost, VERCEL_PROJECT_PRODUCTION_URL: vercelProductionUrl, VERCEL_ENV: vercelEnv, REDEMPTIONS_ENABLED: redemptionSetting })) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;
     }
     process.env.ESIM_PROVIDER = 'mock';
@@ -512,6 +514,61 @@ async function main() {
     redeem._resetCaches();
     if (privateBaseBefore === undefined) delete process.env.WHOLESALE_BASE_URL; else process.env.WHOLESALE_BASE_URL = privateBaseBefore;
     if (privatePortfolioBefore === undefined) delete process.env.WHOLESALE_PORTFOLIO_URL; else process.env.WHOLESALE_PORTFOLIO_URL = privatePortfolioBefore;
+  }
+
+  console.log('\nclosing redemption keeps account and installation reads available');
+  const gateSetting = process.env.REDEMPTIONS_ENABLED;
+  const findBeforeGate = mock.find, orderBeforeGate = mock.order;
+  let providerCallsWhileClosed = 0;
+  process.env.REDEMPTIONS_ENABLED = '0';
+  mock.find = async (...args) => { providerCallsWhileClosed++; return findBeforeGate(...args); };
+  mock.order = async (...args) => { providerCallsWhileClosed++; return orderBeforeGate(...args); };
+  try {
+    r = await POST(signed(RICH, 'EU-35_1_7', { n: 1 }));
+    check('a closed redemption rejects the package request', [r.status, r.body.error], [503, 'data redemption is not enabled yet']);
+    check('a closed redemption performs no provider reads or orders', providerCallsWhileClosed, 0);
+    for (const setting of ['', 'true', 'yes', '01', ' 1 ']) {
+      process.env.REDEMPTIONS_ENABLED = setting;
+      r = await POST(signed(RICH, 'EU-35_1_7', { n: 1 }));
+      check('an invalid enablement value stays closed: ' + JSON.stringify(setting), [r.status, providerCallsWhileClosed], [503, 0]);
+    }
+    process.env.REDEMPTIONS_ENABLED = '0';
+    redeem._resetCaches();
+    r = await GET(addr(RICH));
+    check('the public account remains available with codes withheld', [r.status, r.body.orders[0].codes, r.body.orders[0].ac], [200, false, '']);
+    r = await POST(signed(RICH, null));
+    checkThat('the owner may still retrieve already-issued installation details', r.status === 200 && r.body.orders[0].codes && !!r.body.orders[0].ac);
+  } finally {
+    mock.find = findBeforeGate; mock.order = orderBeforeGate;
+    if (gateSetting === undefined) delete process.env.REDEMPTIONS_ENABLED; else process.env.REDEMPTIONS_ENABLED = gateSetting;
+    redeem._resetCaches();
+  }
+
+  console.log('\ninvalid launch addresses cannot bypass prelaunch');
+  const findBeforeInvalidLaunch = mock.find, orderBeforeInvalidLaunch = mock.order;
+  let invalidLaunchProviderCalls = 0;
+  mock.find = async (...args) => { invalidLaunchProviderCalls++; return findBeforeInvalidLaunch(...args); };
+  mock.order = async (...args) => { invalidLaunchProviderCalls++; return orderBeforeInvalidLaunch(...args); };
+  try {
+    for (const field of ['coin', 'curve']) {
+      for (const [label, invalid] of [['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['short', '0x1234'], ['wrapped in an array', [COIN]]]) {
+        const route = '/config/esim-invalid-' + field + '-' + label.replace(/ /g, '-') + '.json';
+        FILES[route] = Object.assign({}, config(COIN), { [field]: invalid });
+        process.env.ESIM_CONFIG_URL = base + route;
+        redeem._resetCaches();
+        const responses = await Promise.all([GET(addr(RICH)), POST(signed(RICH, null)), POST(signed(RICH, 'EU-35_1_7'))]);
+        check('a ' + label + ' ' + field + ' keeps account, signed read and purchase prelaunch', responses.map((x) => [x.status, x.body.error]), [[409, 'coin not launched yet'], [409, 'coin not launched yet'], [409, 'coin not launched yet']]);
+      }
+    }
+    check('invalid launch configuration reached no provider lookup or order', invalidLaunchProviderCalls, 0);
+    process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
+    redeem._resetCaches();
+    r = await POST(signed(RICH, null));
+    checkThat('valid launched addresses still permit signed installation retrieval without a treasury field', r.status === 200 && r.body.orders[0].codes && !!r.body.orders[0].ac);
+  } finally {
+    mock.find = findBeforeInvalidLaunch; mock.order = orderBeforeInvalidLaunch;
+    process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
+    redeem._resetCaches();
   }
 
   console.log('\nbefore the coin is launched');

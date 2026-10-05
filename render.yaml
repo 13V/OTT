@@ -29,6 +29,8 @@ services:
         value: https://nadanada.me/api/v2
       - key: LN_PAYER
         value: blink
+      - key: REDEMPTIONS_ENABLED
+        value: "0"
       - key: STORE_PREFIX
         value: "ott:prelaunch:"
       - key: ALLOWANCES_URL

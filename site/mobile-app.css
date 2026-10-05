@@ -169,6 +169,14 @@ body.ott-app-mode #view > .om-shell { padding: 0; }
 .om-platform-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 22px; border-radius: 14px; background: #e9e0d1; }
 .om-platform-button { min-height: 44px; border-radius: 10px; font-size: 14px; font-weight: 600; }
 .om-platform-button[aria-pressed='true'] { color: #fff9ed; background: var(--om-ink); }
+.om-device-check-button { margin: 0 0 20px; }
+.om-device-switch { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 4px; padding: 4px; margin: 18px 0; border-radius: 14px; background: #e9e0d1; }
+.om-device-switch .om-platform-button { padding: 9px 5px; font-size: 12px; }
+.om-device-checklist { padding-left: 23px; }
+.om-device-checklist li { padding-left: 6px; margin-block: 21px; }
+.om-device-checklist h3 { margin-bottom: 8px; }
+.om-device-checklist p { margin-block: 8px; }
+.om-settings-path { color: var(--om-ink); font-weight: 600; overflow-wrap: anywhere; }
 .om-step-progress { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; margin-bottom: 24px; }
 .om-step-progress button { display: grid; place-items: center; min-height: 44px; border: 1px solid var(--om-line); border-radius: 12px; background: #efe6d8; font-weight: 600; font-size: 14px; }
 .om-step-progress button[aria-current='step'], .om-step-progress button[aria-pressed='true'] { border-color: #a93b1d; background: #bd3f1c; color: #fff9ed; }

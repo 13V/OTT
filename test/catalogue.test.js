@@ -54,5 +54,60 @@ check('a region has no flag, and says so with an empty string rather than nothin
 check('the defaults name the places the site sells', [C.REGIONS.length, C.COUNTRIES.length, C.SIZES_GB], [8, 20, [1, 5, 10]]);
 check('an empty portfolio is an empty menu', C.pick({}), []);
 
-console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
-process.exit(failures ? 1 : 0);
+console.log('catalogue guards');
+const throws = (what, fn, message) => {
+  let error = null;
+  try { fn(); } catch (e) { error = e; }
+  check(what, !!error && message.test(error.message), true);
+};
+throws('empty portfolio cannot replace the menu', () => C.prepareConfig({ packages: [] }, { countries: [], regions: [] }), /no country and region catalogue/);
+throws('malformed country lists are rejected', () => C.validatePortfolio({ countries: 'error', regions: [] }), /no country and region catalogue/);
+throws('malformed destination bundles are rejected', () => C.validatePortfolio({ countries: [{ name: 'Germany', slug: 'germany', bundles: {} }], regions: [] }), /invalid or duplicate/);
+throws('duplicate destinations are rejected', () => C.validatePortfolio({ countries: [portfolio.countries[0], portfolio.countries[0]], regions: [] }), /invalid or duplicate/);
+throws('a response with no selected packages cannot replace the menu', () => C.prepareConfig({ packages: [] }, { countries: [{ name: 'Atlantis', slug: 'atlantis', bundles: [] }], regions: [] }), /no usable packages/);
+throws('loss of an existing destination requires reviewing the selection', () => C.prepareConfig({ packages: [{ slug: 'atlantis' }] }, portfolio), /currently listed destination/);
+const current = { coin: '', curve: '', treasury: '', provider: 'old', brand: { name: 'OT+T' }, taxBps: 1000, packages: [{ slug: 'germany' }] };
+const refreshed = C.prepareConfig(current, portfolio, '2026-10-05');
+check('verified refresh records the supplied date and real provider', [refreshed.catalogueAt, refreshed.provider], ['2026-10-05', 'wholesale']);
+check('refresh keeps launch, brand and allocation fields unchanged', [refreshed.coin, refreshed.curve, refreshed.treasury, refreshed.brand, refreshed.taxBps], ['', '', '', { name: 'OT+T' }, 1000]);
+check('refresh does not mutate the existing config', current.provider, 'old');
+const invalid = [
+  bundle('infinite-price', 1, 7, Infinity), bundle('infinite-data', Infinity, 7, 1), bundle('invalid-days', 1, 0, 1),
+  bundle('fractional-days', 1, 1.5, 1), bundle('missing-name', 1, 7, 1, { name: ' ' }),
+  bundle('boolean-price', 1, 7, true), bundle('under-one-cent', 1, 7, 0.001), bundle('unsafe-price', 1, 7, Number.MAX_VALUE),
+];
+check('invalid amounts, durations and names cannot become packages', C.pick({ countries: [{ name: 'Germany', slug: 'germany', bundles: invalid }] }), []);
+check('non-array bundle data is safely ignored by the selector', C.pick({ countries: [{ name: 'Germany', slug: 'germany', bundles: 'unavailable' }] }), []);
+check('missing destination metadata is safely ignored by the selector', C.pick({ countries: [null, { slug: 'germany', bundles: [bundle('valid', 1, 7, 1)] }] }), []);
+const priorBase = process.env.WHOLESALE_BASE_URL, priorDirect = process.env.WHOLESALE_PORTFOLIO_URL;
+delete process.env.WHOLESALE_BASE_URL;
+delete process.env.WHOLESALE_PORTFOLIO_URL;
+check('catalogue uses the documented public endpoint without credentials', C.portfolioUrl(), 'https://nadanada.me/api/v2/esim/portfolio');
+process.env.WHOLESALE_BASE_URL = 'https://operator.example/api/v2/';
+check('an operator base override is still supported', C.portfolioUrl(), 'https://operator.example/api/v2/esim/portfolio');
+process.env.WHOLESALE_PORTFOLIO_URL = 'https://operator.example/portfolio';
+check('a direct portfolio override takes priority', C.portfolioUrl(), 'https://operator.example/portfolio');
+if (priorBase === undefined) delete process.env.WHOLESALE_BASE_URL; else process.env.WHOLESALE_BASE_URL = priorBase;
+if (priorDirect === undefined) delete process.env.WHOLESALE_PORTFOLIO_URL; else process.env.WHOLESALE_PORTFOLIO_URL = priorDirect;
+
+(async () => {
+  let request;
+  const fetched = await C.fetchPortfolio('https://provider.example/portfolio', async (url, init) => {
+    request = { url, init };
+    return { ok: true, json: async () => ({ success: true, data: portfolio }) };
+  });
+  check('portfolio fetch returns verified country and region data', fetched, portfolio);
+  check('portfolio fetch is a read-only GET with no credentials or request body', [request.init.method, request.init.credentials, request.init.body, request.init.redirect], ['GET', 'omit', undefined, 'error']);
+  for (const [label, response] of [
+    ['an HTTP error', { ok: false, status: 503, json: async () => ({}) }],
+    ['a false success flag', { ok: true, json: async () => ({ success: false, data: portfolio }) }],
+    ['a contradictory error payload', { ok: true, json: async () => ({ success: true, error: 'not available', data: portfolio }) }],
+    ['an empty provider portfolio', { ok: true, json: async () => ({ success: true, data: { countries: [], regions: [] } }) }],
+  ]) {
+    let error = null;
+    try { await C.fetchPortfolio('https://provider.example/portfolio', async () => response); } catch (e) { error = e; }
+    check('fetch rejects ' + label, !!error, true);
+  }
+  console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
+  process.exit(failures ? 1 : 0);
+})().catch((e) => { console.error(e.message); process.exit(1); });

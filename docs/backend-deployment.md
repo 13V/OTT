@@ -30,6 +30,18 @@ This free service is for setup and preview. It sleeps after 15 idle minutes and 
 
 Before live use, add `BLINK_API_KEY`, `KV_REST_API_URL` and `KV_REST_API_TOKEN` through the service's environment settings. Confirm an externally durable Redis REST store and a funded payer. If your provider supplies a different endpoint, override `WHOLESALE_BASE_URL` there; preserve the privacy of any operator-specific endpoint. Render's native Key Value connection string is not the HTTP REST endpoint this adapter expects, and its free Key Value tier loses data on restart. Keep secrets out of the Blueprint. Configure the real public `coin`, `curve` and `treasury` addresses, refresh the catalogue, and publish a funded current-week ledger. A Reown project ID is separately required for mobile wallet connections. The prelaunch namespace must not be reused as a shortcut to reset any later live order history.
 
+## Complete setup before funding
+
+A Lightning balance is not needed to deploy the API, verify the provider catalogue, connect persistent storage, configure mobile wallet pairing or publish the app. These steps can be completed while the token addresses remain empty and redemption is disabled:
+
+1. Sign in to Render and apply the free prelaunch Blueprint above. Keep `REDEMPTIONS_ENABLED=0`. Record the HTTPS origin Render actually assigns.
+2. Create a persistent Redis database in the [Upstash Console](https://console.upstash.com/). Review its plan before creation. Copy its HTTPS REST URL and standard read/write REST token into Render's `KV_REST_API_URL` and `KV_REST_API_TOKEN` environment settings. The [REST documentation](https://upstash.com/docs/redis/features/restapi) explains these credentials. A read-only token cannot record orders or pass the storage probe. A temporary database that expires after 72 hours is suitable only for a separate integration test, never the order ledger.
+3. Create a dedicated OTT project in [Reown](https://dashboard.reown.com/), and allow the frontend origin `https://13v.github.io`. Copy the public project ID. [Reown's origin allowlist documentation](https://docs.reown.com/cloud/relay) says changes can take 15 minutes to apply. Project IDs are client identifiers; provider and storage credentials never belong in the client configuration.
+4. Run `npm run configure:app -- --project-id YOUR_PUBLIC_PROJECT_ID --api-origin https://YOUR_ACTUAL_API_HOST`. Commit these public settings and republish Pages. No backend or Reown value is invented by this command.
+5. Run `npm run check:prelaunch -- --remote`. It checks the current frontend settings, matching prelaunch backend, paused redemption, actual provider catalogue access, durable storage and the Pages CORS preflight. It performs only a status GET and an OPTIONS request against the API. The backend's status probe also tests one disposable storage key. The wallet can still be absent or empty; no payment or eSIM order is created.
+
+The prelaunch report explicitly defers token launch, wallet funding/payment validation, funded holder allocations and installation on a real phone. A passing prelaunch report does not allow live redemption. Keep the public `coin`, `curve` and `treasury` fields empty until the actual token launches.
+
 ## Hosted configuration
 
 Deploy this repository to a Node host that supports a persistent HTTP process, or retain the existing serverless handlers on a compatible host. For the portable server, the start command is:
@@ -53,6 +65,7 @@ Keep the following settings in the host's environment manager. Public values may
 | `SIGNIN_HOST` | `13v.github.io` |
 | `ESIM_PROVIDER` | `wholesale` for the existing Lightning-funded provider |
 | `LN_PAYER` | `blink` |
+| `REDEMPTIONS_ENABLED` | `0` during setup; production accepts only exact `1` to permit orders |
 | `WHOLESALE_BASE_URL` | `https://nadanada.me/api/v2` for the documented public API, or an operator-supplied alternative |
 | `BLINK_API_KEY` | Private Lightning wallet credential |
 | `KV_REST_API_URL` | Durable Redis REST endpoint |
@@ -89,6 +102,8 @@ After the host has issued its real HTTPS API origin, put that origin in the publ
 Mobile WalletConnect also needs the separate public Reown project ID in the same file. The backend origin and Reown project ID are currently empty. No host URL or project ID is supplied by this deployment preparation.
 
 ## Verify before enabling live redemption
+
+Production defaults to closed purchases. Keep `REDEMPTIONS_ENABLED=0` while connecting services, even after adding a funded wallet. The gate blocks new package orders in both the request handler and real providers; account and signed installation-detail reads stay available. Set it to `1` only after the token launch, reviewed allocation policy and funded end-to-end verification. A status response reports `redemption.enabled` separately from `redemption.ready`; configured but unfunded or unlaunched services never report live readiness.
 
 Run `npm run check:launch` to check the public wallet, API and token configuration without contacting an account. After saving the real API origin, `npm run check:launch -- --remote` also reads `/api/status` and checks the GitHub Pages CORS preflight. It never signs, places an order, sends a payment or prints backend credentials. A successful HTTP health response alone cannot pass it: it checks actual dependency flags, matching token addresses, a current ledger and a positive Lightning balance. These checks do not certify budget coverage, package pricing or a successful installation on a real phone.
 

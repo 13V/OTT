@@ -295,3 +295,26 @@ test('order progress waits for approval and provider issuing, and a pending refr
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(1);
   expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(signatures);
 });
+
+test('a closed redemption gate reports no order while signed installation reads remain usable', async ({ page }) => {
+  await setupFixture(page);
+  const posts = [];
+  await page.route('**/api/redeem**', route => {
+    const request = route.request();
+    const body = request.method() === 'POST' ? request.postDataJSON() : null;
+    if (body) posts.push(body);
+    if (body?.packageCode) return route.fulfill({ status: 503, ...json({ ok: false, error: 'data redemption is not enabled yet' }) });
+    return route.fulfill(json(standing([body ? ORDER : redacted(ORDER)])));
+  });
+  await reveal(page);
+  await expect(page.locator('.data-ac')).toContainText('SETUP-CODE');
+  await page.locator('.data-redeem').getByRole('button', { name: /^Redeem / }).click();
+  await expect(page.locator('.data-redeem')).toContainText('Could not redeem: data redemption is not enabled yet');
+  await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'select');
+  await expect(page.locator('.data-redeem').getByRole('button', { name: /^Redeem / })).toBeEnabled();
+  await expect(page.locator('.data-ac')).toContainText('SETUP-CODE');
+  await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toBeVisible();
+  expect(posts.filter(body => body.packageCode)).toHaveLength(1);
+  expect(posts.filter(body => !body.packageCode)).toHaveLength(1);
+  await expect(page.locator('.data-order-progress')).not.toContainText('Setup details available');
+});
