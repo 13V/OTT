@@ -1,0 +1,4 @@
+# Preserve generated SDK strings and verbatim upstream license notices.
+site/vendor/walletconnect.js linguist-generated=true -whitespace
+site/vendor/walletconnect.js.LEGAL.txt linguist-generated=true -whitespace
+site/vendor/walletconnect-NOTICES.txt -whitespace conflict-marker-size=32
