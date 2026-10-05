@@ -168,24 +168,24 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          SITE_URL: ${{ vars.SITE_URL || 'https://ott-one-virid.vercel.app' }}
+          SITE_URL: ${{ vars.SITE_URL }}
         run: |
           coin=$(node -e "try{console.log(require('./site/config/esim.json').coin||'')}catch(e){console.log('')}")
           # Before launch there is nothing to be unhealthy about: the endpoint answers "not launched".
           if [ -z "$coin" ]; then echo "not launched yet; nothing to check"; exit 0; fi
-          body=$(curl -sS --max-time 25 "$SITE_URL/api/status" || echo '')
-          if [ -z "$body" ]; then
+          # Pages cannot answer API requests. Use the reviewed HTTPS origin, never an old host default.
+          SITE_URL=$(node -e "const {apiOrigin}=require('./scripts/check-launch'); console.log(apiOrigin(process.env.SITE_URL||require('./site/config/app.json').apiBaseUrl))")
+          if [ -z "$SITE_URL" ]; then
+            summary="no valid HTTPS backend origin is configured for health monitoring"
+            body=''
+          else
+            body=$(curl -sS --max-time 25 "$SITE_URL/api/status" || echo '')
+          fi
+          if [ -n "$SITE_URL" ] && [ -z "$body" ]; then
             echo "could not reach $SITE_URL/api/status"
             summary="the health endpoint could not be reached at all"
-          else
-            summary=$(printf '%s' "$body" | node -e "
-              let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{
-                let j=null; try{ j=JSON.parse(b) }catch(e){ console.log('the health endpoint answered something that is not JSON'); return }
-                if (j.ok) { console.log(''); return }
-                const bad=Object.entries(j.checks||{}).filter(([,c])=>c&&!c.ok)
-                  .map(([k,c])=>'- **'+k+'**: '+String(c.detail||'(no detail)').slice(0,200));
-                console.log(bad.length ? bad.join('\n') : 'the endpoint reports itself unhealthy without naming a check');
-              })" || echo 'the health endpoint could not be parsed')
+          elif [ -n "$SITE_URL" ]; then
+            summary=$(printf '%s' "$body" | node scripts/health-summary.js || echo 'the health endpoint could not be validated')
           fi
           if [ -z "$summary" ]; then echo "the site reports itself healthy"; exit 0; fi
           echo "unhealthy:"; echo "$summary"
@@ -292,3 +292,4 @@ jobs:
             echo "could not push after 5 attempts"
             exit 1
           fi
+
