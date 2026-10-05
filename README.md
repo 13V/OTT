@@ -164,7 +164,7 @@ stale.
 | `scripts/chain.js`, `scripts/keccak.js`, `scripts/secp256k1.js` | Dependency-free JSON-RPC, hashing and signing, carried over from [13V/manna](https://github.com/13V/manna), same author, same style, MIT |
 | `scripts/lint.js` | The cheapest check there is: every script parses, every config is JSON |
 | `config/addresses.json` | The same chain config as `site/config/addresses.json`, for the scripts that run outside the deployment |
-| `.github/workflows/data.yml` | Every 30 minutes: the allowances ledger and the treasury file, commit if changed (which deploys), issue if the pool is low |
+| `.github/workflows/data.yml` | Every 30 minutes: the allowances ledger and treasury file, commit if changed, issue if the pool is low; the API reads those published files |
 | `.github/workflows/claim.yml` | Daily: claim, fund the pool, refresh the treasury file, commit |
 | `test/*.test.js` | The offline suite, one file per unit — see Running it |
 | `test/support/fake-wholesale.js` | A fake wholesale server the wholesale-dependent tests run against instead of the real one |
@@ -227,8 +227,9 @@ after saving the settings.
 ```
 
 Create a Reown project and allow `https://13v.github.io` as the frontend origin. The project ID is
-public; it is not a provider secret. Its empty checked-in value leaves mobile pairing disabled
-while injected wallets still work. See the official [EthereumProvider documentation](https://docs.reown.com/advanced/providers/ethereum).
+public; it is not a provider secret. The checked-in configuration now contains OTT's public Reown
+project ID and the backend origin `https://ott-prelaunch.vercel.app`. Mobile pairing is configured;
+injected wallets are also supported. See the official [EthereumProvider documentation](https://docs.reown.com/advanced/providers/ethereum).
 `apiBaseUrl` is a HTTPS origin without a path, query or credentials. An empty value keeps APIs on
 the frontend's own origin; GitHub Pages cannot answer those API requests. HTTP is allowed only
 between local development origins. Invalid settings fail before asking for a signature. The
@@ -246,6 +247,11 @@ GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committin
 Vercel configuration and untracked files, adds `.nojekyll`, and does not change the current checkout.
 Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
 using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
+
+The current Vercel backend was deployed manually and passed all 15 remote prelaunch checks.
+GitHub automatic deployment integration is still pending; pushing to `main` does not redeploy the
+backend. Publish reviewed changes to the committed `site/` tree through a separate manual Vercel
+deployment. Token launch, wallet funding, a real payment and installation on a phone remain deferred.
 
 `npm run serve:api` runs the same redemption/status handlers as a portable Node server. It listens
 on `127.0.0.1:3000` by default and serves only those two API routes. A public `HOST` forces
@@ -293,6 +299,14 @@ Production refuses missing/mock providers, mock payers, memory stores and unsign
 configuration. `WHOLESALE_ALLOW_MEMORY_STORE` cannot bypass that production requirement. As
 repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
 `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`.
+The GitHub treasury refreshes only read Redis orders and can use Upstash's read-only REST token
+for `KV_REST_API_TOKEN`. Vercel needs the standard read/write token for recording orders and its
+storage probe. A Blink credential has not been configured yet.
+The published data and claim workflows use the adapter's default Redis namespace `wf:`. Vercel
+Production uses `STORE_PREFIX=wf:` so treasury reporting reads the same order records; Preview
+uses `STORE_PREFIX=ott:preview:`. The published workflows do not consume a `STORE_PREFIX`
+repository variable. Any future namespace change must keep the backend and published workflow
+settings in agreement and preserve paid order history.
 
 New purchases also default to closed in production. Keep `REDEMPTIONS_ENABLED=0` through setup;
 only exact `1` permits orders. Account and signed installation reads remain available while closed.

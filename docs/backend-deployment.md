@@ -27,11 +27,15 @@ does not generate a separate function for each helper.
 If the account has no GitHub login connection, a deployment can instead upload only the committed
 `site/` files through Vercel's deployment API. That does not configure automatic Git deployments.
 Never upload the entire local workspace: it may contain private or untracked files.
+The current backend at `https://ott-prelaunch.vercel.app` uses this manual deployment path.
+GitHub automatic deployment integration is pending, so future reviewed API or catalogue changes
+need a separate manual deployment of the committed `site/` tree.
 
 Apply the hosted configuration below to **both Production and Preview**, including
 `NODE_ENV=production` and `REDEMPTIONS_ENABLED=0`. Do not use the portable server's `HOST`, `PORT`
 or start command for these serverless functions. Use the verified provider base
-`https://nadanada.me/api/v2`, `LN_PAYER=blink`, and `STORE_PREFIX=ott:prelaunch:`. Keep the current
+`https://nadanada.me/api/v2` and `LN_PAYER=blink`. Production uses `STORE_PREFIX=wf:`;
+Preview uses `STORE_PREFIX=ott:preview:` so its records remain separate. Keep the current
 main-branch `ALLOWANCES_URL` and `TREASURY_URL` from the weekly-data section.
 
 Create **Upstash for Redis** through Vercel Marketplace and connect it to this project. For
@@ -102,8 +106,8 @@ Keep the following settings in the host's environment manager. Public values may
 | `WHOLESALE_BASE_URL` | `https://nadanada.me/api/v2` for the documented public API, or an operator-supplied alternative |
 | `BLINK_API_KEY` | Private Lightning wallet credential |
 | `KV_REST_API_URL` | Durable Redis REST endpoint |
-| `KV_REST_API_TOKEN` | Private Redis credential |
-| `STORE_PREFIX` | A deployment-specific namespace; use different values for staging and production |
+| `KV_REST_API_TOKEN` | Private standard read/write Redis REST token for the backend |
+| `STORE_PREFIX` | `wf:` in Production; `ott:preview:` in Preview |
 | `ALLOWANCES_URL` | URL of the current published weekly ledger |
 | `TREASURY_URL` | URL of the current published treasury report |
 
@@ -126,13 +130,29 @@ TREASURY_URL=https://raw.githubusercontent.com/13V/OTT/main/site/data/treasury.j
 
 These are public generated data, not credentials. Check that the workflow actually runs, publishes the current week, and reports real funding. On a non-Vercel host these URLs must be explicit; do not invent Vercel environment variables to make self-fetching work. The backend refuses new redemptions when the ledger is for another week.
 
+Both the data and claim workflows' treasury refreshes read the same Redis order records as the
+backend. The published workflows leave `STORE_PREFIX` unset and use the adapter's default `wf:`.
+Vercel Production explicitly uses `STORE_PREFIX=wf:` to match; Preview uses `ott:preview:` for
+separate records. The published workflows do not consume a `STORE_PREFIX` repository variable.
+Any future namespace change must keep the backend and published workflow settings in agreement
+and preserve a live namespace and its paid order history.
+
+These GitHub treasury refreshes only read orders, so their `KV_REST_API_TOKEN` repository secret
+can use Upstash's read-only REST token. The Vercel backend needs the standard read/write token to
+record orders and complete the disposable-key storage probe. The credentials stay in the respective
+environment managers; they are not public frontend settings. No Blink credential is configured yet.
+
 The allocation script currently divides last week's collected tax in proportion to eligible token holdings. The proposed entry allowance and 40 GB weekly cap are not implemented. Do not publish those as guaranteed benefits until the funding and allocation policy has been validated.
 
 ## Connect the frontend
 
 After the host has issued its real HTTPS API origin, put that origin in the public `apiBaseUrl` field of `site/config/app.json`. Use only the origin, without `/api`, a query, credentials or a fragment. The app resolves the two API paths against it and refuses redirects for account requests.
 
-Mobile WalletConnect also needs the separate public Reown project ID in the same file. The backend origin and Reown project ID are currently empty. No host URL or project ID is supplied by this deployment preparation.
+Mobile WalletConnect also needs the separate public Reown project ID in the same file. The checked-in
+configuration now contains OTT's public Reown project ID and `https://ott-prelaunch.vercel.app` as
+the API origin. All 15 remote prelaunch checks have passed with redemption disabled and durable
+Redis connected. Token launch, wallet funding, a real payment and installation on a phone remain
+deferred; these preparation checks do not establish live readiness.
 
 ## Verify before enabling live redemption
 
