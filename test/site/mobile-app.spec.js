@@ -102,7 +102,7 @@ test('missing mobile wallet opens an honest handoff instead of pretending to con
   stubNetwork(page);
   await page.goto('/#/app');
   await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('Direct wallet connection from Safari, Chrome and the home-screen app is still being built.');
+  await expect(page.getByRole('dialog')).toContainText('Mobile wallet connection has not been enabled on this deployment yet.');
   await expect(page.getByRole('button', { name: 'Copy app link', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(null);
   await page.getByRole('button', { name: 'Close', exact: true }).click();

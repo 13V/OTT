@@ -77,14 +77,14 @@ const FILES = {
 };
 
 // A fake req/res pair in the shape Node gives a Vercel function, the same one test/redeem.test.js uses.
-function call(handler, { method = 'GET', url = '/api/status' } = {}) {
+function call(handler, { method = 'GET', url = '/api/status', requestHeaders = {} } = {}) {
   return new Promise((resolve) => {
-    const req = { method, url, headers: {} };
+    const req = { method, url, headers: requestHeaders };
     const headers = {};
     const res = {
       statusCode: 200,
       setHeader(k, v) { headers[k.toLowerCase()] = v; },
-      end(text) { resolve({ status: res.statusCode, headers, body: JSON.parse(text) }); },
+      end(text) { resolve({ status: res.statusCode, headers, body: text ? JSON.parse(text) : null }); },
     };
     handler(req, res).catch((e) => resolve({ status: 'THREW', headers, body: { error: String(e && e.message) } }));
   });
@@ -143,7 +143,39 @@ async function main() {
   check('and the same JSON, no-store contract as a real response', [r.headers['content-type'], r.headers['cache-control']], ['application/json; charset=utf-8', 'no-store']);
   r = await GET();
   check('GET answers 200 as JSON that is never cached', [r.status, r.headers['content-type'], r.headers['cache-control']], [200, 'application/json; charset=utf-8', 'no-store']);
-  checkThat('no CORS header is ever set', !('access-control-allow-origin' in r.headers));
+  checkThat('a request without Origin grants no CORS access', !('access-control-allow-origin' in r.headers));
+
+  console.log('\nstatus is readable only from the trusted frontend');
+  process.env.FRONTEND_ORIGINS = 'https://13v.github.io';
+  r = await call(status, { method: 'OPTIONS', requestHeaders: { origin: 'https://13v.github.io', 'access-control-request-method': 'GET' } });
+  check('GET preflight names the allowed origin and method', [r.status, r.headers['access-control-allow-origin'], r.headers['access-control-allow-methods']], [204, 'https://13v.github.io', 'GET']);
+  r = await call(status, { requestHeaders: { origin: 'https://13v.github.io' } });
+  check('an allowed frontend can read the health response', [r.status, r.headers['access-control-allow-origin'], r.body.ok], [200, 'https://13v.github.io', true]);
+  const hitsBefore = bundleHits;
+  r = await call(status, { url: '/api/status?fresh=1', requestHeaders: { origin: 'https://unrelated.example' } });
+  check('an unrelated origin is refused before any live provider check', [r.status, bundleHits], [403, hitsBefore]);
+  checkThat('the refusal grants no cross-origin read access', !('access-control-allow-origin' in r.headers));
+  r = await call(status, { method: 'OPTIONS', requestHeaders: { origin: 'https://13v.github.io', 'access-control-request-method': 'POST' } });
+  check('status preflight cannot enable POST', r.status, 403);
+  delete process.env.FRONTEND_ORIGINS;
+
+  console.log('\nproduction readiness never accepts test-only infrastructure');
+  const nodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    r = await GET();
+    check('production rejects a memory store despite the development override', [r.body.ready.store, /durable store/.test(r.body.checks.store.detail)], [false, true]);
+    check('production rejects the mock Lightning payer', [r.body.ready.payer, /real Lightning payer/.test(r.body.checks.payer.detail)], [false, true]);
+    process.env.ESIM_PROVIDER = 'mock';
+    r = await GET();
+    check('production does not report a mock eSIM provider as ready', [r.body.ready.provider, /real eSIM provider/.test(r.body.checks.provider.detail)], [false, true]);
+    delete process.env.ESIM_PROVIDER;
+    r = await GET();
+    check('production does not report an omitted eSIM provider as ready', r.body.ready.provider, false);
+  } finally {
+    if (nodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = nodeEnv;
+    process.env.ESIM_PROVIDER = 'wholesale';
+  }
 
   console.log('\na fully wired deployment');
   r = await GET();

@@ -89,16 +89,16 @@ const FILES = {
 // A fake req/res pair in the shape Node gives a Vercel function. The body is left as a string
 // here, which is the case the function must handle itself; Vercel's pre-parsed object is the
 // easier case and is covered once below.
-function call(handler, { method, url, body, rawBody }) {
+function call(handler, { method, url, body, rawBody, requestHeaders = {} }) {
   return new Promise((resolve) => {
-    const req = { method, url, headers: {} };
+    const req = { method, url, headers: requestHeaders };
     if (rawBody !== undefined) req.body = rawBody;
     else if (body !== undefined) req.body = typeof body === 'string' ? body : JSON.stringify(body);
     const headers = {};
     const res = {
       statusCode: 200,
       setHeader(k, v) { headers[k.toLowerCase()] = v; },
-      end(text) { resolve({ status: res.statusCode, headers, body: JSON.parse(text) }); },
+      end(text) { resolve({ status: res.statusCode, headers, body: text ? JSON.parse(text) : null }); },
     };
     handler(req, res).catch((e) => resolve({ status: 'THREW', headers, body: { error: String(e && e.message) } }));
   });
@@ -138,6 +138,7 @@ async function main() {
   process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
   process.env.ESIM_PROVIDER = 'mock';
   delete process.env.VERCEL_URL;
+  delete process.env.FRONTEND_ORIGINS;
 
   const redeem = require(path.join(API, 'redeem.js'));
   const GET = (address) => call(redeem, { method: 'GET', url: '/api/redeem?address=' + address });
@@ -147,11 +148,101 @@ async function main() {
   let r = await call(redeem, { method: 'DELETE', url: '/api/redeem' });
   check('an unsupported method is 405', r.status, 405);
   check('every response is JSON that is never cached', [r.headers['content-type'], r.headers['cache-control']], ['application/json; charset=utf-8', 'no-store']);
-  checkThat('no CORS header is ever set', !('access-control-allow-origin' in r.headers));
+  checkThat('a request without Origin grants no CORS access', !('access-control-allow-origin' in r.headers));
   r = await GET('');
   check('GET without an address is 400', [r.status, r.body.ok], [400, false]);
   r = await call(redeem, { method: 'POST', url: '/api/redeem', body: '{not json' });
   check('a POST with a broken body is 400, not a throw', r.status, 400);
+
+  console.log('\nthe trusted frontend may use a separately hosted API');
+  process.env.FRONTEND_ORIGINS = 'https://13v.github.io';
+  const preflight = { origin: 'https://13v.github.io', 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' };
+  r = await call(redeem, { method: 'OPTIONS', url: '/api/redeem', requestHeaders: preflight });
+  check('JSON POST preflight succeeds before any wallet or provider work', [r.status, r.body], [204, null]);
+  check('CORS names the exact frontend origin and varies by Origin', [r.headers['access-control-allow-origin'], r.headers.vary], ['https://13v.github.io', 'Origin']);
+  check('preflight permits only the implemented methods and JSON header', [r.headers['access-control-allow-methods'], r.headers['access-control-allow-headers']], ['GET, POST', 'Content-Type']);
+  checkThat('no credentialed browser session is allowed', !('access-control-allow-credentials' in r.headers));
+  r = await call(redeem, { method: 'GET', url: '/api/redeem?address=' + addr(RICH), requestHeaders: { origin: 'https://13v.github.io' } });
+  check('the allowed frontend receives the redacted account response', [r.status, r.headers['access-control-allow-origin'], r.body.orders], [200, 'https://13v.github.io', []]);
+  const signinHostForCors = process.env.SIGNIN_HOST;
+  process.env.SIGNIN_HOST = '13v.github.io';
+  try {
+    r = await call(redeem, { method: 'POST', url: '/api/redeem', body: signed(RICH, null), requestHeaders: { origin: 'https://13v.github.io' } });
+    check('CORS permission never relaxes the signed frontend host', [r.status, /signed for ott\.test/.test(r.body.error)], [401, true]);
+    const readMessage = message(addr(RICH)).replace('Site: ott.test', 'Site: 13v.github.io');
+    r = await call(redeem, { method: 'POST', url: '/api/redeem', body: signed(RICH, null, { message: readMessage }), requestHeaders: { origin: 'https://13v.github.io' } });
+    check('a correctly signed read reaches the separate API without a browser session', [r.status, r.headers['access-control-allow-origin'], r.body.remainingUsd], [200, 'https://13v.github.io', 5.3]);
+  } finally {
+    if (signinHostForCors === undefined) delete process.env.SIGNIN_HOST; else process.env.SIGNIN_HOST = signinHostForCors;
+  }
+  r = await call(redeem, { method: 'POST', url: '/api/redeem', body: signed(RICH, 'EU-35_1_7'), requestHeaders: { origin: 'https://unrelated.example' } });
+  check('even a valid signature from an unrelated browser origin is refused', [r.status, r.body.error], [403, 'origin not allowed']);
+  checkThat('an unrelated origin receives no CORS permission', !('access-control-allow-origin' in r.headers));
+  check('the refused cross-origin request minted nothing', await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0)), null);
+  r = await call(redeem, { method: 'OPTIONS', url: '/api/redeem', requestHeaders: Object.assign({}, preflight, { 'access-control-request-headers': 'content-type, authorization' }) });
+  check('preflight cannot add an authentication header', r.status, 403);
+  r = await call(redeem, { method: 'OPTIONS', url: '/api/redeem', requestHeaders: Object.assign({}, preflight, { 'access-control-request-method': 'DELETE' }) });
+  check('preflight cannot grant an unsupported method', r.status, 403);
+  process.env.FRONTEND_ORIGINS = '*';
+  r = await call(redeem, { method: 'OPTIONS', url: '/api/redeem', requestHeaders: preflight });
+  check('a wildcard configuration does not grant every website access', r.status, 403);
+  process.env.FRONTEND_ORIGINS = 'https://13v.github.io/OTT/';
+  r = await call(redeem, { method: 'OPTIONS', url: '/api/redeem', requestHeaders: preflight });
+  check('a configured URL containing a path is rejected rather than broadened to its host', r.status, 403);
+  delete process.env.FRONTEND_ORIGINS;
+  r = await call(redeem, { method: 'POST', url: '/api/redeem', body: '{not json', requestHeaders: { host: 'ott.test', origin: 'https://ott.test' } });
+  check('existing same-host clients reach the handler without extra configuration', r.status, 400);
+
+  console.log('\na redemption signature belongs to its signed week');
+  // Freeze the handler clock across Monday. The SAME valid signed bytes were redeemable just
+  // before midnight, but must not fill slot zero again after the sequence resets for a new week.
+  const boundary = week.weekStart(CUR);
+  const previousSignature = signed(RICH, 'EU-35_1_7', { ts: boundary - 1 });
+  const previousRead = signed(RICH, null, { ts: boundary - 1 });
+  const dateNow = Date.now;
+  Date.now = () => (boundary + 1) * 1000;
+  try {
+    r = await POST(previousSignature);
+    check('a still-fresh signature from the preceding week is refused', [r.status, /another week/.test(r.body.error)], [401, true]);
+    check('the refused replay did not create an order in the new week', await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0)), null);
+    r = await POST(previousRead);
+    check('a still-fresh read signature remains valid across the weekly boundary', r.status, 200);
+    r = await POST(signed(RICH, 'EU-35_1_7', { ts: boundary + 2 }));
+    check('signing again in the current week authorises the new sequence', r.status, 200);
+    mock._reset(); redeem._resetCaches();
+    Date.now = () => (boundary - 1) * 1000;
+    r = await POST(signed(RICH, 'EU-35_1_7', { ts: boundary + 1 }));
+    check('a future timestamp cannot authorise the next week early', [r.status, /another week/.test(r.body.error)], [401, true]);
+  } finally { Date.now = dateNow; mock._reset(); redeem._resetCaches(); }
+
+  console.log('\nproduction never returns fake eSIMs');
+  const nodeEnv = process.env.NODE_ENV;
+  const signinHost = process.env.SIGNIN_HOST;
+  const vercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  const vercelEnv = process.env.VERCEL_ENV;
+  process.env.NODE_ENV = 'production';
+  process.env.SIGNIN_HOST = 'ott.test';
+  try {
+    r = await POST(signed(RICH, 'EU-35_1_7'));
+    check('an explicit mock provider in production fails closed', [r.status, /real eSIM provider/.test(r.body.error)], [503, true]);
+    delete process.env.ESIM_PROVIDER;
+    r = await POST(signed(RICH, 'EU-35_1_7'));
+    check('an omitted provider in production fails closed too', r.status, 503);
+    delete process.env.SIGNIN_HOST;
+    delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    r = await POST(signed(RICH, null));
+    check('production cannot accept signed requests without a configured sign-in host', [r.status, r.body.error], [401, 'sign-in host is not configured']);
+    delete process.env.NODE_ENV;
+    process.env.VERCEL_ENV = 'production';
+    process.env.SIGNIN_HOST = 'ott.test';
+    r = await POST(signed(RICH, 'EU-35_1_7'));
+    check('Vercel production also rejects an omitted real provider', r.status, 503);
+  } finally {
+    for (const [name, value] of Object.entries({ NODE_ENV: nodeEnv, SIGNIN_HOST: signinHost, VERCEL_PROJECT_PRODUCTION_URL: vercelProductionUrl, VERCEL_ENV: vercelEnv })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    process.env.ESIM_PROVIDER = 'mock';
+  }
 
   // Regression: readBody()'s streamed-body branch (req.body undefined — the "bare Node" case
   // this fake exercises via a real async-iterable req, unlike the string/object bodies above)

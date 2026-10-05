@@ -2,11 +2,12 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v2';
+const CACHE_NAME = CACHE_PREFIX + 'v3';
 const SHELL = [
   'index.html', 'fonts.css', 'style.css', 'ui.css', 'home.css', 'account-preview.css',
   'mobile-app.css', 'ui.js', 'qr.js', 'esim.js', 'clay-type.js', 'account-preview.js',
   'home.js', 'status.js', 'holders.js', 'mobile-app.js', 'app.js', 'pwa.js',
+  'client-config.js', 'wallet.js',
   'manifest.webmanifest',
 ];
 const ART = [
@@ -27,7 +28,7 @@ const ICONS = ['assets/app/icon.svg', 'assets/app/icon-180.png', 'assets/app/ico
 const APP_ART = ['app-home-world', 'app-japan-world', 'app-kit-world', 'app-clay-logo'].map((name) => 'assets/app/' + name + '.webp');
 const urls = (files) => files.map((file) => new URL(file, ROOT).href);
 const shellUrls = new Set(urls(SHELL));
-const assetUrls = new Set(urls([...ART, ...APP_ART, ...FLAGS, ...FONTS, ...ICONS]));
+const assetUrls = new Set(urls([...ART, ...APP_ART, ...FLAGS, ...FONTS, ...ICONS, 'vendor/walletconnect.js']));
 const indexUrl = new URL('index.html', ROOT).href;
 
 self.addEventListener('install', (event) => {

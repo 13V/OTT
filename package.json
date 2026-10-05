@@ -9,6 +9,7 @@
  },
  "scripts": {
   "lint": "node scripts/lint.js",
+  "build:wallet": "node scripts/build-wallet.js",
   "catalogue": "node scripts/catalogue.js",
   "serve": "node test/site/support/server.js",
   "deploy:pages": "node scripts/publish-pages.js",
@@ -34,6 +35,9 @@
   "test:site": "playwright test --config=test/site/playwright.config.js"
  },
  "devDependencies": {
-  "@playwright/test": "^1.56.1"
+  "@playwright/test": "^1.56.1",
+  "@reown/appkit": "1.8.19",
+  "@walletconnect/ethereum-provider": "2.25.0",
+  "esbuild": "0.28.2"
  }
 }

@@ -16,6 +16,7 @@
  * unless told to in so many words: a paid order that is forgotten is money gone and no eSIM.
  */
 const FETCH_TIMEOUT_MS = 5000;
+const { isProduction } = require('./request-origin');
 const PREFIX = () => process.env.STORE_PREFIX || 'wf:';
 
 function memoryStore() {
@@ -106,6 +107,11 @@ let cached = null;
 function store() {
   const kind = String(process.env.STORE || '').toLowerCase();
   if (kind === 'memory') {
+    if (isProduction()) {
+      const error = new Error('production requires a durable store; configure KV_REST_API_URL and KV_REST_API_TOKEN');
+      error.status = 503;
+      throw error;
+    }
     if (!cached || cached.name !== 'memory') cached = prefixed(memoryStore());
     return cached;
   }

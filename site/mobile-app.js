@@ -75,8 +75,9 @@
 
   async function wallet(ctx, source) {
     const { h } = ctx;
-    if (window.ethereum?.request) {
+    if (ctx.walletAvailable?.() || window.OTTWallet?.available() || (!window.OTTWallet && window.ethereum?.request)) {
       source.disabled = true;
+      preview = false;
       try {
         const account = await ctx.connect();
         if (account) { preview = false; if (ctx.isCurrent()) ctx.refresh(); }
@@ -93,7 +94,26 @@
     });
     dialog(h, 'Open OTT in your wallet', h('div', { class: 'om-guide-copy' },
       h('p', {}, 'Use your wallet’s browser to open OTT, then tap Connect wallet.'),
-      h('p', { class: 'om-muted' }, 'Direct wallet connection from Safari, Chrome and the home-screen app is still being built. You can explore plans and the setup guide here.'), copy), source);
+      h('p', { class: 'om-muted' }, 'Mobile wallet connection has not been enabled on this deployment yet. You can still explore plans and the setup guide, or connect from your wallet’s browser.'), copy), source);
+  }
+
+  function walletSettings(h, ctx, source) {
+    const account = ctx.currentAccount();
+    const copy = action(h, 'Copy address', async () => {
+      try { await navigator.clipboard.writeText(account); copy.textContent = 'Address copied'; }
+      catch { copy.textContent = 'Select the address above to copy it'; }
+    }, 'om-secondary-button');
+    let sheet;
+    const disconnect = action(h, 'Disconnect wallet', async () => {
+      disconnect.disabled = true;
+      sheet.close();
+      try { await ctx.disconnect(); }
+      catch (error) { ctx.toast('Wallet disconnected from OTT', error.message || 'You can also remove the session in your wallet.'); }
+    }, 'om-secondary-button');
+    sheet = dialog(h, 'Your wallet', h('div', { class: 'om-guide-copy' },
+      h('p', { class: 'om-wallet-address' }, account),
+      h('p', {}, 'Your wallet is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
+      h('div', { class: 'om-wallet-actions' }, copy, disconnect)), source);
   }
 
   function previewBanner(h, ctx) {
@@ -136,27 +156,65 @@
     const primary = preview ? action(h, ['Find a data plan', icon('arrow')], () => go('plans'))
       : active ? action(h, [account ? 'View My data' : 'Connect wallet', icon('arrow')], event => account ? go('esims') : wallet(ctx, event.currentTarget))
         : action(h, ['Try the app preview', icon('arrow')], () => enterPreview(ctx));
-    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : 'Weekly credit' },
-      h('div', { class: 'om-pass-content' }, chip(h),
+    const content = h('div', { class: 'om-pass-content' }, chip(h),
         h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'DATA FOR OTT HOLDERS'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Your next connection.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.' : active ? 'Check your weekly credit and eSIMs.' : 'Weekly data credit for eligible holders. At home or abroad.'),
-        h('div', { class: 'om-pass-action' }, primary)));
+        h('div', { class: 'om-pass-action' }, primary));
+    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : 'Weekly credit', 'aria-live': 'polite' }, content);
+    const realAccount = !preview && active && account;
+    if (realAccount) {
+      credit.setAttribute('aria-busy', 'true');
+      content.querySelector('.om-pass-title').textContent = 'Reading your credit…';
+      content.querySelector('.om-pass-note').textContent = 'Checking your current weekly account.';
+      primary.textContent = 'View My data';
+      const update = async () => {
+        let state = null;
+        try { state = await window.WhateverData.loadAccount(account); } catch { /* Live financial data never falls back to a cached sample. */ }
+        if (!ctx.isCurrent() || !credit.isConnected || ctx.currentAccount()?.toLowerCase() !== account.toLowerCase()) return;
+        credit.setAttribute('aria-busy', 'false');
+        const title = content.querySelector('.om-pass-title, .om-balance');
+        const note = content.querySelector('.om-pass-note');
+        if (!state || (!state.stale && state.remainingUsd === null)) {
+          title.className = 'om-pass-title'; title.textContent = 'Credit unavailable';
+          note.textContent = 'We couldn’t load your current balance. Go online and try again.';
+        } else if (state.stale) {
+          title.className = 'om-pass-title'; title.textContent = 'Awaiting allocation';
+          note.textContent = 'This week’s credit hasn’t been published yet. Check back after the weekly update.';
+        } else {
+          title.className = 'om-balance'; title.textContent = money(state.remainingUsd);
+          note.textContent = 'Available for eSIM packages. At home or abroad.';
+          const details = h('dl', { class: 'om-credit-details' },
+            h('div', {}, h('dt', {}, 'Allocated'), h('dd', {}, state.allocatedUsd === null ? 'Unavailable' : money(state.allocatedUsd))),
+            h('div', {}, h('dt', {}, 'Used'), h('dd', {}, state.usedUsd === null ? 'Unavailable' : money(state.usedUsd))));
+          content.insertBefore(details, content.querySelector('.om-pass-action'));
+          const expiry = h('p', { class: 'om-credit-expiry' }, 'Unused credit expires ',
+            h('time', { datetime: new Date(state.weekEnd * 1000).toISOString() }, new Date(state.weekEnd * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })), '.');
+          content.insertBefore(expiry, content.querySelector('.om-pass-action'));
+          // Replace the old View My data handler as the primary task becomes choosing data.
+          primary.replaceWith(action(h, ['Find a data plan', icon('arrow')], () => go('plans')));
+        }
+      };
+      // Rendering is synchronous; start reads after the pass has been mounted.
+      queueMicrotask(update);
+    }
     const first = cfg.packages.find(pkg => pkg.slug === 'japan' && pkg.gb === 5) || cfg.packages[0];
     const connection = action(h, [countryFlag(h, preview ? first : null),
       h('span', { class: 'om-row-copy' }, h('strong', {}, preview ? 'Sample eSIM' : 'Find a data plan'),
         h('span', {}, preview ? first.name + ' · ' + first.gb + ' GB package' : 'For everyday life or your next trip.')), icon('arrow')],
     () => go(preview ? 'esims' : 'plans'), 'om-connection-row');
     connection.setAttribute('aria-label', preview ? 'View sample eSIMs' : 'Find a data plan');
-    return h('div', { class: 'om-home-grid' },
+    const result = h('div', { class: 'om-home-grid' },
       h('div', { class: 'om-home-feature' }, world(h, 'home'), credit),
       h('div', { class: 'om-home-tools' }, connection,
-        !preview && !active ? h('div', { class: 'om-wallet-row' },
+        !preview && (!active || account) ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
             h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Connect to view your data when OTT launches.')),
-          action(h, account ? 'View My data' : 'Connect wallet', event => account ? go('esims') : wallet(ctx, event.currentTarget), 'om-secondary-button')) : null,
+          action(h, account ? 'Wallet settings' : 'Connect wallet', event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-secondary-button')) : null,
+        realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
         h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))));
+    return result;
   }
 
   function uniquePlaces(cfg) {
@@ -341,7 +399,7 @@
         h('details', {}, h('summary', {}, 'Can I set it up on the same phone?'), h('p', {}, 'Use the provider’s installation link if one is available. Otherwise, use manual details or display the QR on another screen. Supported iPhones can also add an eSIM from a QR shown in Safari.')),
         h('details', {}, h('summary', {}, 'Does weekly credit become cash?'), h('p', {}, 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.')),
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
-        h('details', {}, h('summary', {}, 'Why can’t I connect my wallet here?'), h('p', {}, 'This first version connects through wallets that provide an in-app browser. Direct mobile wallet connection is still being built. Open the app link in your wallet’s browser to connect.')),
+        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home. A browser wallet connects directly; mobile wallets open through WalletConnect when enabled. Return to OTT after approving the connection. You can disconnect in Wallet settings. If mobile connection hasn’t been enabled yet, open OTT in your wallet’s browser.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
   }
 

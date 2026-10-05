@@ -310,7 +310,20 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page, { calls: CALLS });
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
+  await page.addInitScript((addr) => {
+    window.__eth = [];
+    window.ethereum = { request: async ({ method, params }) => {
+      window.__eth.push({ method, params });
+      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [addr];
+      if (method === 'eth_chainId') return '0x1237';
+      if (method === 'personal_sign') {
+        const bytes = params[0].slice(2).match(/.{2}/g).map(byte => parseInt(byte, 16));
+        const message = new TextDecoder().decode(new Uint8Array(bytes));
+        return '0x' + (message.includes('authorise a data redemption') ? 'ab' : 'cd').repeat(65);
+      }
+      return null;
+    } };
+  }, ADDR);
 
   // 1,234 OTT of 812,345.678 circulating is a 0.152% share — matching plan-contract.md's own
   // worked example — and $20.00 of allowance floors to 25 GB at Germany's ~80¢/GB, 2 GB at
@@ -360,6 +373,11 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
       // expectation from being swallowed as a route error.
       redeemed = true;
       await route.fulfill(json({ ok: true, order: withCodes(fresh), remainingUsd: 13.02 }));
+      return;
+    }
+    // The backend accepts read authorization only for a signed read.
+    if (!reqBody.message.startsWith('OT+T — show my eSIM codes\n')) {
+      await route.fulfill(json({ ok: false, error: 'Reading codes requires read authorization.' }, 403));
       return;
     }
     // A signed read: the standing again, with codes this time.
@@ -466,10 +484,15 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(card).toContainText('SM-DP+');
   await expect(card).toContainText('smdp.provider.example');
   await expect(card).toContainText('MATCH-123');
-  // The balance the API answered with, not one the page worked out for itself — and the signed
-  // read that followed the redeem carried the past order's code too, with no extra click needed.
+  // The redemption response confirms its new package and balance. It does not authorize a
+  // read of every previous package's installation details.
   await expect(mine.locator('.credit-summary')).toContainText('$13.02');
   await expect(mine.locator('.data-tiles')).toContainText('$6.98');
+  await expect(pastCard.locator('.data-ac')).toHaveText('—');
+  await expect(pastCard.locator('.data-install')).toHaveCount(0);
+  expect(posts).toHaveLength(2);
+  expect(posts.filter(p => !p.packageCode)).toHaveLength(1);
+  await mine.getByRole('button', { name: 'Show my eSIM codes' }).click();
   await expect(pastCard.locator('.data-ac')).toHaveText('LPA:1$old.example$OLD');
 
   // The redeem named the slot it was filling: this wallet had 1 order, so n is 1.
@@ -477,10 +500,11 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   expect(redeemPost.address).toBe(ADDR);
   expect(redeemPost.packageCode).toBe('fixed_5GB_30D_DE');
   expect(redeemPost.n).toBe(1);
-  // Two signed reads happened — "Show my eSIM codes", and the one that followed the redeem — plus
-  // the redeem itself, three signed calls in all.
+  // Both signed reads came from the holder's Show my eSIM codes action. The redemption never
+  // sends its own signature to the read endpoint.
   const readPosts = posts.filter((p) => !p.packageCode);
   expect(readPosts).toHaveLength(2);
+  expect(readPosts.every(p => !Object.hasOwn(p, 'n'))).toBe(true);
 
   // What was signed, and what each signature authorises. A redemption's message names the plan
   // and the slot, so it is spent on that one order and can never be walked across the week; a
@@ -491,6 +515,8 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   expect(reads).toHaveLength(2);
   expect(new Set(reads.map((p) => p.signature)).size).toBe(1);
   expect(redeemPost.signature).toBe('0x' + 'ab'.repeat(65));
+  expect(reads.every(p => p.signature === '0x' + 'cd'.repeat(65))).toBe(true);
+  expect(reads.every(p => p.signature !== redeemPost.signature)).toBe(true);
   expect(redeemPost.message).not.toBe(reads[0].message);
 
   const lines = redeemPost.message.split('\n');
@@ -506,6 +532,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   const readLines = reads[0].message.split('\n');
   expect(readLines[0]).toBe('OT+T — show my eSIM codes');
   expect(readLines.some((l) => l.startsWith('Plan: '))).toBe(false);
+  expect(readLines.some((l) => l.startsWith('Slot: '))).toBe(false);
 
   const signs = await page.evaluate(() => window.__eth.filter((c) => c.method === 'personal_sign'));
   expect(signs).toHaveLength(2);

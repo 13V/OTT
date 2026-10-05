@@ -176,12 +176,16 @@
   let lastRead = null; // { addr, message, signature, at }
   let walletGeneration = 0;
   const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
+  const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
   async function signIn(addr, want) {
+    // Validate the backend destination before asking the holder to sign anything.
+    window.OTTClientConfig?.apiUrl('./api/redeem');
+    await window.OTTEnsureChain?.();
     const w = want || { action: 'read' };
     if (w.action === 'read' && readIsFresh(addr)) return { message: lastRead.message, signature: lastRead.signature };
     const generation = walletGeneration;
     const message = signInMessage(addr, w);
-    const signature = await window.ethereum.request({ method: 'personal_sign', params: [hexOfUtf8(message), addr] });
+    const signature = await (window.OTTWallet || window.ethereum).request({ method: 'personal_sign', params: [hexOfUtf8(message), addr] });
     if (generation !== walletGeneration) throw new Error('Your wallet changed while confirming. Reconnect and try again.');
     if (w.action === 'read') lastRead = { addr, message, signature, at: Date.now() };
     return { message, signature };
@@ -197,15 +201,35 @@
   // front of it (a 404 from a static host, a gateway page) answered instead, and the status is the
   // only honest thing to say about that.
   async function api(method, path, body) {
-    const res = await fetch(path, {
+    const generation = walletGeneration;
+    const url = window.OTTClientConfig?.apiUrl(path) || path;
+    const res = await fetch(url, {
       method, headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined, cache: 'no-store',
+      credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(body?.packageCode ? 65000 : 15000),
     });
     let j = null;
     try { j = await res.json(); } catch (e) { j = null; }
+    if (body && generation !== walletGeneration) throw new Error('Your wallet changed. Reconnect to view this account.');
     if (!j) throw new Error('redeem API answered HTTP ' + res.status);
     if (!j.ok) throw new Error(j.error || 'redeem API refused (HTTP ' + res.status + ')');
     return j;
+  }
+
+  /** Only the live API knows what is still spendable. A ledger file cannot replace it. */
+  async function loadAccount(address) {
+    if (!isAddress(address)) throw new Error('Connect a wallet to load your account.');
+    const standing = await api('GET', './api/redeem?address=' + address.toLowerCase());
+    if (String(standing.address || '').toLowerCase() !== address.toLowerCase()) throw new Error('The account response belongs to another wallet.');
+    const nowWeek = weekOf(Math.floor(Date.now() / 1000));
+    const stale = standing.stale !== false || Number(standing.week) !== nowWeek || !(Number(standing.weekEnd) > Date.now() / 1000);
+    const amount = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+    return { address: standing.address, stale,
+      remainingUsd: stale ? null : amount(standing.remainingUsd),
+      allocatedUsd: stale ? null : amount(standing.allowanceUsd),
+      usedUsd: stale ? null : amount(standing.redeemedUsd),
+      weekEnd: stale ? null : Number(standing.weekEnd),
+      orderCount: (standing.orders || []).length + (standing.history || []).length };
   }
 
   // ============================================================================ the page
@@ -507,8 +531,8 @@
         } catch (e) { hint.textContent = 'Could not connect: ' + errText(e); hint.classList.add('err'); }
         finally { btn.disabled = false; }
       } }, 'Connect wallet');
-      btn.disabled = !window.ethereum;
-      panel.appendChild(h('p', { class: 'small' }, window.ethereum
+      btn.disabled = !walletAvailable();
+      panel.appendChild(h('p', { class: 'small' }, walletAvailable()
         ? 'Connect a wallet to see its weekly credit and eSIMs. Eligibility depends on the weekly balance snapshot and the available budget.'
         : 'No browser wallet detected. Install a compatible wallet to see your weekly credit and eSIMs.'));
       panel.appendChild(h('div', { class: 'data-actions' }, btn));
@@ -524,6 +548,8 @@
     let standing = null, apiError = null;
     try { standing = await api('GET', './api/redeem?address=' + addr); }
     catch (e) { apiError = errText(e); }
+
+    if ((ctx.isCurrent && !ctx.isCurrent()) || currentAccount(ctx)?.toLowerCase() !== addr || !panel.isConnected) return;
 
     clear(body);
     const fileRow = allow && allow.wallets ? allow.wallets[addr] : null;
@@ -734,7 +760,7 @@
       placeNote,
       sizes, packageInput,
       btn, hint, result);
-    if (!window.ethereum) wrap.appendChild(notice('Redeeming needs a wallet that can sign a message.', 'plain'));
+    if (!walletAvailable()) wrap.appendChild(notice('Redeeming needs a wallet that can sign a message.', 'plain'));
 
     function picked() { return packageByCode(cfg, packageInput.value); }
     function paintButton() {
@@ -780,7 +806,7 @@
     async function doRedeem() {
       const pkg = picked();
       if (!pkg) return;
-      if (!window.ethereum) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
+      if (!walletAvailable()) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
       hint.textContent = ''; hint.classList.remove('err');
       btn.disabled = true;
       clear(result);
@@ -807,17 +833,8 @@
         const previewGroup = groupIntoSims(cfg, previewed).find((g) => g.bundles.some((o) => o.transactionId === out.order.transactionId));
         if (previewGroup) result.appendChild(simCard(ctx, cfg, previewGroup, out.order));
         if (typeof ctx.toast === 'function') ctx.toast(out.order && out.order.pending ? 'eSIM ordered' : 'eSIM ready', packageLabel(pkg), 'success');
-        // The signature that just redeemed also proves who is asking, so it buys a signed read
-        // too — the panel repaints with every code this wallet is now owed to see, not only the
-        // one it just bought, and without a second prompt. A read that fails on its own does not
-        // undo the redemption; the standing is composed locally instead, the way this worked
-        // before the read existed.
-        let freshStanding = null;
-        try { freshStanding = await api('POST', './api/redeem', { address: addr, message, signature }); }
-        catch (e) { freshStanding = null; }
-        if (freshStanding) {
-          repaintFrom(ctx, cfg, addr, allow, freshStanding, panel, out.order);
-        } else {
+        // A redemption signature authorizes that order only. Read codes use a separate signature.
+        {
           const spent = Number(out.order && out.order.priceUsd) || pkg.priceUsd;
           const fallback = Object.assign({}, standing, {
             remainingUsd: out.remainingUsd,
@@ -898,7 +915,7 @@
     // what is already on the screen reads as a second, different thing to press.
     const stillHidden = (gs) => gs.some((g) => !g.sim || !g.sim.codes);
     const btn = h('button', { class: 'btn btn-sm', onclick: async () => {
-      if (!window.ethereum) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
+      if (!walletAvailable()) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
       btn.disabled = true;
       hint.textContent = ''; hint.classList.remove('err');
       try {
@@ -1102,7 +1119,7 @@
   }
 
   window.WhateverData = {
-    render, renderMyData, SEL, signInMessage, hexOfUtf8,
+    render, renderMyData, SEL, signInMessage, hexOfUtf8, loadAccount,
     resetWallet: () => { walletGeneration++; lastAccount = null; lastRead = null; },
     selectPackage: (code) => { selectedPackageCode = String(code || ''); },
     // Shared with site/status.js, the same way SEL already is, so the two files cannot silently

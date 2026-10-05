@@ -46,6 +46,7 @@ const { provider: chooseProvider } = require('./lib/providers');
 const { payer: choosePayer } = require('./lib/payers');
 const { store: chooseStore } = require('./lib/store');
 const { weekOf } = require('./lib/week');
+const { allowRequestOrigin } = require('./lib/request-origin');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -307,9 +308,7 @@ async function computeStatus() {
 }
 
 function send(res, status, body) {
-  // No Access-Control-Allow-Origin, deliberately, and for the same reason as redeem.js: this page
-  // and this function share an origin, and withholding the header keeps another site's JavaScript
-  // from reading it.
+  // Shared origin checks allow only this API's host or the explicitly configured frontend.
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('cache-control', 'no-store');
@@ -321,6 +320,7 @@ let cached = null; // { at, body } — the entire response, kept for RESPONSE_CA
                     // the one clock ?fresh=1's own floor is measured against, below.
 
 module.exports = async (req, res) => {
+  if (!allowRequestOrigin(req, res, ['GET'])) return;
   if (req.method !== 'GET') {
     res.setHeader('allow', 'GET');
     return fail(res, 405, 'method not allowed');

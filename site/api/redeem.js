@@ -70,6 +70,7 @@ const { keccak256Hex } = require('./lib/keccak');
 const eip191 = require('./lib/eip191');
 const { provider: chooseProvider } = require('./lib/providers');
 const { weekOf, weekEnd: weekEndOf } = require('./lib/week');
+const { allowRequestOrigin, isProduction } = require('./lib/request-origin');
 
 const MESSAGE_HEAD = 'OT+T';
 const SIGNIN_WINDOW_S = 10 * 60;
@@ -288,8 +289,8 @@ function publicOrder(o, config, { codes = false } = {}) {
 /**
  * The hosts this deployment will accept a signature for. Vercel names the production host and the
  * deployment's own host in the environment; SIGNIN_HOST covers a custom domain. A deployment that
- * can name none of them does not enforce the line — a check that cannot be performed must not
- * become a check that always fails, which would lock every holder out of a preview deploy.
+ * can name none of them skips the check only in development. Production refuses signatures
+ * until the operator configures a known frontend host.
  */
 function knownHosts() {
   return [process.env.SIGNIN_HOST, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.VERCEL_URL]
@@ -325,6 +326,7 @@ function checkMessage(message, address, nowS, want) {
   const hosts = knownHosts();
   const site = String(field('Site') || '').toLowerCase();
   if (!site) return 'sign-in message names no site';
+  if (!hosts.length && isProduction()) return 'sign-in host is not configured';
   if (hosts.length && !hosts.includes(site)) return 'sign-in message was signed for ' + site + ', not this site';
   if (field('Wallet') !== address) return 'sign-in message is for another address';
   if (want.action === 'redeem') {
@@ -334,6 +336,9 @@ function checkMessage(message, address, nowS, want) {
   const issued = field('Issued');
   if (!/^\d{1,12}$/.test(String(issued))) return 'sign-in message has no timestamp';
   if (Math.abs(Number(issued) - nowS) > SIGNIN_WINDOW_S) return 'sign-in expired, sign again';
+  // The slot restarts at zero each Monday. A signature from the last ten minutes of the old
+  // week must not mint that slot again in the new one; the authenticated timestamp binds it.
+  if (want.action === 'redeem' && weekOf(Number(issued)) !== weekOf(nowS)) return 'redemption was signed for another week; sign again';
   return null;
 }
 
@@ -355,9 +360,8 @@ async function readBody(req) {
 }
 
 function send(res, status, body) {
-  // No Access-Control-Allow-Origin, deliberately: the page and this function share an origin, and
-  // withholding the header is what stops any other site from reading a wallet's orders or driving
-  // a redemption from its own JavaScript.
+  // Origin permissions are checked once, before any configuration or provider work. Signed
+  // installation details are never cached, including when a trusted frontend uses another host.
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('cache-control', 'no-store');
@@ -430,6 +434,7 @@ function standingBody(s, address, allowances, config, codes) {
 }
 
 module.exports = async (req, res) => {
+  if (!allowRequestOrigin(req, res, ['GET', 'POST'])) return;
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('allow', 'GET, POST');
     return fail(res, 405, 'method not allowed');

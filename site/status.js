@@ -120,7 +120,8 @@
   // 404 from a static host with no functions deployed, a gateway's own error page — is a fetch
   // that failed, not a payload to interpret.
   async function fetchStatus() {
-    const res = await fetch('./api/status', { cache: 'no-store' });
+    const url = window.OTTClientConfig?.apiUrl('./api/status') || './api/status';
+    const res = await fetch(url, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     let j = null;
     try { j = await res.json(); } catch (e) { throw new Error('answered a non-JSON body'); }

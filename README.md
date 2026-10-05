@@ -185,17 +185,46 @@ Configuration, current ledgers, APIs, wallet signatures, eSIM credentials and or
 cached. Previously viewed interface/help files can open offline; credit and redemption require a
 live connection. Signed orders are never queued for later delivery.
 
-The first app version uses an injected wallet, including a mobile wallet's browser. Direct wallet
-connection from Safari, Chrome or an installed PWA still needs a mobile connector. Real credit,
-redemption and installation details reuse the existing My data module when the programme is
-configured. Remaining-GB telemetry is not implemented, so package sizes are not presented as live
-usage readings. App installation and real eSIM installation still require physical-device testing.
+The app supports injected wallets and a locally bundled WalletConnect connector for mobile
+browsers and the installed PWA. The SDK loads only for an explicit mobile connection or a
+remembered session. Home reads spendable credit, usage and expiry from the live API without a
+signature. A missing API displays **Credit unavailable**; an old weekly ledger displays
+**Awaiting allocation**. Neither is replaced with sample credit. **Wallet settings** lets a holder
+copy their address or disconnect. Account, chain and session changes clear private installation
+details and invalidate pending signatures. Reading installation codes and redeeming a package use
+separate wallet approvals. Remaining-GB telemetry is not implemented, so package sizes are not
+presented as live usage readings. Physical-device wallet handoff and real eSIM installation still
+need testing after live configuration.
+
+Set the public settings in `site/config/app.json`:
+
+```json
+{
+  "walletConnect": { "projectId": "YOUR_PUBLIC_REOWN_PROJECT_ID" },
+  "apiBaseUrl": "https://YOUR_BACKEND_HOST"
+}
+```
+
+Create a Reown project and allow `https://13v.github.io` as the frontend origin. The project ID is
+public; it is not a provider secret. Its empty checked-in value leaves mobile pairing disabled
+while injected wallets still work. See the official [EthereumProvider documentation](https://docs.reown.com/advanced/providers/ethereum).
+`apiBaseUrl` is a HTTPS origin without a path, query or credentials. An empty value keeps APIs on
+the frontend's own origin; GitHub Pages cannot answer those API requests. HTTP is allowed only
+between local development origins. Invalid settings fail before asking for a signature. The
+client sends no cookies to the API and refuses redirects of signed requests. Configuration and
+live account data remain outside the service-worker cache.
+
+`npm ci && npm run build:wallet` reproduces the checked-in SDK. OTT's application code remains
+MIT-licensed; the bundled SDK has separate terms, including Reown's Community License. Its full
+dependency notices are in [site/vendor/walletconnect-NOTICES.txt](site/vendor/walletconnect-NOTICES.txt)
+and [site/vendor/walletconnect.js.LEGAL.txt](site/vendor/walletconnect.js.LEGAL.txt). Check those
+terms for production use and applicable usage thresholds.
 
 GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committing changes, run
 `npm run deploy:pages` to publish the committed `site/` tree on `gh-pages`. It excludes `api/`,
 Vercel configuration and untracked files, adds `.nojekyll`, and does not change the current checkout.
 Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
-using a separate API host also requires explicit origin and signed-host integration.
+using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
 
 ```
 node scripts/lint.js                                # every script parses, every config is JSON
@@ -222,14 +251,33 @@ ledger and an "unknown" pool rather than fail, which is what a fresh clone actua
 
 ## To turn it on
 
-In Vercel's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
+In the backend host's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
 `KV_REST_API_URL` and `KV_REST_API_TOKEN` (Upstash for Redis, provisioned from the Vercel
 Marketplace, sets the last two itself). Keep `WHOLESALE_BASE_URL` private — it is deliberately not
-present in the source tree. Optionally `SIGNIN_HOST`, the domain holders will sign for, if the site is served from a
-custom domain rather than the Vercel one — a deployment that can name its own host refuses a
-signature made for somewhere else, and one that cannot does not enforce the line at all. As
+present in the source tree. For the Pages frontend set `FRONTEND_ORIGINS=https://13v.github.io`
+and `SIGNIN_HOST=13v.github.io`. The origin has no `/OTT/` path, and the signed host is the frontend
+host even when the API uses another host. CORS permits that exact origin, accepts only the
+supported preflight methods and JSON content header, and never uses a wildcard or cookies.
+Set `NODE_ENV=production` (Vercel production deployments also set `VERCEL_ENV=production`).
+Production refuses missing/mock providers, mock payers, memory stores and unsigned-host
+configuration. `WHOLESALE_ALLOW_MEMORY_STORE` cannot bypass that production requirement. As
 repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
 `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`.
+
+The indexer workflow refreshes files on `main`, while Pages is published separately. Point the
+backend at the refreshed ledger instead of a stale Pages copy:
+
+```text
+ALLOWANCES_URL=https://raw.githubusercontent.com/13V/OTT/main/site/data/allowances.json
+TREASURY_URL=https://raw.githubusercontent.com/13V/OTT/main/site/data/treasury.json
+```
+
+If the frontend itself is hosted on Vercel, its CSP includes the SDK's Reown endpoints. Add the
+chosen separate API origin to `connect-src` before using it from that deployment. GitHub Pages
+does not apply `site/vercel.json` headers. Neither hosting the frontend nor setting a project ID
+creates holder credit: launched coin addresses, fresh funded allocations, the durable store and
+the real provider/payer must all be configured. The allocation algorithm is still proportional;
+the proposed entry allowance and 40 GB weekly cap are not implemented or promised by the app.
 
 Then `site/config/esim.json`, in this order, because the order matters:
 

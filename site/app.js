@@ -14,7 +14,7 @@
  * launchpad and not to the programme — the menu, the launch form, the recent-launches table, the
  * 3D hero, the pairing-asset ticker — is left behind rather than carried over unused.
  *
- * No build step, no framework, no dependencies. Chain reads are eth_call against the endpoints in
+ * No framework. The optional mobile connector has a locally built SDK. Chain reads use endpoints in
  * config/addresses.json, rotated because the official one rate-limits.
  */
 (function () {
@@ -94,31 +94,46 @@
   const callRaw = (to, data) => rpc('eth_call', [{ to, data }, 'latest']);
 
   // ============================================================================ wallet
-  async function connect() {
-    if (!window.ethereum || typeof window.ethereum.request !== 'function') {
+  const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
+  const walletRequest = args => window.OTTWallet ? window.OTTWallet.request(args) : window.ethereum.request(args);
+  function setAccount(account) {
+    if (account !== STATE.account) window.WhateverData?.resetWallet?.();
+    STATE.account = account || null;
+    paintWallet();
+  }
+  async function disconnect() {
+    window.WhateverData?.resetWallet?.();
+    STATE.account = null;
+    paintWallet();
+    if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+    await window.OTTWallet?.disconnect?.();
+  }
+  async function connect(options) {
+    if (!walletAvailable()) {
       toast('Connect your wallet', 'Open OTT in your wallet browser, or install a browser wallet to connect.');
       paintWallet();
       return null;
     }
-    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const accounts = window.OTTWallet ? await window.OTTWallet.connect(options) : await window.ethereum.request({ method: 'eth_requestAccounts' });
     const account = accounts && accounts[0] || null;
-    if (!account) { window.WhateverData?.resetWallet?.(); STATE.account = null; paintWallet(); return null; }
-    await ensureChain();
-    if (account !== STATE.account) window.WhateverData?.resetWallet?.();
-    STATE.account = account;
-    paintWallet();
+    if (!account) { setAccount(null); return null; }
+    try { await ensureChain(); }
+    catch (error) { await disconnect(); throw error; }
+    setAccount(account);
+    if (STATE.route === 'app') renderRoute();
     return STATE.account;
   }
   async function ensureChain() {
     try {
-      const current = await window.ethereum.request({ method: 'eth_chainId' });
-      if (current === CHAIN_ID_HEX) return true;
-      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
+      const current = await walletRequest({ method: 'eth_chainId' });
+      if (String(current).toLowerCase() === CHAIN_ID_HEX) return true;
+      await walletRequest({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
+      if (String(await walletRequest({ method: 'eth_chainId' })).toLowerCase() !== CHAIN_ID_HEX) throw new Error('Switch your wallet to Robinhood Chain and try again.');
       return true;
     } catch (e) {
       if (e && e.code === 4902) {
         if (!STATE.cfg || !STATE.cfg.rpc) throw new Error('Network settings are unavailable. Go online and try connecting again.');
-        await window.ethereum.request({
+        await walletRequest({
           method: 'wallet_addEthereumChain',
           params: [{
             chainId: CHAIN_ID_HEX, chainName: 'Robinhood Chain',
@@ -126,6 +141,8 @@
             rpcUrls: [STATE.cfg.rpc], blockExplorerUrls: [STATE.cfg.explorer],
           }],
         });
+        await walletRequest({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
+        if (String(await walletRequest({ method: 'eth_chainId' })).toLowerCase() !== CHAIN_ID_HEX) throw new Error('Switch your wallet to Robinhood Chain and try again.');
         return true;
       }
       throw e;
@@ -138,6 +155,7 @@
     if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: async () => { const button = slot.querySelector('button'); button.disabled = true; button.textContent = 'Connecting…'; try { await connect(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); } catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); } }, 'aria-label': 'Connect wallet' }, 'Connect wallet')); return; }
     slot.appendChild(h('a', { class: 'wallet-addr', href: '#/data', 'aria-label': 'My data, wallet ' + STATE.account }, shortAddr(STATE.account)));
   }
+  window.OTTEnsureChain = ensureChain;
 
   function toast(title, body, kind) {
     const box = $('toasts');
@@ -289,7 +307,7 @@
       h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
       account: STATE.account, currentAccount: () => STATE.account, isCurrent,
       refresh: renderRoute,
-      walletAvailable: () => !!(window.ethereum && typeof window.ethereum.request === 'function'),
+      walletAvailable, disconnect,
     }, STATE.appScreen);
   }
 
@@ -332,6 +350,8 @@
 
   // ============================================================================ boot
   async function boot() {
+    const appSettings = fetch('./config/app.json', { cache: 'no-store', signal: AbortSignal.timeout(7000) })
+      .then(response => response.ok ? response.json() : {}).catch(() => ({}));
     try {
       STATE.cfg = await fetch('./config/addresses.json', { cache: 'no-store' }).then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -348,6 +368,25 @@
       }
     }
 
+    const publicConfig = window.OTTClientConfig?.configure(await appSettings) || {};
+    window.OTTWallet?.configure({ projectId: publicConfig.walletConnect?.projectId || '',
+      chainId: STATE.cfg.chainId, rpc: STATE.cfg.rpc, explorer: STATE.cfg.explorer });
+    function accountChanged(accs) {
+      // Revoke signatures even when the provider reports the same account again.
+      window.WhateverData?.resetWallet?.();
+      STATE.account = accs && accs[0] || null;
+      paintWallet();
+      if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+    }
+    if (window.OTTWallet) {
+      window.OTTWallet.on('accountsChanged', accountChanged);
+      window.OTTWallet.on('chainChanged', () => {
+        window.WhateverData?.resetWallet?.();
+        if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+      });
+      window.OTTWallet.on('disconnect', () => { if (STATE.account) accountChanged([]); });
+    }
+
     const chain = $('foot-chain');
     if (chain && Number(STATE.cfg.chainId) === 4663) chain.textContent = 'Robinhood Chain · ' + STATE.cfg.chainId;
     const toggle = $('nav-toggle'), nav = $('nav');
@@ -362,7 +401,15 @@
     window.addEventListener('hashchange', navigate);
     navigate();
 
-    if (window.ethereum) {
+    if (window.OTTWallet) {
+      try {
+        const accs = await window.OTTWallet.restore();
+        if (accs && accs.length) {
+          STATE.account = accs[0]; paintWallet();
+          if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+        }
+      } catch { /* Browsing the app does not depend on restoring a wallet session. */ }
+    } else if (window.ethereum) {
       try {
         const accs = await window.ethereum.request({ method: 'eth_accounts' });
         if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); }
