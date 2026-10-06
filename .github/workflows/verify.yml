@@ -13,9 +13,6 @@ concurrency:
   group: verify-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-env:
-  REDEMPTIONS_ENABLED: '0'
-
 jobs:
   backend:
     name: Lint and backend fixtures
@@ -72,4 +69,3 @@ jobs:
       - run: npm ci
       - run: npm run test:operator-credentials
       - run: npm run test:operator-phone
-
