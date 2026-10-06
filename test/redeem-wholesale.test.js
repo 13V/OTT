@@ -45,6 +45,10 @@ const SLOW = secp.newPrivateKey();   // $2.99 allowance, for a profile slower th
 const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price wholesale disagrees with
 const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provider still works untouched
 const HOSTILE = secp.newPrivateKey(); // $2.99, for the day wholesale sends links that are not links
+const FIND_RACE = secp.newPrivateKey(); // $9.00, a different plan appears after the standing read
+const ORDER_RACE = secp.newPrivateKey(); // $9.00, a competing plan is returned while order() waits
+const SLUG_RACE = secp.newPrivateKey(); // $9.00, same supplier SKU returns a top-up in another place
+const ALIAS = secp.newPrivateKey(); // $9.00, reviewed public code differs from the supplier SKU
 const addr = (k) => secp.addressOf(k).toLowerCase();
 
 // The current week, computed the same way redeem.js computes it (site/api/_lib/week.js), so the
@@ -85,6 +89,10 @@ const STALE_PACKAGES = [Object.assign({}, PACKAGES[0], { priceUsd: 1.50 }), PACK
 const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'wholesale' };
 const NORMAL_CONFIG = Object.assign({}, BASE_CONFIG, { packages: PACKAGES });
 const STALE_CONFIG = Object.assign({}, BASE_CONFIG, { packages: STALE_PACKAGES });
+const ALIAS_CODE = 'reviewed-germany-plan';
+const ALIAS_CONFIG = Object.assign({}, BASE_CONFIG, {
+  packages: [{ ...PACKAGES[0], code: ALIAS_CODE, packageCode: PACKAGES[0].code }, PACKAGES[1]],
+});
 // The same catalogue after `npm run catalogue -- --write` picked up cheaper prices from wholesale,
 // which is the ordinary weekly reason that file changes.
 const CHEAPER_CONFIG = Object.assign({}, BASE_CONFIG, {
@@ -104,12 +112,17 @@ const allowances = {
     [addr(STALE)]: { tokens: '200000000000000000000', share: 0.02, allowanceUsd: 2.0 },
     [addr(MOCKW)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
     [addr(HOSTILE)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
+    [addr(FIND_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(ORDER_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(SLUG_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(ALIAS)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
   },
 };
 const FILES = {
   '/config/esim.json': NORMAL_CONFIG,
   '/config/esim-stale.json': STALE_CONFIG,
   '/config/esim-cheaper.json': CHEAPER_CONFIG,
+  '/config/esim-alias.json': ALIAS_CONFIG,
   '/data/allowances.json': allowances,
 };
 
@@ -294,6 +307,69 @@ async function main() {
   const served = (await POST(signed(HOSTILE))).body.sims || [];
   check('a record poisoned in the database is served with its links emptied',
     served.map((x) => [x.qrCodeUrl, x.appleInstallUrl]), [['', '']]);
+
+  console.log('\na racing plan never gains another plan\'s installation authorization');
+  const wholesale = require(path.join(API, '_lib', 'providers', 'wholesale.js'));
+  const findBeforeRace = wholesale.find, orderBeforeRace = wholesale.order, simsBeforeRace = wholesale.sims;
+  const competing = (transactionId, key) => ({ transactionId, address: addr(key),
+    packageCode: PACKAGES[1].code, slug: PACKAGES[1].slug, priceUsd: PACKAGES[1].priceUsd });
+  let racedOrder, callsToOrder = 0, slotReads = 0, profileReads = 0;
+  const countProfileReads = async (...args) => { profileReads++; return simsBeforeRace(...args); };
+  const findRaceId = redeem.transactionIdFor(addr(FIND_RACE), CUR, 0);
+  wholesale.find = async (transactionId) => {
+    if (transactionId === findRaceId && ++slotReads === 2) {
+      racedOrder = await orderBeforeRace(competing(transactionId, FIND_RACE));
+      return racedOrder;
+    }
+    return findBeforeRace(transactionId);
+  };
+  wholesale.order = async (...args) => { callsToOrder++; return orderBeforeRace(...args); };
+  wholesale.sims = countProfileReads;
+  try {
+    r = await POST(signed(FIND_RACE, PACKAGES[0].code));
+    check('a different plan appearing after the standing read returns a conflict before order()', [r.status, callsToOrder], [409, 0]);
+    checkThat('the conflict exposes no competing order or profile codes', !r.body.order && !r.body.sims && !JSON.stringify(r.body).includes(racedOrder.ac), JSON.stringify(r.body));
+    check('the winning order remains unchanged', (await findBeforeRace(findRaceId)).paymentHash, racedOrder.paymentHash);
+    check('a mismatched find result performs no profile roster read', profileReads, 0);
+  } finally { wholesale.find = findBeforeRace; wholesale.order = orderBeforeRace; wholesale.sims = simsBeforeRace; redeem._resetCaches(); }
+
+  profileReads = 0;
+  wholesale.sims = countProfileReads;
+  wholesale.order = async (args) => {
+    racedOrder = await orderBeforeRace(competing(args.transactionId, ORDER_RACE));
+    return racedOrder;
+  };
+  try {
+    r = await POST(signed(ORDER_RACE, PACKAGES[0].code));
+    check('a different plan returned by order() also returns a conflict', r.status, 409);
+    checkThat('a lost slot cannot authorize the competing order or profile codes', !r.body.order && !r.body.sims && !JSON.stringify(r.body).includes(racedOrder.ac), JSON.stringify(r.body));
+    check('a mismatched order result performs no profile roster read', profileReads, 0);
+  } finally { wholesale.order = orderBeforeRace; wholesale.sims = simsBeforeRace; redeem._resetCaches(); }
+
+  profileReads = 0;
+  wholesale.sims = countProfileReads;
+  wholesale.order = async (args) => {
+    racedOrder = await orderBeforeRace(args);
+    return { ...racedOrder, slug: PACKAGES[1].slug, topupOf: racedOrder.iccid };
+  };
+  try {
+    r = await POST(signed(SLUG_RACE, PACKAGES[0].code));
+    check('the same supplier SKU cannot authorize a top-up receipt for another place', r.status, 409);
+    checkThat('a conflicting top-up receipt returns no order or installation details', !r.body.order && !r.body.sims && !JSON.stringify(r.body).includes(racedOrder.ac), JSON.stringify(r.body));
+    check('a mismatched top-up place performs no profile roster read', profileReads, 0);
+  } finally { wholesale.order = orderBeforeRace; wholesale.sims = simsBeforeRace; redeem._resetCaches(); }
+
+  console.log('\na reviewed supplier alias remains authorized on creation and replay');
+  process.env.ESIM_CONFIG_URL = base + '/config/esim-alias.json';
+  const aliasRequest = signed(ALIAS, ALIAS_CODE);
+  try {
+    const aliasOrder = await POST(aliasRequest);
+    check('a signed public plan resolves its exact supplier SKU', [aliasOrder.status, aliasOrder.body.order.packageCode, aliasOrder.body.order.codes], [200, PACKAGES[0].code, true]);
+    const purchasesBeforeAliasReplay = fake.purchases(), paymentsBeforeAliasReplay = mockPayer._state.log.length;
+    const aliasReplay = await POST(aliasRequest);
+    check('replaying that public plan returns the same authorized order', [aliasReplay.status, aliasReplay.body.replayed, aliasReplay.body.order.ac], [200, true, aliasOrder.body.order.ac]);
+    check('an alias replay creates no invoice or payment', [fake.purchases() - purchasesBeforeAliasReplay, mockPayer._state.log.length - paymentsBeforeAliasReplay], [0, 0]);
+  } finally { process.env.ESIM_CONFIG_URL = base + '/config/esim.json'; redeem._resetCaches(); }
 
   console.log('\nthe mock provider is untouched — the switch is env-only');
   process.env.ESIM_PROVIDER = 'mock';

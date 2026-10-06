@@ -19,7 +19,7 @@ const problems = [];
 // and site/config/addresses.json is its twin for the site and the serverless functions; both are
 // checked, and neither is required to match the other, though today they do.
 const JS_DIRS = ['scripts', 'site', 'site/api', 'site/api/_lib', 'site/api/_lib/providers', 'site/api/_lib/payers', 'test', 'test/support', 'test/site', 'test/site/support'];
-const JSON_DIRS = ['config', 'site/config', 'site/data'];
+const JSON_DIRS = ['config', 'site', 'site/config', 'site/data'];
 
 // Nothing in this tree is loaded as an ES module today — MODULE_JS exists for the day one is,
 // so Node's syntax checker is told to parse it as a module rather than misreading its import

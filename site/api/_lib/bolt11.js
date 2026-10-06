@@ -119,7 +119,7 @@ function parseAmount(hrp) {
 
 /**
  * Decode. Throws on anything that is not a well-formed invoice. Returns
- *   { prefix, msat (string), sats (number, whole), paymentHash (hex, no 0x), timestamp, expiry,
+ *   { prefix, msat (string), sats (number, rounded up), paymentHash (hex, no 0x), timestamp, expiry,
  *     expiresAt (unix seconds), description }
  */
 function decode(invoice) {
@@ -149,7 +149,9 @@ function decode(invoice) {
   return {
     prefix,
     msat: msat === null ? null : msat.toString(),
-    sats: msat === null ? null : Number(msat / 1000n),
+    // Payers and balance checks use whole sats. Rounding down would let a fractional-sat
+    // invoice pass a spending cap or appear affordable by a wallet one sat short.
+    sats: msat === null ? null : Number((msat + 999n) / 1000n),
     paymentHash,
     timestamp,
     expiry,

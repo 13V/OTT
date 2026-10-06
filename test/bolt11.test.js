@@ -52,6 +52,15 @@ check('a testnet invoice names its network', bolt11.decode(bolt11.encode({ sats:
 check('the default expiry is an hour', bolt11.decode(bolt11.encode({ sats: 5, paymentHash: hash, timestamp: 100, expiry: 3600 })).expiresAt, 3700);
 check('a large amount survives', bolt11.decode(bolt11.encode({ sats: 123456789, paymentHash: hash, timestamp: 1 })).sats, 123456789);
 
+console.log('\nfractional-sat amounts reserve the next whole sat');
+{
+  const { words } = bolt11.bech32Decode(minted);
+  const fractional = bolt11.decode(bolt11.bech32Encode('lnbc18909990p', words));
+  check('the exact millisatoshi amount is preserved', fractional.msat, '1890999');
+  check('a fractional sat rounds up for sat-based spending limits', fractional.sats, 1891);
+  check('an amount below one sat still requires one sat of balance', bolt11.decode(bolt11.bech32Encode('lnbc10p', words)).sats, 1);
+}
+
 console.log('\na duplicate tagged field resolves first-wins, not last');
 // Built by hand rather than through encode() (which only ever writes one of each field): decode
 // a normal invoice back into words, then splice in a second, decoy p/x/d field — equal to nothing

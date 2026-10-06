@@ -94,9 +94,15 @@ module.exports = {
   },
 
   /** Pay an invoice. Wallet refusals return status/error; unsupported hard limits fail locally. */
-  async pay({ paymentRequest, memo, maxFeeSats }) {
+  async pay({ paymentRequest, memo, maxFeeSats, deadlineMs }) {
     if (maxFeeSats !== undefined) throw new Error('Blink does not support a hard Lightning fee limit; payment was not sent');
+    // A private caller deadline is checked again after the asynchronous wallet lookup.
+    // It is never an unsupported field in Blink's payment input.
+    const expired = () => deadlineMs !== undefined && (!Number.isFinite(deadlineMs) || deadlineMs <= Date.now());
+    const notSent = () => ({ status: 'FAILURE', error: 'Lightning invoice expired before payment was sent', notSent: true });
+    if (expired()) return notSent();
     const input = { walletId: await walletId(), paymentRequest };
+    if (expired()) return notSent();
     if (memo) input.memo = String(memo).slice(0, 200);
     const d = await gql('mutation ($input: LnInvoicePaymentInput!) { lnInvoicePaymentSend(input: $input) { status errors { message code } } }', { input });
     const r = d.lnInvoicePaymentSend || {};

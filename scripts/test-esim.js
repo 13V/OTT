@@ -64,8 +64,9 @@ async function checkedPay({ record, paymentRequest, p, payer }) {
   matchRecord(record, p);
   if (!record || record.step !== 'invoiced' || record.paymentRequest !== paymentRequest) throw new Error('Stored invoice is not ready for this test.');
   const invoice = bolt11.decode(paymentRequest);
+  const deadlineMs = Math.min(invoice.expiresAt * 1000, record.expiresAt == null ? Infinity : Date.parse(record.expiresAt));
   if (invoice.paymentHash !== record.paymentHash || !Number.isFinite(invoice.sats) || invoice.sats <= 0 ||
-      invoice.expiresAt * 1000 <= Date.now()) throw new Error('Stored invoice failed validation.');
+      !Number.isFinite(deadlineMs) || deadlineMs <= Date.now()) throw new Error('Stored invoice failed validation.');
   const rate = await payer.usdPerSat();
   if (!Number.isFinite(rate) || rate <= 0) throw new Error('Blink price is unavailable.');
   const usd = invoice.sats * rate;
@@ -85,7 +86,8 @@ async function checkedPay({ record, paymentRequest, p, payer }) {
   if (btcUsd <= 0 || btcUsd > p.maxWalletUsd || balance.sats < estimatedSats) {
     throw new Error('Use a dedicated BTC wallet with enough sats for the invoice and estimated fee, within the approved wallet cap.');
   }
-  return { invoiceSats: invoice.sats, estimatedFeeSats: feeSats, estimatedPaymentUsd: estimatedSats * checkedRate, feeLimitEnforced: false };
+  if (deadlineMs <= Date.now()) throw new Error('Stored invoice expired while checking payment.');
+  return { invoiceSats: invoice.sats, estimatedFeeSats: feeSats, estimatedPaymentUsd: estimatedSats * checkedRate, feeLimitEnforced: false, deadlineMs };
 }
 async function livePackage(p) {
   const country = /_([A-Z]{2})$/.exec(p.sku)?.[1];
@@ -143,9 +145,11 @@ async function runTest(opts, deps = {}) {
   if (JSON.stringify(saved) !== JSON.stringify(manifest)) throw new Error('Run ID is already bound to different package or spending settings.');
   if (record?.step === 'failed' && record.paymentHash) throw new Error('Previous checkout failed. Inspect its payment state before creating another test.');
   const pay = async args => {
+    let deadlineMs;
     try {
       const current = await deps.store.get('order:' + transactionId);
-      await checkedPay({ record: current, paymentRequest: args.paymentRequest, p, payer: deps.payer });
+      const checked = await checkedPay({ record: current, paymentRequest: args.paymentRequest, p, payer: deps.payer });
+      deadlineMs = Math.min(checked.deadlineMs, args.deadlineMs === undefined ? Infinity : args.deadlineMs);
       // This callback runs inside wholesale's payment lease. Its earlier status read can be stale.
       const sent = await deps.payer.sent(current.paymentHash);
       if (sent.status === 'SUCCESS') return { status: 'ALREADY_PAID', error: '' };
@@ -156,14 +160,15 @@ async function runTest(opts, deps = {}) {
           lease.at !== args.paymentLease.at || !Number.isFinite(lease.at) || Date.now() - lease.at >= 20000) {
         throw new Error('Payment lease changed or its safe send window elapsed. Resume the same run.');
       }
+      if (!Number.isFinite(deadlineMs) || deadlineMs <= Date.now()) throw new Error('Invoice expired before payment was sent.');
     } catch {
       // The real payer has not been invoked. An explicit local refusal lets wholesale
       // retain the unpaid invoice for retry instead of stranding a send reservation.
-      return { status: 'FAILURE', error: 'Operator checks prevented payment before any send. Resume the same run after reviewing its balance, invoice and payment status.' };
+      return { status: 'FAILURE', error: 'Operator checks prevented payment before any send. Resume the same run after reviewing its balance, invoice and payment status.', notSent: true };
     }
     // A thrown or ambiguous wallet response may follow a dispatch. Leave it to wholesale
     // to preserve that reservation; never convert it into a known unpaid refusal.
-    return deps.payer.pay(args);
+    return deps.payer.pay({ ...args, deadlineMs });
   };
   const order = await deps.order({ transactionId, packageCode: p.sku, slug: p.slug,
     priceUsd: p.catalogueUsd, address: '' }, pay);

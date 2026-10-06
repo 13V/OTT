@@ -109,6 +109,36 @@ GitHub Pages CORS. The server privacy fixes and catalogue comparison are live.
 Public redemption remains disabled; this does not validate a funded purchase
 or physical phone connectivity.
 
+### Backend completion pass — 6 October
+
+Redemption responses now verify the exact signed plan before exposing installation
+details or reading the SIM roster. A competing plan cannot inherit another plan's
+approval while waiting for an order or payment lease. Reviewed public plan aliases
+still resolve to their supplier SKU and replay the same order.
+
+New payments respect the earlier of the supplier checkout and Lightning invoice
+expiry, including time spent checking fees, balance and wallet identity. A proven
+refusal before dispatch releases only that attempt's send reservation; an ambiguous
+wallet response retains it. Fractional satoshis are rounded up for spending and
+balance checks. Completed orders retry interrupted SIM indexing without another
+checkout or payment.
+
+Overlapping status requests share one set of dependency checks per function
+instance, and public failure details redact encoded credentials and private
+endpoints. The hosted runtime is pinned to Node 22.x with no application runtime
+dependencies or frontend build step.
+
+Validation: all **22 backend suites** pass, including 151 status checks, 53
+wholesale redemption checks, 27 recovery scenarios, 83 Blink checks and 70
+operator checks. Lint passes for 108 files. These are fixture checks; they create
+no live supplier order or payment.
+
+The live payer still requires `BLINK_API_KEY`. Local encrypted operator credentials
+are also absent. The catalogue-only preflight verifies the prepared Australia plan;
+credentialed account access and a real payment remain unverified. Complete private
+credential setup with `npm run phone:setup`, then use `npm run phone:preflight`
+without funding or creating a purchase.
+
 ### Paid test preparation
 
 The prepared run is `phone-test-20261006-au-001`: Australia 1 GB for 7 days

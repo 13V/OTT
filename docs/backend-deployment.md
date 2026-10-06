@@ -24,6 +24,11 @@ Keep the output directory at its default. `site/vercel.json` sets function durat
 the public eSIM catalogue in both function bundles. Utility modules live in `api/_lib`, so Vercel
 does not generate a separate function for each helper.
 
+`site/package.json` pins the hosted API to Node 22.x and has no runtime dependencies.
+The Vercel configuration explicitly skips project install/build commands: the release serves
+the committed frontend assets and bundles the existing Node handlers. This keeps the parent
+repository's frontend tooling and open-ended Node engine range out of the backend deployment.
+
 The **ott-prelaunch** project is now connected to the `13V/OTT` Git repository. Release
 `094057b` deployed to production on 6 October 2026 and passed all 15 remote prelaunch checks.
 Use the latest reviewed **`main`** commit for future deployments. The Git checkout contains `site/`

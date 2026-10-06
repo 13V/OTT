@@ -108,7 +108,7 @@ async function integration() {
         await assert.rejects(runTest(guardedOpts, deps), /before any send/);
         const refused = await deps.store.get(key);
         assert.equal(refused.step, 'invoiced');
-        assert.equal(refused.paymentState, 'failed');
+        assert.equal(refused.paymentState, 'not-sent');
         assert.equal(mock._state.log.length, sends);
         mock._state.sats = 3000; mock._state.mode = 'pending';
         const retry = await runTest(guardedOpts, deps);
@@ -226,6 +226,21 @@ async function main() {
   });
   await checkAsync('fractional sat headroom is rounded down', () => assert.rejects(checkedPay({ record: rec, paymentRequest,
     p: { ...p, maxPaymentUsd: 1.9009 }, payer: { ...payer, feeProbe: async () => ({ feeSats: 11 }) } }), /estimate cap/));
+  await checkAsync('a fractional-sat invoice cannot slip past the whole-sat invoice cap', async () => {
+    const { words } = bolt11.bech32Decode(paymentRequest);
+    const fractional = bolt11.bech32Encode('lnbc19909990p', words);
+    await assert.rejects(checkedPay({ record: { ...rec, paymentRequest: fractional }, paymentRequest: fractional,
+      p: { ...p, maxInvoiceUsd: p.catalogueUsd, maxPaymentUsd: p.catalogueUsd },
+      payer: { ...payer, feeProbe: async () => ({ feeSats: 0 }) } }), /cap/);
+  });
+  await checkAsync('a fractional-sat invoice needs the next whole sat in the payment wallet', async () => {
+    const { words } = bolt11.bech32Decode(paymentRequest);
+    const fractional = bolt11.bech32Encode('lnbc25009990p', words);
+    const fractionalPayer = { usdPerSat: async () => 0.000756, feeProbe: async () => ({ feeSats: 0 }),
+      balance: async () => ({ sats: 2500, usdPerSat: 0.000756 }) };
+    await assert.rejects(checkedPay({ record: { ...rec, paymentRequest: fractional }, paymentRequest: fractional,
+      p, payer: fractionalPayer }), /dedicated/);
+  });
   await checkAsync('missing or malformed fee estimates refuse payment', async () => {
     await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, feeProbe: undefined } }), /estimate/);
     for (const feeSats of [-1, 0.5, NaN, Infinity, '10', Number.MAX_SAFE_INTEGER + 1]) {
@@ -250,6 +265,8 @@ async function main() {
     const expired = bolt11.encode({ sats: 1890, paymentHash: hash, timestamp: Math.floor(Date.now() / 1000) - 7200, expiry: 60 });
     await assert.rejects(checkedPay({ record: { ...rec, paymentRequest: expired }, paymentRequest: expired, p, payer }), /validation/);
   });
+  await checkAsync('an earlier expired checkout cannot pass invoice-only validation', () => assert.rejects(checkedPay({
+    record: { ...rec, expiresAt: new Date(Date.now() - 1000).toISOString() }, paymentRequest, p, payer }), /validation/));
   await checkAsync('different package on stored run refused', () => assert.rejects(checkedPay({ record: { ...rec, packageCode: 'other' }, paymentRequest, p, payer }), /match/));
   await checkAsync('large BTC wallet refused before paying', () => assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, balance: async () => ({ sats: 50000, usdPerSat: 0.001 }) } }), /dedicated/));
   await checkAsync('insufficient BTC balance refused', () => assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, balance: async () => ({ sats: 100, usdPerSat: 0.001 }) } }), /dedicated/));
@@ -344,6 +361,31 @@ async function main() {
         } }), /before any send/);
       assert.equal(sends, 0);
     }
+  });
+  await checkAsync('expiry during fee or final status checks refuses before the actual payer', async () => {
+    const originalNow = Date.now;
+    try {
+      for (const expireAt of ['fee', 'status']) {
+        Date.now = originalNow;
+        const deadlineMs = Date.now() + 1000;
+        const fresh = memoryStore();
+        const expiring = { ...rec, expiresAt: new Date(deadlineMs).toISOString() };
+        await fresh.set('order:' + rec.transactionId, expiring);
+        const lease = { attempt: 'expiry-test', at: Date.now() };
+        await fresh.set('paylease:' + rec.transactionId, lease);
+        let sends = 0;
+        await assert.rejects(runTest(options, { store: fresh, payer: { ...payer,
+          feeProbe: async () => { if (expireAt === 'fee') Date.now = () => deadlineMs + 1; return { feeSats: 10 }; },
+          sent: async () => { if (expireAt === 'status') Date.now = () => deadlineMs + 1; return { status: 'NONE' }; },
+          pay: async () => { sends++; },
+        }, order: async (_args, guardedPay) => {
+          const refused = await guardedPay({ paymentRequest, paymentLease: lease, deadlineMs });
+          assert.equal(refused.status, 'FAILURE'); assert.equal(refused.notSent, true);
+          throw new Error(refused.error);
+        } }), /before any send/);
+        assert.equal(sends, 0); assert.deepEqual(await fresh.get('order:' + rec.transactionId), expiring);
+      }
+    } finally { Date.now = originalNow; }
   });
   const privateOrder = resultOf(p, issued);
   check('private export strips Lightning invoice and payment hash', () => { assert.ok(!('paymentRequest' in privateOrder)); assert.ok(!('paymentHash' in privateOrder)); });

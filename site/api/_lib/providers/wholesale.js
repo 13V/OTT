@@ -183,9 +183,17 @@ async function simFor(store, address, slug) {
 }
 
 /** Remember a newly issued eSIM as this wallet's, for this place and — if it is the first — at large. */
-async function recordSim(store, address, slug, card) {
+async function recordSim(store, address, slug, card, { repair = false } = {}) {
   if (!address || !card || !card.iccid) return;
   const key = simKeyOf(address);
+  if (repair) {
+    const indexed = await store.get(key);
+    const selected = indexed?.bySlug?.[slug];
+    if (selected && indexed.cards?.[card.iccid]) {
+      const selectedAt = Date.parse(indexed.cards[selected]?.createdAt), cardAt = Date.parse(card.createdAt);
+      if (!Number.isFinite(selectedAt) || !Number.isFinite(cardAt) || selectedAt >= cardAt) return;
+    }
+  }
   const now = new Date().toISOString();
   const fresh = {
     address: String(address).toLowerCase(), primary: card.iccid, bySlug: {}, cards: {},
@@ -204,11 +212,27 @@ async function recordSim(store, address, slug, card) {
     const before = await store.get(key);
     const rec = { ...(before || fresh), bySlug: { ...before?.bySlug }, cards: { ...before?.cards } };
     if (!rec.primary) rec.primary = card.iccid;
-    rec.bySlug[slug] = card.iccid;
+    const selected = rec.bySlug[slug];
+    const selectedAt = Date.parse(rec.cards[selected]?.createdAt), cardAt = Date.parse(card.createdAt);
+    // Repairing an old completed order must not replace a newer profile that was
+    // deliberately issued after its predecessor refused a top-up.
+    const selectCard = !repair || !selected || (Number.isFinite(cardAt) && Number.isFinite(selectedAt) && cardAt > selectedAt);
+    if (repair && rec.cards[card.iccid] && !selectCard) return;
+    if (selectCard) rec.bySlug[slug] = card.iccid;
     if (!rec.cards[card.iccid]) rec.cards[card.iccid] = card;
     rec.updatedAt = now;
     if (await store.compareSet(key, before, rec)) return;
   }
+}
+
+async function indexCompletedSim(store, rec, { repair = false } = {}) {
+  if (rec.topupOf) return;
+  await recordSim(store, rec.address, rec.slug, {
+    iccid: rec.iccid, slug: rec.slug, ac: rec.ac, qrCodeUrl: rec.qrCodeUrl, manualCode: rec.manualCode,
+    smdpAddress: rec.smdpAddress, matchingId: rec.matchingId,
+    appleInstallUrl: rec.appleInstallUrl, androidInstallUrl: rec.androidInstallUrl,
+    createdAt: rec.completedAt,
+  }, { repair });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -269,10 +293,18 @@ async function paymentStatus(payer, hash) {
   return result;
 }
 
+function requireExpectedPlan(rec, expected) {
+  if (rec && expected && (rec.packageCode !== expected.packageCode || rec.slug !== expected.slug)) {
+    throw fail('your orders have changed since; reload', 409);
+  }
+}
+
 function validateInvoice(rec, rate) {
   const inv = bolt11.decode(rec.paymentRequest);
+  const storedExpiry = rec.expiresAt == null ? Infinity : Date.parse(rec.expiresAt);
+  const expiresAt = Math.min(inv.expiresAt * 1000, storedExpiry);
   if (inv.prefix !== 'bc' || inv.paymentHash !== rec.paymentHash || !Number.isFinite(inv.sats) || inv.sats <= 0 ||
-      inv.expiresAt * 1000 <= Date.now()) throw fail('the stored Lightning invoice failed validation or expired', 502);
+      !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw fail('the stored Lightning invoice failed validation or expired', 502);
   if (!Number.isFinite(rec.priceUsd) || rec.priceUsd <= 0 || !Number.isFinite(rec.paidUsd) || rec.paidUsd <= 0 ||
       rec.paidUsd > rec.priceUsd * (1 + PRICE_TOLERANCE) + 1e-9) throw fail('the stored invoice exceeds its reviewed catalogue price', 502);
   if (!Number.isFinite(rate) || rate <= 0) throw fail('the Lightning wallet price is unavailable', 503);
@@ -281,6 +313,7 @@ function validateInvoice(rec, rate) {
   if (!Number.isFinite(usd) || Math.abs(usd - rec.paidUsd) > rec.paidUsd * RATE_TOLERANCE + 0.02) {
     throw fail('the stored invoice disagrees with the current Lightning wallet price', 502);
   }
+  return { deadlineMs: expiresAt };
 }
 
 /**
@@ -376,15 +409,10 @@ async function finish(store, rec, data) {
   current.completedAt = new Date().toISOString();
   current.error = '';
   if (!(await store.compareSet(keyOf(rec.transactionId), before, current))) return finish(store, rec, data);
-  // From here on this wallet is topped up rather than re-issued. Recorded after the order is
-  // saved: a failure to index costs a duplicate SIM next week, a failure to save costs the eSIM.
+  // Save the paid order before its profile index. A later completed-order lookup
+  // can repair an interrupted index from these durable installation details.
   try {
-    await recordSim(store, current.address, current.slug, {
-      iccid: current.iccid, slug: current.slug, ac: current.ac, qrCodeUrl: current.qrCodeUrl, manualCode: current.manualCode,
-      smdpAddress: current.smdpAddress, matchingId: current.matchingId,
-      appleInstallUrl: current.appleInstallUrl, androidInstallUrl: current.androidInstallUrl,
-      createdAt: current.completedAt,
-    });
+    await indexCompletedSim(store, current);
   } catch (e) { /* indexed next time; the eSIM is issued either way */ }
   return current;
 }
@@ -394,8 +422,13 @@ async function finish(store, rec, data) {
  * (a redeem may; a lookup may not), `waitMs` how long to wait for the profile once paid.
  * Returns the record, or null when the record is not a redemption (nothing was ever paid).
  */
-async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
-  if (rec.step === 'done') return rec;
+async function resume(store, rec, { pay = false, waitMs = 0, expected } = {}) {
+  requireExpectedPlan(rec, expected);
+  if (rec.step === 'done') {
+    try { await indexCompletedSim(store, rec, { repair: true }); }
+    catch (e) { /* The paid order stays readable; a later lookup retries its index. */ }
+    return rec;
+  }
   if (rec.step === 'failed' || rec.step === 'claiming') return null;
   const payer = choosePayer();
 
@@ -407,6 +440,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
     // succeeded or still be pending while the caller died before recording it.
     const current = await withPayLease(store, rec.transactionId, async () => {
       const live = await store.get(keyOf(rec.transactionId));
+      requireExpectedPlan(live, expected);
       if (!live || live.paymentHash !== rec.paymentHash || live.step === 'done') return live;
       if (live.step === 'paid') return (await saveIfStep(store, rec.transactionId, 'paid', {
         error: 'paid, but wholesale no longer knows the checkout: ' + c.error,
@@ -455,6 +489,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
       // The pre-lease read can become stale while another caller sends. Check
       // the current record AND wallet again after acquiring exclusive ownership.
       const current = await store.get(keyOf(rec.transactionId));
+      requireExpectedPlan(current, expected);
       if (!current) return { applied: false, record: null, justPaid: false };
       if (current.paymentHash !== rec.paymentHash || current.step !== 'invoiced') return { applied: false, record: current, justPaid: false };
       try { s = await paymentStatus(payer, current.paymentHash); }
@@ -475,7 +510,7 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
         return { applied: r.applied, record: r.applied ? null : r.record, justPaid: false };
       }
       if (!pay) return { applied: true, record: null, justPaid: false };
-      validateInvoice(current, await payer.usdPerSat());
+      const { deadlineMs } = validateInvoice(current, await payer.usdPerSat());
       await requireSendLease(store, rec.transactionId, paymentLease);
       // Reserve credit BEFORE the external action. If this process dies or the
       // response is lost, a temporarily empty wallet history cannot allow a
@@ -484,16 +519,19 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
         paymentState: 'sending', paymentAttempt: paymentLease.attempt, paymentAttemptAt: new Date().toISOString(),
         attempts: (cur.attempts || 0) + 1, error: '',
       }, rec.paymentHash);
+      requireExpectedPlan(started.record, expected);
       if (!started.applied) return { applied: false, record: started.record, justPaid: false };
-      try { await requireSendLease(store, rec.transactionId, paymentLease); }
-      catch (e) {
+      try {
+        await requireSendLease(store, rec.transactionId, paymentLease);
+        if (deadlineMs <= Date.now()) throw fail('the stored Lightning invoice expired before payment was sent', 502);
+      } catch (e) {
         // This process knows it has not invoked pay yet. A process that dies
         // instead leaves its reservation in place for payment-state review.
         await savePaymentAttempt(store, rec.transactionId, paymentLease.attempt, rec.paymentHash, { paymentState: 'not-sent', error: e.message });
         throw e;
       }
       let r;
-      try { r = await payer.pay({ paymentRequest: current.paymentRequest, memo: 'OT+T ' + current.transactionId, paymentLease }); } catch (e) {
+      try { r = await payer.pay({ paymentRequest: current.paymentRequest, memo: 'OT+T ' + current.transactionId, paymentLease, deadlineMs }); } catch (e) {
         await savePaymentAttempt(store, rec.transactionId, paymentLease.attempt, rec.paymentHash, { paymentState: 'uncertain', error: 'wallet did not answer: ' + e.message });
         throw fail('the Lightning wallet did not answer; try again in a minute', 503);
       }
@@ -508,15 +546,16 @@ async function resume(store, rec, { pay = false, waitMs = 0 } = {}) {
           await savePaymentAttempt(store, rec.transactionId, paymentLease.attempt, rec.paymentHash, { paymentState: 'uncertain', error: 'wallet payment result is uncertain; resume this order' });
           throw fail('the Lightning wallet payment result is uncertain; resume the same order', 503);
         }
-        await savePaymentAttempt(store, rec.transactionId, paymentLease.attempt, rec.paymentHash, { paymentState: 'failed', error: r.error || 'payment failed' });
+        await savePaymentAttempt(store, rec.transactionId, paymentLease.attempt, rec.paymentHash, { paymentState: r.notSent === true ? 'not-sent' : 'failed', error: r.error || 'payment failed' });
         throw fail('the pool could not pay for this eSIM: ' + (r.error || 'payment failed'), /balance|insufficient/i.test(r.error || '') ? 503 : 502);
       }
     });
     if (!outcome.record) return null;
+    requireExpectedPlan(outcome.record, expected);
     // Someone else already carried this past 'invoiced' before our own write landed (they held
     // the lease before us, or stole a stale one from us) — carry the record as it now stands
     // rather than what we just tried to write.
-    if (!outcome.applied) return resume(store, outcome.record, { pay, waitMs });
+    if (!outcome.applied) return resume(store, outcome.record, { pay, waitMs, expected });
     if (outcome.pending) return outcome.record;
     rec = outcome.record;
     justPaid = outcome.justPaid;
@@ -562,14 +601,17 @@ module.exports = {
     const store = storeFor();
     const waitMs = COMPLETE_WAIT_MS();
     const key = keyOf(transactionId);
+    const expected = { packageCode, slug };
     const carry = async (rec) => {
+      requireExpectedPlan(rec, expected);
       // An interrupted index write can leave a valid invoice on file. Repair
       // the treasury's index on every retry BEFORE allowing its payment.
       const createdAt = Date.parse(rec.createdAt);
       if (!Number.isFinite(createdAt)) throw fail('the stored order has no valid creation time; review it before payment', 503);
       await store.zadd(RECENT, createdAt, transactionId);
-      const done = await resume(store, rec, { pay: true, waitMs });
+      const done = await resume(store, rec, { pay: true, waitMs, expected });
       if (!done) throw fail('the order could not be placed; try again', 503);
+      requireExpectedPlan(done, expected);
       return publicOf(done);
     };
     // The record another request is placing right now, once it has stopped being a bare claim.
@@ -577,6 +619,7 @@ module.exports = {
       const deadline = Date.now() + waitMs + CLAIM_TTL_MS;
       for (;;) {
         const rec = await store.get(key);
+        requireExpectedPlan(rec, expected);
         if (!rec || rec.step === 'failed') throw fail('the other request placing this order did not get through; try again', 503);
         if (rec.step !== 'claiming') return carry(rec);
         if (isStaleClaim(rec, Date.now()) || Date.now() >= deadline) throw fail('this redemption is still being placed; try again in a moment', 503);
@@ -669,7 +712,8 @@ module.exports = {
       if (Math.abs(invUsd - price) > price * RATE_TOLERANCE + 0.02) {
         throw fail('the invoice asks $' + invUsd.toFixed(2) + ' of sats against a price of $' + price.toFixed(2), 502);
       }
-      validateInvoice({ paymentRequest: quote.paymentRequest, paymentHash: inv.paymentHash, priceUsd: Number(priceUsd), paidUsd: price }, rate);
+      validateInvoice({ paymentRequest: quote.paymentRequest, paymentHash: inv.paymentHash,
+        expiresAt: earliest(quote.expiresAt, inv.expiresAt), priceUsd: Number(priceUsd), paidUsd: price }, rate);
     } catch (e) {
       // The claim is released as a failed record: not a redemption, and the next order replaces it.
       await store.compareSet(key, claim, { ...claim, step: 'failed', error: String(e.message || e).slice(0, 200) });

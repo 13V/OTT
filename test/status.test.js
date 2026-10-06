@@ -30,6 +30,13 @@ const check = (what, got, want) => {
   if (ok) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
 };
 const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}${detail !== undefined ? '\n       ' + detail : ''}`); } };
+const SECRET_FORMS = [
+  ['raw', value => value],
+  ['URL encoded', value => encodeURIComponent(value)],
+  ['URL encoded lowercase', value => encodeURIComponent(value).replace(/%[\da-f]{2}/gi, part => part.toLowerCase())],
+  ['JSON escaped', value => JSON.stringify(value).slice(1, -1)],
+  ['JSON escaped slashes', value => JSON.stringify(value).slice(1, -1).replace(/\//g, '\\/')],
+];
 
 // --------------------------------------------------------------------------- fixtures
 const COIN = '0x1111111111111111111111111111111111111111';
@@ -105,7 +112,7 @@ async function main() {
 
   // A tiny fake of wholesale's own bundle listing, and nothing else — proving the provider check
   // never reaches for purchase or complete.
-  let bundleHits = 0;
+  let bundleHits = 0, bundleDelayMs = 0;
   const bundleRows = Array.from({ length: 8 }, (_, i) => ({ name: 'bundle-' + i }));
   const healthyBundlePayload = { success: true, data: { bundles: bundleRows } };
   let bundlePayload = healthyBundlePayload, unexpectedProviderRequests = 0;
@@ -114,6 +121,7 @@ async function main() {
     if (req.method === 'GET' && u.pathname === '/esim/bundles') {
       bundleHits++;
       res.setHeader('content-type', 'application/json');
+      if (bundleDelayMs) return setTimeout(() => res.end(JSON.stringify(bundlePayload)), bundleDelayMs);
       return res.end(JSON.stringify(bundlePayload));
     }
     unexpectedProviderRequests++;
@@ -231,9 +239,11 @@ async function main() {
     if (gateSetting === undefined) delete process.env.REDEMPTIONS_ENABLED; else process.env.REDEMPTIONS_ENABLED = gateSetting;
   }
 
-  console.log('\nconcurrent health checks own separate throwaway store keys');
+  console.log('\nconcurrent requests share one dependency computation per handler instance');
   const probeStore = require(path.join(API, '_lib', 'store.js')).store();
   const probeSet = probeStore.set, probeGet = probeStore.get, probeDel = probeStore.del, probeCompareSet = probeStore.compareSet;
+  const payerBalance = mockPayer.balance;
+  let payerReads = 0;
   const probesWritten = [], probesDeleted = [];
   probeStore.set = async (key, value, opts) => {
     probesWritten.push(key);
@@ -242,8 +252,29 @@ async function main() {
     return written;
   };
   probeStore.del = async (key) => { probesDeleted.push(key); return probeDel(key); };
+  mockPayer.balance = async () => {
+    payerReads++;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return payerBalance();
+  };
+  bundleDelayMs = 20;
   try {
-    const concurrent = await Promise.all([GET(), GET()]);
+    const beforeBurst = bundleHits;
+    const burst = await Promise.all(Array.from({ length: 8 }, () => GET()));
+    check('all overlapping requests receive healthy dependency results', burst.map((x) => [x.status, x.body.ready.provider, x.body.ready.payer, x.body.ready.store]), Array.from({ length: 8 }, () => [200, true, true, true]));
+    check('one overlapping burst makes exactly one provider, payer and store probe call', [bundleHits - beforeBurst, payerReads, probesWritten.length], [1, 1, 1]);
+    check('the shared computation releases its only probe key', probesDeleted, probesWritten);
+    check('the shared computation leaves no probe value', await probeGet(probesWritten[0]), null);
+    probesWritten.length = 0; probesDeleted.length = 0;
+
+    // Different warm function instances have independent caches and still need separate probe
+    // keys. Keep the original handler/module so later tests exercise its own cache normally.
+    const statusPath = require.resolve(path.join(API, 'status.js'));
+    const originalModule = require.cache[statusPath];
+    let independentStatus;
+    delete require.cache[statusPath];
+    try { independentStatus = require(statusPath); } finally { require.cache[statusPath] = originalModule; }
+    const concurrent = await Promise.all([GET(), call(independentStatus, { url: '/api/status?fresh=1' })]);
     check('both concurrent probes return a healthy store', concurrent.map((x) => x.body.ready.store), [true, true]);
     check('each probe wrote a different key', new Set(probesWritten).size, 2);
     check('each probe deleted only its own key', [...probesDeleted].sort(), [...probesWritten].sort());
@@ -261,7 +292,10 @@ async function main() {
     check('ordinary GET/SET without atomic comparisons cannot report a ready store', r.body.ready.store, false);
     check('an unsupported atomic probe still cleans up its owned key', probesDeleted, probesWritten);
     check('the unsupported atomic probe leaves no scratch value', await probeGet(probesWritten[0]), null);
-  } finally { probeStore.set = probeSet; probeStore.get = probeGet; probeStore.del = probeDel; probeStore.compareSet = probeCompareSet; }
+  } finally {
+    probeStore.set = probeSet; probeStore.get = probeGet; probeStore.del = probeDel; probeStore.compareSet = probeCompareSet;
+    mockPayer.balance = payerBalance; bundleDelayMs = 0;
+  }
 
   console.log('\nHTTP 200 is not proof that the provider has a usable catalogue');
   const invalidCatalogues = [
@@ -461,15 +495,19 @@ async function main() {
   const privatePortfolio = 'https://private-portfolio.ott.test/operator-path';
   process.env.WHOLESALE_BASE_URL = '  ' + privateBase + '/  ';
   process.env.WHOLESALE_PORTFOLIO_URL = '  ' + privatePortfolio + '/  ';
+  let encodePrivateUrl = value => value;
   global.fetch = async (...args) => {
-    if (String(args[0]).startsWith(privateBase)) throw new Error('provider refused ' + privateBase + '/esim/bundles and ' + privatePortfolio + '/portfolio');
+    if (String(args[0]).startsWith(privateBase)) throw new Error('provider refused ' + encodePrivateUrl(privateBase + '/esim/bundles') + ' and ' + encodePrivateUrl(privatePortfolio + '/portfolio'));
     return fetchBeforePrivateUrl(...args);
   };
   try {
-    r = await GET();
-    check('the private provider failure still reports an unavailable provider', r.body.ready.provider, false);
-    checkThat('neither normalized private endpoint reaches the status response', !JSON.stringify(r.body).includes(privateBase) && !JSON.stringify(r.body).includes(privatePortfolio), JSON.stringify(r.body));
-    checkThat('the redacted response retains useful failure context', /provider refused.*redacted/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
+    for (const [form, encode] of SECRET_FORMS) {
+      encodePrivateUrl = encode;
+      r = await GET();
+      check('the private provider failure still reports an unavailable provider (' + form + ')', r.body.ready.provider, false);
+      checkThat('neither private endpoint survives its error encoding (' + form + ')', !JSON.stringify(r.body).includes('private-provider.ott.test') && !JSON.stringify(r.body).includes('private-portfolio.ott.test') && !JSON.stringify(r.body).includes('operator-path'), JSON.stringify(r.body));
+      checkThat('the redacted response retains useful failure context (' + form + ')', /provider refused.*redacted/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
+    }
   } finally {
     global.fetch = fetchBeforePrivateUrl;
     process.env.WHOLESALE_BASE_URL = privateBaseBefore;
@@ -478,26 +516,31 @@ async function main() {
 
   console.log('\nscrubbing a secret');
   process.env.LN_PAYER = 'blink';
-  const SECRET = 'sk-distinctive-937zx-do-not-leak';
+  const SECRET = 'sk-distinctive-937zx/+quoted"\\secret=-do-not-leak';
   process.env.BLINK_API_KEY = SECRET;
+  let encodeCredential = value => value;
   // A Blink that misbehaves by echoing the key it was sent back in its own error message — the
   // one shape of failure that could actually carry a secret through blink.js's own error path.
   const blinkServer = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ errors: [{ message: 'bad key ' + req.headers['x-api-key'] }] }));
+    res.end(JSON.stringify({ errors: [{ message: 'bad key ' + encodeCredential(req.headers['x-api-key']) }] }));
   });
   await new Promise((resolve) => blinkServer.listen(0, '127.0.0.1', resolve));
   process.env.BLINK_API_URL = 'http://127.0.0.1:' + blinkServer.address().port + '/graphql';
-  r = await GET();
-  check('the request still succeeds', r.status, 200);
-  check('the payer check fails', r.body.checks.payer.ok, false);
-  checkThat('the pool is null', r.body.pool === null);
-  checkThat('the wallet\'s own error text still comes through', /bad key/.test(r.body.checks.payer.detail), r.body.checks.payer.detail);
-  checkThat('but the secret itself never reaches the response, scrubbed or not', JSON.stringify(r.body).indexOf(SECRET) === -1, JSON.stringify(r.body));
-  await new Promise((resolve) => blinkServer.close(resolve));
-  process.env.LN_PAYER = 'mock';
-  delete process.env.BLINK_API_KEY;
-  delete process.env.BLINK_API_URL;
+  try {
+    for (const [form, encode] of SECRET_FORMS) {
+      encodeCredential = encode;
+      r = await GET();
+      check('a credential echo leaves the request successful and the payer unavailable (' + form + ')', [r.status, r.body.checks.payer.ok, r.body.pool], [200, false, null]);
+      checkThat('the wallet error retains context and a redaction marker (' + form + ')', /bad key.*redacted/.test(r.body.checks.payer.detail), r.body.checks.payer.detail);
+      checkThat('no encoded credential fragment reaches the response (' + form + ')', !JSON.stringify(r.body).includes('937zx') && !r.body.checks.payer.detail.includes(encode(SECRET)), JSON.stringify(r.body));
+    }
+  } finally {
+    await new Promise((resolve) => blinkServer.close(resolve));
+    process.env.LN_PAYER = 'mock';
+    delete process.env.BLINK_API_KEY;
+    delete process.env.BLINK_API_URL;
+  }
 
   await new Promise((r2) => fileServer.close(r2));
   await new Promise((r2) => wholesaleServer.close(r2));

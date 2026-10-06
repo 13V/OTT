@@ -112,8 +112,9 @@ const RACER = '0x' + 'ace'.padStart(40, '0');
 
   console.log('\nidempotence');
   const p0 = purchases(), paid0 = mockPayer._state.log.length;
-  const again = await prov.order(Object.assign({ transactionId: 'wf-aaaa0001' }, EU));
-  check('the same id again is the same eSIM, whatever package is asked for', [again.iccid, again.packageCode], [o1.iccid, 'fixed_1GB_7D_DE']);
+  await rejects('a different package cannot carry the already-issued eSIM', prov.order(Object.assign({ transactionId: 'wf-aaaa0001' }, EU)), /orders have changed.*reload/, 409);
+  const again = await prov.order(Object.assign({ transactionId: 'wf-aaaa0001' }, DE));
+  check('the same id and package again is the same eSIM', [again.iccid, again.packageCode], [o1.iccid, 'fixed_1GB_7D_DE']);
   check('with no second purchase and no second payment', [purchases() - p0, mockPayer._state.log.length - paid0], [0, 0]);
 
   console.log('\nthe invoice is checked before it is paid');

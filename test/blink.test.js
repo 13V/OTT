@@ -139,6 +139,35 @@ async function main() {
   check('lnInvoicePaymentSend missing from the response entirely degrades to UNKNOWN rather than throwing', await payer.pay({ paymentRequest: 'lnfake1shapedrift' }), { status: 'UNKNOWN', error: '' });
   fake.state.payHandler = () => ({ status: 'SUCCESS', errors: [] });
 
+  console.log('\npayment deadlines — checked locally before the send mutation');
+  const callsBeforeExpiry = fake.state.log.length;
+  for (const deadlineMs of [Date.now() - 1, NaN, 'invalid']) {
+    check('an expired or malformed deadline refuses without dispatch: ' + String(deadlineMs),
+      await payer.pay({ paymentRequest: 'lnfake1expired', deadlineMs }),
+      { status: 'FAILURE', error: 'Lightning invoice expired before payment was sent', notSent: true });
+  }
+  check('a local deadline refusal makes no wallet or payment request', fake.state.log.length, callsBeforeExpiry);
+  {
+    const originalFetch = global.fetch, originalNow = Date.now;
+    const deadlineMs = Date.now() + 1000, payments = fake.calls('pay'), wallets = fake.calls('wallets');
+    payer._reset();
+    global.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (JSON.parse(args[1].body).query.includes('wallets {')) Date.now = () => deadlineMs + 1;
+      return response;
+    };
+    try {
+      check('expiry during wallet lookup remains an explicit known-unsent refusal',
+        await payer.pay({ paymentRequest: 'lnfake1lookup-expired', deadlineMs }),
+        { status: 'FAILURE', error: 'Lightning invoice expired before payment was sent', notSent: true });
+      check('the wallet lookup occurred but no payment mutation followed', [fake.calls('wallets') - wallets, fake.calls('pay') - payments], [1, 0]);
+    } finally { global.fetch = originalFetch; Date.now = originalNow; payer._reset(); }
+  }
+  await payer.pay({ paymentRequest: 'lnfake1fresh-deadline', deadlineMs: Date.now() + 10000 });
+  check('the private deadline is not sent as an unsupported GraphQL field',
+    fake.state.log.filter(log => log.op === 'pay').slice(-1)[0].variables.input,
+    { walletId: 'wallet-btc-0001', paymentRequest: 'lnfake1fresh-deadline' });
+
   console.log('\nfeeProbe() — an estimate in sats, not an enforced send limit');
   const sendsBeforeProbe = fake.calls('pay');
   check('the payer declares that Blink cannot enforce a caller-selected fee limit', payer.supportsFeeLimit, false);

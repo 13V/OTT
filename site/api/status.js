@@ -49,6 +49,7 @@ const { weekOf } = require('./_lib/week');
 const { allowRequestOrigin } = require('./_lib/request-origin');
 const { redemptionsEnabled } = require('./_lib/redemption-policy');
 const { catalogueReady, catalogueFingerprint } = require('./_lib/catalogue');
+const { redactError } = require('./_lib/redact');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -129,9 +130,8 @@ function secretValues() {
     .filter((v) => typeof v === 'string' && v.length >= 6);
 }
 function scrub(text) {
-  let out = String(text === undefined || text === null ? '' : text);
-  for (const v of secretValues()) out = out.split(v).join('[redacted]');
-  return out.slice(0, DETAIL_MAX);
+  const detail = String(text === undefined || text === null ? '' : text);
+  return detail ? redactError(detail, { privateValues: secretValues(), env: {}, maxLength: DETAIL_MAX }) : '';
 }
 const messageOf = (e) => (e && e.message) || String(e || 'failed');
 
@@ -355,6 +355,7 @@ const fail = (res, status, error) => send(res, status, { ok: false, error });
 
 let cached = null; // { at, body } — the entire response, kept for RESPONSE_CACHE_MS; `at` is also
                     // the one clock ?fresh=1's own floor is measured against, below.
+let inFlight = null; // Concurrent requests on one instance share the same dependency checks.
 
 module.exports = async (req, res) => {
   if (!allowRequestOrigin(req, res, ['GET'])) return;
@@ -371,8 +372,13 @@ module.exports = async (req, res) => {
     // it would be an unauthenticated way to force the very fan-out to Blink and wholesale the cache
     // exists to prevent, simply by asking twice.
     if (age < (fresh ? FRESH_MIN_MS() : RESPONSE_CACHE_MS)) return send(res, 200, cached.body);
-    const body = await computeStatus();
-    cached = { at: Date.now(), body };
+    if (!inFlight) {
+      inFlight = computeStatus().then((body) => {
+        cached = { at: Date.now(), body };
+        return body;
+      }).finally(() => { inFlight = null; });
+    }
+    const body = await inFlight;
     return send(res, 200, body);
   } catch (e) {
     // Nothing above should throw — every check is caught on its own — but a status page that goes

@@ -41,7 +41,7 @@ async function main() {
       store.zadd = originals.zadd;
       Date.now = originals.now;
       provider._reset(); mock._reset(); fake.state.checkouts.clear(); fake.state.log.length = 0;
-      fake.state.settleAfterCalls = 0;
+      fake.state.settleAfterCalls = 0; fake.state.refuseTopup = '';
     }
   }
   try {
@@ -101,11 +101,12 @@ async function main() {
       assert.equal((await provider.find(DE.transactionId)).paymentHash, rec.paymentHash);
       assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash);
       mock.sent = async () => ({ status: 'FAILURE' });
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
       await store.set(orderKey, { ...(await store.get(orderKey)), expiresAt: new Date(Date.now() - 600000).toISOString() });
       assert.equal((await provider.find(DE.transactionId)).step, 'invoiced');
       fake.state.checkouts.get(rec.paymentHash).gone = true;
-      assert.equal((await provider.order(EU)).step, 'invoiced');
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).step, 'invoiced');
       assert.equal((await provider.find(DE.transactionId)).paymentHash, rec.paymentHash);
       assert.equal(sends, 1); assert.equal(fake.purchases(), 1);
       mock.sent = async () => ({ status: 'SUCCESS' });
@@ -125,7 +126,8 @@ async function main() {
       store.compareSet = originals.compareSet;
       assert.equal((await store.get(orderKey)).paymentState, 'sending');
       assert.equal((await provider.find(DE.transactionId)).paymentHash, rec.paymentHash);
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash);
       assert.equal(sends, 0); assert.equal(fake.purchases(), 1);
     });
     await scenario('a pending send with delayed empty history retains its credit and checkout', async () => {
@@ -134,18 +136,21 @@ async function main() {
       mock.pay = async () => { sends++; return { status: 'PENDING' }; };
       assert.equal((await provider.order(DE)).paymentState, 'pending');
       assert.equal((await provider.find(DE.transactionId)).paymentHash, rec.paymentHash);
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash);
       assert.equal(sends, 1); assert.equal(fake.purchases(), 1);
     });
     await scenario('forgotten checkout keeps pending and subsequently successful payment visible', async () => {
       const rec = await seed(); mock._state.mode = 'pending'; await provider.order(DE);
       fake.state.checkouts.get(rec.paymentHash).gone = true;
       assert.equal((await provider.find(DE.transactionId)).step, 'invoiced');
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash);
       mock._settle(rec.paymentHash);
       const paid = await provider.find(DE.transactionId);
       assert.equal(paid.step, 'paid'); assert.match(paid.error, /no longer knows/);
-      assert.equal((await provider.order(EU)).step, 'paid'); assert.equal(fake.purchases(), 1);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).step, 'paid'); assert.equal(fake.purchases(), 1);
     });
     await scenario('forgotten checkout with an unreachable wallet cannot become failed', async () => {
       const rec = await seed(); fake.state.checkouts.get(rec.paymentHash).gone = true;
@@ -158,7 +163,8 @@ async function main() {
       const rec = await seed(); mock._state.mode = 'pending'; await provider.order(DE);
       await store.set(orderKey, { ...(await store.get(orderKey)), expiresAt: new Date(Date.now() - 600000).toISOString() });
       const before = mock._state.log.length;
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash);
       assert.equal((await provider.find(DE.transactionId)).step, 'invoiced');
       assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length, before);
     });
@@ -167,7 +173,8 @@ async function main() {
       fake.state.settleAfterCalls = 100;
       await store.set(orderKey, { ...(await store.get(orderKey)), expiresAt: new Date(Date.now() - 600000).toISOString() });
       assert.equal((await provider.find(DE.transactionId)).step, 'paid');
-      assert.equal((await provider.order(EU)).paymentHash, rec.paymentHash); assert.equal(fake.purchases(), 1);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      assert.equal((await provider.order(DE)).paymentHash, rec.paymentHash); assert.equal(fake.purchases(), 1);
     });
     await scenario('two callers recovering a stale lease have one atomic takeover and one send', async () => {
       await seed(); mock._state.mode = 'pending';
@@ -214,16 +221,67 @@ async function main() {
       };
       const before = mock._state.log.length;
       const sender = provider.order(DE); await sendStarted;
-      const replacement = provider.order(EU); await replacementWaiting; release();
-      const orders = await Promise.all([sender, replacement]);
-      assert.ok(orders.every(order => order.paymentHash === rec.paymentHash && order.packageCode === DE.packageCode));
+      const replacement = provider.order(EU);
+      const results = Promise.allSettled([sender, replacement]);
+      await replacementWaiting; release();
+      const [sent, refused] = await results;
+      assert.equal(sent.status, 'fulfilled');
+      assert.equal(sent.value.paymentHash, rec.paymentHash);
+      assert.equal(sent.value.packageCode, DE.packageCode);
+      assert.equal(refused.status, 'rejected'); assert.equal(refused.reason.status, 409);
+      assert.match(refused.reason.message, /orders have changed.*reload/);
+      assert.equal((await store.get(orderKey)).paymentState, 'pending');
       assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length - before, 1);
     });
     await scenario('a legacy failed invoice with a pending payment is recovered rather than replaced', async () => {
       const rec = await seed(); mock._state.mode = 'pending'; await provider.order(DE);
       await store.set(orderKey, { ...(await store.get(orderKey)), step: 'failed' });
-      const order = await provider.order(EU);
+      await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+      const order = await provider.order(DE);
       assert.equal(order.step, 'invoiced'); assert.equal(order.paymentHash, rec.paymentHash); assert.equal(fake.purchases(), 1);
+    });
+    await scenario('a competing plan cannot carry or pay the other plan while its claim is being quoted', async () => {
+      let claimed, release;
+      const claimReady = new Promise(resolve => { claimed = resolve; });
+      const quoteGate = new Promise(resolve => { release = resolve; });
+      store.set = async (key, value, opts) => {
+        const applied = await originals.set(key, value, opts);
+        if (key === orderKey && opts?.nx && applied) { claimed(); await quoteGate; }
+        return applied;
+      };
+      const first = provider.order(DE); await claimReady;
+      try {
+        await assert.rejects(provider.order(EU), error => error.status === 409 && /reload/.test(error.message));
+        assert.equal(fake.purchases(), 0); assert.equal(mock._state.log.length, 0);
+        assert.equal((await store.get(orderKey)).packageCode, DE.packageCode);
+      } finally { release(); }
+      const done = await first;
+      assert.equal(done.packageCode, DE.packageCode);
+      assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length, 1);
+    });
+    await scenario('completed and paid records cannot be carried for another requested plan or place', async () => {
+      const done = await provider.order(DE);
+      const before = mock._state.log.length, completions = fake.completes();
+      for (const step of ['done', 'paid']) {
+        const stored = { ...done, step }; await store.set(orderKey, stored);
+        for (const other of [EU, { ...DE, slug: 'france' }]) {
+          await assert.rejects(provider.order(other), error => error.status === 409 && /reload/.test(error.message));
+          assert.deepEqual(await store.get(orderKey), stored);
+        }
+      }
+      assert.equal(mock._state.log.length, before); assert.equal(fake.completes(), completions);
+    });
+    await scenario('a record replaced after the first wallet-status read cannot be paid under the old plan', async () => {
+      const rec = await seed(), before = mock._state.log.length;
+      const competing = { ...rec, packageCode: EU.packageCode, slug: EU.slug };
+      let reads = 0;
+      mock.sent = async () => {
+        if (++reads === 1) await store.set(orderKey, competing);
+        return { status: 'NONE' };
+      };
+      await assert.rejects(provider.order(DE), error => error.status === 409 && /reload/.test(error.message));
+      assert.deepEqual(await store.get(orderKey), competing);
+      assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
     });
     await scenario('retry repairs an interrupted treasury index before paying the same invoice', async () => {
       store.zadd = async () => { throw new Error('index write interrupted'); };
@@ -235,6 +293,45 @@ async function main() {
       assert.equal(done.step, 'done'); assert.equal(done.paymentHash, rec.paymentHash);
       assert.deepEqual((await provider.listOrders()).map(order => order.transactionId), [DE.transactionId]);
       assert.equal(fake.purchases(), 1); assert.equal(mock._state.log.length, 1);
+    });
+    await scenario('lookup repairs a failed completed-profile index and the next same-place order tops it up', async () => {
+      const address = '0x4444444444444444444444444444444444444444';
+      const simKey = 'sim:' + address;
+      const nextProfile = fake.state.seq;
+      let indexFailures = 0;
+      store.set = async (key, value, opts) => {
+        if (key === simKey && indexFailures++ === 0) throw new Error('profile index write interrupted');
+        return originals.set(key, value, opts);
+      };
+      const done = await provider.order({ ...DE, address });
+      assert.equal(done.step, 'done'); assert.equal((await provider.sims(address)).length, 0);
+      store.set = originals.set;
+      const purchases = fake.purchases(), sends = mock._state.log.length;
+      const recovered = await provider.find(DE.transactionId);
+      assert.deepEqual(recovered, done);
+      const cards = await provider.sims(address);
+      assert.equal(cards.length, 1); assert.equal(cards[0].iccid, done.iccid); assert.equal(cards[0].ac, done.ac);
+      assert.equal(fake.purchases(), purchases); assert.equal(mock._state.log.length, sends);
+      const next = await provider.order({ ...DE, address, transactionId: 'recovery-next-bundle' });
+      assert.equal(next.topupOf, done.iccid); assert.equal(next.iccid, done.iccid);
+      assert.equal(fake.state.seq, nextProfile + 1); assert.equal((await provider.sims(address)).length, 1);
+      assert.equal(fake.purchases(), purchases + 1); assert.equal(mock._state.log.length, sends + 1);
+    });
+    await scenario('repairing an older completed card does not replace the newer profile selected for top-ups', async () => {
+      const address = '0x4444444444444444444444444444444444444444';
+      const first = await provider.order({ ...DE, address });
+      fake.state.refuseTopup = first.iccid;
+      const replacement = await provider.order({ ...DE, address, transactionId: 'recovery-replacement' });
+      assert.notEqual(replacement.iccid, first.iccid);
+      const simKey = 'sim:' + address;
+      const index = await store.get(simKey); delete index.cards[first.iccid]; await store.set(simKey, index);
+      const purchases = fake.purchases(), sends = mock._state.log.length;
+      await provider.find(DE.transactionId);
+      const repaired = await store.get(simKey);
+      assert.equal(repaired.bySlug[DE.slug], replacement.iccid); assert.equal(repaired.cards[first.iccid].ac, first.ac);
+      assert.equal(fake.purchases(), purchases); assert.equal(mock._state.log.length, sends);
+      const next = await provider.order({ ...DE, address, transactionId: 'recovery-after-repair' });
+      assert.equal(next.topupOf, replacement.iccid); assert.equal(next.iccid, replacement.iccid);
     });
     await scenario('every resumed send revalidates invoice amount, network, hash, expiry and current rate', async () => {
       const rec = await seed(), before = mock._state.log.length;
@@ -251,6 +348,51 @@ async function main() {
       await assert.rejects(provider.order(DE), /current.*wallet price/);
       mock._state.usdPerSat = NaN;
       await assert.rejects(provider.order(DE), /price is unavailable/);
+      assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
+    });
+    await scenario('an unpaid checkout past its earlier provider expiry cannot send during reconciliation grace', async () => {
+      const rec = await seed(), before = mock._state.log.length;
+      assert.ok(bolt11.decode(rec.paymentRequest).expiresAt * 1000 > Date.now());
+      const expired = { ...rec, expiresAt: new Date(Date.now() - 30000).toISOString() };
+      await store.set(orderKey, expired);
+      await assert.rejects(provider.order(DE), /stored.*invoice.*expired/);
+      assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
+      assert.deepEqual(await store.get(orderKey), expired);
+    });
+    await scenario('expiry during the final lease check releases only the known unsent reservation', async () => {
+      const rec = await seed(), before = mock._state.log.length;
+      const deadlineMs = Date.now() + 1000;
+      await store.set(orderKey, { ...rec, expiresAt: new Date(deadlineMs).toISOString() });
+      let leaseReads = 0;
+      store.get = async key => {
+        const value = await originals.get(key);
+        if (key === leaseKey && ++leaseReads === 2) Date.now = () => deadlineMs + 1;
+        return value;
+      };
+      await assert.rejects(provider.order(DE), /expired before payment was sent/);
+      const unsent = await store.get(orderKey);
+      assert.equal(unsent.paymentState, 'not-sent'); assert.equal(unsent.paymentHash, rec.paymentHash);
+      assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
+    });
+    await scenario('a payer refusal before its own dispatch leaves the invoice known unsent', async () => {
+      const rec = await seed(), before = mock._state.log.length;
+      mock.pay = async args => {
+        assert.equal(args.deadlineMs, Date.parse(rec.expiresAt));
+        return { status: 'FAILURE', error: 'invoice expired before payment was sent', notSent: true };
+      };
+      await assert.rejects(provider.order(DE), /expired before payment was sent/);
+      assert.equal((await store.get(orderKey)).paymentState, 'not-sent');
+      assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
+    });
+    await scenario('an expired checkout with a reserved payment still reconciles to issuance without another send', async () => {
+      const rec = await seed(); mock._state.mode = 'pending'; await provider.order(DE);
+      await store.set(orderKey, { ...(await store.get(orderKey)), expiresAt: new Date(Date.now() - 30000).toISOString() });
+      const before = mock._state.log.length;
+      const pending = await provider.order(DE);
+      assert.equal(pending.paymentState, 'pending'); assert.equal(pending.paymentHash, rec.paymentHash);
+      mock._settle(rec.paymentHash);
+      const done = await provider.order(DE);
+      assert.equal(done.step, 'done'); assert.equal(done.paymentHash, rec.paymentHash);
       assert.equal(mock._state.log.length, before); assert.equal(fake.purchases(), 1);
     });
     console.log(checks + ' wholesale recovery scenarios passed. Local fakes only.');

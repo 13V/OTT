@@ -375,7 +375,7 @@ const fail = (res, status, error) => send(res, status, { ok: false, error });
  * `share` are holdings, not spending power, so they are still reported from whatever the file last
  * said even while stale — a wallet can see what it holds; it just cannot spend against it yet.
  */
-async function standing(prov, config, allowances, address, week, treasury = null) {
+async function standing(prov, config, allowances, address, week, treasury = null, { includeSims = true } = {}) {
   const stale = Number(allowances.week) !== week;
   const row = (allowances.wallets && allowances.wallets[address]) || {};
   const tokens = String(row.tokens || '0');
@@ -388,7 +388,7 @@ async function standing(prov, config, allowances, address, week, treasury = null
   // The eSIMs themselves, which outlive any week: a bundle claimed in week 2958 queues on the
   // profile issued in 2957. A provider with no such notion (the reseller one) simply has none.
   let sims = [];
-  if (typeof prov.sims === 'function') {
+  if (includeSims && typeof prov.sims === 'function') {
     try { sims = await prov.sims(address); } catch (e) { sims = []; }
   }
   let holds = false;
@@ -532,8 +532,16 @@ module.exports = async (req, res) => {
     // redeemed must not be shown their balance from ten seconds ago — and the key carries the
     // ledger's stamp, so every picture of this wallet goes, not just the one matching this read.
     for (const k of standingCache.keys()) if (k.startsWith(address + ':')) standingCache.delete(k);
-    const s = await standing(prov, config, allowances, address, week);
+    const s = await standing(prov, config, allowances, address, week, null, { includeSims: reading });
     if (reading) return send(res, 200, standingBody(s, address, allowances, config, true));
+
+    const supplierPackage = pkg.packageCode || pkg.code;
+    const place = pkg.slug || pkg.code;
+    // Wholesale records the supplier SKU; the older adapters expose the supplied slug/code.
+    // Compare the exact identifier that this adapter records, never any matching catalogue alias.
+    const recordedPackage = prov.name === 'wholesale' ? supplierPackage : place;
+    const matchesOrder = (order) => order && order.packageCode === recordedPackage
+      && (prov.name !== 'wholesale' || order.slug === place);
 
     // The slot. A caller that names a slot already filled with the same package is retrying,
     // replaying or double-clicking, and gets that order back; one that names a slot ahead of the
@@ -542,7 +550,7 @@ module.exports = async (req, res) => {
     const asked = Number(body.n);
     if (asked < n) {
       const done = s.orders[asked];
-      if (done && done.packageCode === pkg.code) {
+      if (matchesOrder(done)) {
         return send(res, 200, {
           ok: true, order: publicOrder(done, config, { codes: true }), remainingUsd: s.remainingUsd,
           sims: await simsFor(prov, address, done), replayed: true,
@@ -561,10 +569,13 @@ module.exports = async (req, res) => {
     // have placed it in the meantime, and returning that order is the idempotent answer.
     const transactionId = transactionIdFor(address, week, n);
     const existing = await prov.find(transactionId);
+    if (existing && !matchesOrder(existing)) return fail(res, 409, 'your orders have changed since; reload');
     // The provider is given the catalogue entry three ways: `packageCode` is what it keys the order
     // on (eSIM Access's package code, wholesale's bundle name), `slug` is the place it is priced
     // for (wholesale) or the record name (eSIM Access), and `code` is what priceOf() looks up.
-    const order = existing || await prov.order({ transactionId, packageCode: pkg.packageCode || pkg.code, slug: pkg.slug || pkg.code, code: pkg.code, priceUsd, address });
+    const order = existing || await prov.order({ transactionId, packageCode: supplierPackage, slug: place, code: pkg.code, priceUsd, address });
+    // Another plan can win the slot while order() waits. Its codes require its own signature.
+    if (!matchesOrder(order)) return fail(res, 409, 'your orders have changed since; reload');
     const remainingUsd = round6(Math.max(0, s.remainingUsd - priceOf(order, config)));
     // The eSIMs after this order, not before: a wallet's first claim mints the profile this very
     // call created. Its signature authorizes that profile's code, never unrelated profile codes.
