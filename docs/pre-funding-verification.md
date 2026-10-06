@@ -42,9 +42,11 @@ The app does not infer installation or working connectivity from opening a guide
 
 ## Backend and recovery
 
-All 21 backend suites pass, including 18 payment recovery scenarios and 45
-private operator phone-test checks. Syntax and configuration lint passes for
-100 files. These tests use local fixtures and make no real payment.
+All 22 backend suites pass, including 18 payment recovery scenarios, 66
+private operator phone-test checks, 76 Blink checks and 9 Windows credential
+checks. Syntax and configuration lint passes for 102 files. These tests use
+local fixtures and make no real payment. All 15 live prelaunch checks passed
+again on 6 October 2026.
 
 Redis compare-and-update operations protect payment leases and order advancement.
 A durable reservation is saved before a wallet send. A timeout, interrupted
@@ -69,14 +71,46 @@ sign a message, order an eSIM or pay an invoice.
 
 ## Remaining before a paid test
 
-* Review the settlement route and supply the private payer credential. USDC on
-  Solana is the requested funding currency; direct automated supplier settlement
-  in that currency has not been verified. The deployed adapter uses Lightning.
-* Approve a limited operator purchase and invoice cap, then fund a dedicated
-  wallet. The prepared dry run selects Australia 1 GB for 7 days, with a reviewed
-  catalogue price of $1.99. Live pricing and routing fees still need checking.
+The prepared run is `phone-test-20261006-au-001`: Australia 1 GB for 7 days
+(`fixed_1GB_7D_AU`), currently $1.99 from the official supplier. Proposed limits
+are $2.50 for the invoice, $2.50 for the invoice plus estimated Lightning routing
+fee, and $4.00 for the dedicated Blink BTC wallet. The total funding budget is
+$4.00 equivalent denominated in USDC on Solana, including conversion, withdrawal
+and source-chain gas costs. These prepared values are not purchase authorization.
+
+The proposed automated route is USDC on Solana → user-reviewed Lightning
+conversion → dedicated Blink BTC wallet → Nadanada. Direct automated USDC
+settlement remains unverified. No conversion quote, receiving invoice or funding
+address has been selected. No money has moved and no real eSIM has been issued.
+
+* The user creates the Blink API key and runs `npm run phone:setup` in local
+  PowerShell to enter it with the durable storage credentials. Secrets are
+  encrypted with Windows DPAPI for that user, outside OneDrive, with protected
+  private ACLs. `--local-credentials` unlocks them only in the current process.
+  Environment variables remain an alternative. Keep keys out of chat, the
+  repository, OneDrive and the public frontend. Dashboard sign-in alone does not
+  establish that the operator CLI can read the account.
+* Run `--preflight` with the prepared run and all three spending limits. It reads
+  the provider catalogue, Blink BTC account/balance and current price, and
+  operator storage; it creates no checkout, invoice, payment or storage write.
+  A zero-BTC wallet reports needs funding. The catalogue-only preflight confirmed
+  the live Australia price and coverage on 6 October 2026. Local wallet and store
+  credentials are still missing; credentialed preflight and live payment remain
+  unverified. `npm run phone:preflight` runs the prepared read-only check after
+  private setup.
+* Obtain a current conversion quote that fits the entire $4.00 funding budget
+  and delivers enough BTC for the invoice and routing fee. The source wallet may
+  need SOL for gas; no fixed quote, conversion minimum or receiving amount has
+  been guaranteed. Then obtain the user's authorization for this package and
+  budget before transferring funds or buying.
 * Run that purchase, resume the same run if interrupted, export its private
   installation pack, and install and test it on a compatible unlocked phone.
+
+Blink's send API does not provide a strict routing-fee cap. The $2.50 payment
+check uses an estimate, so it is not a guaranteed final all-in payment ceiling.
+Physically limiting the dedicated BTC wallet bounds available satoshis; their
+USD value can change. Do not add other funds or automatic deposits to that wallet.
+Public redemption remains paused throughout this preparation and operator test.
 
 Follow [the operator guide](operator-phone-test.md). Keep public
 `REDEMPTIONS_ENABLED=0` throughout the isolated operator test.

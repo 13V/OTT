@@ -6,12 +6,13 @@ const os = require('os');
 const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 const crypto = require('crypto');
-const { parse, plan, runTest, checkedPay, officialConfig, resultOf } = require('../scripts/test-esim');
+const { parse, plan, runTest, checkedPay, officialConfig, resultOf, manifestOf, livePackage } = require('../scripts/test-esim');
 const pack = require('../scripts/esim-install-pack');
 const { PRIVATE_BASE, privatePath } = require('../scripts/operator-test-files');
 const { memoryStore } = require('../site/api/_lib/store');
 const bolt11 = require('../site/api/_lib/bolt11');
-const options = { purchase: true, runId: 'unit-phone-' + crypto.randomBytes(4).toString('hex'), sku: 'fixed_1GB_7D_AU', maxInvoiceUsd: 2.5 };
+const options = { purchase: true, runId: 'unit-phone-' + crypto.randomBytes(4).toString('hex'), sku: 'fixed_1GB_7D_AU',
+  maxInvoiceUsd: 2.5, maxPaymentUsd: 2.5, maxWalletUsd: 4 };
 const p = plan(options);
 const hash = crypto.randomBytes(32).toString('hex');
 const paymentRequest = bolt11.encode({ sats: 1890, paymentHash: hash, timestamp: Math.floor(Date.now() / 1000) });
@@ -19,7 +20,8 @@ const rec = { transactionId: 'operator-' + options.runId, packageCode: p.sku, sl
   step: 'invoiced', paymentHash: hash, paymentRequest, paidUsd: 1.89 };
 const issued = { ...rec, step: 'done', pending: false, iccid: '8944000000000000001', ac: 'LPA:1$rsp.example.com$test-code',
   smdpAddress: 'rsp.example.com', matchingId: 'test-code', completedAt: new Date().toISOString() };
-const payer = { usdPerSat: async () => 0.001, balance: async () => ({ sats: 10000, usdPerSat: 0.001 }) };
+const payer = { usdPerSat: async () => 0.001, balance: async () => ({ sats: 3000, usdPerSat: 0.001 }),
+  feeProbe: async () => ({ feeSats: 10 }) };
 let checks = 0;
 function check(name, fn) { fn(); checks++; console.log('ok ' + name); }
 async function checkAsync(name, fn) { await fn(); checks++; console.log('ok ' + name); }
@@ -44,7 +46,7 @@ async function integration() {
     Object.assign(process.env, { WHOLESALE_BASE_URL: fake.base, WHOLESALE_COMPLETE_WAIT_MS: '0', WHOLESALE_ALLOW_MEMORY_STORE: '1',
       LN_PAYER: 'mock', STORE: 'memory', STORE_PREFIX: 'ott:operator-test:', NODE_ENV: 'test',
       VERCEL_ENV: 'test', REDEMPTIONS_ENABLED: '1' });
-    mock._reset(); mock._state.sats = 10000; mock._state.mode = 'pending';
+    mock._reset(); mock._state.sats = 3000; mock._state.usdPerSat = 0.001; mock._state.mode = 'pending';
     const provider = require('../site/api/_lib/providers/wholesale');
     provider._reset();
     const originalPay = mock.pay;
@@ -52,7 +54,7 @@ async function integration() {
     let guardedPay;
     // Each real CLI has its own module instance. Keep one guarded fixture for concurrent calls.
     mock.pay = args => guardedPay(args);
-    const deps = { store: storage.store(), payer: { ...mock, pay: args => originalPay(args) },
+    const deps = { store: storage.store(), payer: { ...mock, feeProbe: async () => ({ feeSats: 10 }), pay: args => originalPay(args) },
       order: async (args, pay) => {
         guardedPay = pay;
         return provider.order(args);
@@ -108,7 +110,7 @@ async function integration() {
         assert.equal(refused.step, 'invoiced');
         assert.equal(refused.paymentState, 'failed');
         assert.equal(mock._state.log.length, sends);
-        mock._state.sats = 10000; mock._state.mode = 'pending';
+        mock._state.sats = 3000; mock._state.mode = 'pending';
         const retry = await runTest(guardedOpts, deps);
         const pending = await deps.store.get(key);
         assert.equal(retry.stage, 'invoiced');
@@ -162,6 +164,23 @@ async function main() {
   check('default is a dry run', () => assert.equal(parse([]).purchase, false));
   check('purchase requires named run and cap', () => assert.throws(() => plan({ purchase: true, sku: p.sku }), /explicit/));
   check('conflicting modes rejected', () => assert.throws(() => parse(['--purchase', '--dry-run']), /either/));
+  check('preflight cannot be combined with purchase or dry-run', () => {
+    for (const mode of ['--purchase', '--dry-run']) assert.throws(() => parse(['--preflight', mode]), /either/);
+  });
+  check('local credentials never load for an offline plan', () => assert.throws(() => parse(['--dry-run', '--local-credentials']), /only/));
+  check('offline default wallet ceiling is $4', () => assert.equal(plan(parse([])).maxWalletUsd, 4));
+  check('preflight and purchase require all explicit caps', () => {
+    for (const name of ['runId', 'maxInvoiceUsd', 'maxPaymentUsd', 'maxWalletUsd']) {
+      for (const mode of ['purchase', 'preflight']) assert.throws(() => plan({ ...options, purchase: false, [mode]: true, [name]: undefined }), /explicit/);
+    }
+  });
+  check('caps cannot be negative, nonfinite or ordered incorrectly', () => {
+    for (const name of ['maxInvoiceUsd', 'maxPaymentUsd', 'maxWalletUsd']) {
+      for (const value of [0, -1, Infinity, NaN, 21]) assert.throws(() => plan({ ...options, [name]: value }), /cap/);
+    }
+    assert.throws(() => plan({ ...options, maxPaymentUsd: 2 }), /Caps/);
+    assert.throws(() => plan({ ...options, maxWalletUsd: 2 }), /Caps/);
+  });
   check('caps must be finite and at most $20', () => assert.throws(() => plan({ ...options, maxInvoiceUsd: 'Infinity' }), /cap/));
   check('cap must cover reviewed SKU', () => assert.throws(() => plan({ ...options, maxInvoiceUsd: 1 }), /catalogue/));
   check('path traversal run IDs refused', () => assert.throws(() => plan({ ...options, runId: '../escape' }), /Run ID/));
@@ -170,6 +189,22 @@ async function main() {
   check('credential forwarding to arbitrary store refused', () => assert.throws(() => officialConfig({ KV_REST_API_URL: 'https://evil.example', KV_REST_API_TOKEN: 'private' }), /Upstash/));
   check('Blink custom host refused', () => assert.throws(() => officialConfig({ KV_REST_API_URL: 'https://test.upstash.io', KV_REST_API_TOKEN: 'private', BLINK_API_KEY: 'private', BLINK_API_URL: 'https://evil.example' }, true), /mainnet/));
   check('payment wallet override cannot bypass checked BTC balance', () => assert.throws(() => officialConfig({ KV_REST_API_URL: 'https://test.upstash.io', KV_REST_API_TOKEN: 'private', BLINK_API_KEY: 'private', BLINK_WALLET_ID: 'unchecked-wallet' }, true), /default BTC/));
+  await checkAsync('live package review uses only an official catalogue GET and rejects changed terms', async () => {
+    const originalFetch = global.fetch;
+    const bundle = { name: p.sku, price: p.catalogueUsd, dataInGB: p.gb, durationInDays: p.days, roamingEnabled: [{ iso: 'AU' }] };
+    let selected = bundle;
+    global.fetch = async (url, init) => {
+      assert.equal(url, 'https://nadanada.me/api/v2/esim/bundles?country=AU');
+      assert.ok(!init.method || init.method === 'GET'); assert.ok(!init.body); assert.ok(!init.headers.authorization);
+      return { ok: true, json: async () => ({ data: [selected] }) };
+    };
+    try {
+      assert.equal((await livePackage(p)).priceUsd, p.catalogueUsd);
+      for (const changed of [{ price: 2.99 }, { dataInGB: 0.5 }, { durationInDays: 1 }, { roamingEnabled: [{ iso: 'NZ' }] }, { name: 'other' }]) {
+        selected = { ...bundle, ...changed }; await assert.rejects(livePackage(p), /differs/);
+      }
+    } finally { global.fetch = originalFetch; }
+  });
   const store = memoryStore();
   await store.set('order:' + rec.transactionId, rec);
   let calls = 0;
@@ -180,6 +215,34 @@ async function main() {
     assert.ok(!JSON.stringify(report).includes(paymentRequest));
   });
   await checkAsync('approved stored invoice passes', () => checkedPay({ record: rec, paymentRequest, p, payer }));
+  await checkAsync('fee guard reports estimate rather than guaranteed final cost', async () => {
+    const estimate = await checkedPay({ record: rec, paymentRequest, p, payer });
+    assert.equal(estimate.estimatedFeeSats, 10); assert.equal(estimate.feeLimitEnforced, false);
+  });
+  await checkAsync('routing estimate fits exact boundary and refuses the next sat', async () => {
+    const exact = { ...payer, feeProbe: async () => ({ feeSats: 610 }) };
+    assert.equal((await checkedPay({ record: rec, paymentRequest, p, payer: exact })).estimatedPaymentUsd, 2.5);
+    await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...exact, feeProbe: async () => ({ feeSats: 611 }) } }), /estimate cap/);
+  });
+  await checkAsync('fractional sat headroom is rounded down', () => assert.rejects(checkedPay({ record: rec, paymentRequest,
+    p: { ...p, maxPaymentUsd: 1.9009 }, payer: { ...payer, feeProbe: async () => ({ feeSats: 11 }) } }), /estimate cap/));
+  await checkAsync('missing or malformed fee estimates refuse payment', async () => {
+    await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, feeProbe: undefined } }), /estimate/);
+    for (const feeSats of [-1, 0.5, NaN, Infinity, '10', Number.MAX_SAFE_INTEGER + 1]) {
+      await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, feeProbe: async () => ({ feeSats }) } }), /invalid/);
+    }
+  });
+  await checkAsync('invoice-only balance is insufficient when a fee is expected', () => assert.rejects(checkedPay({ record: rec, paymentRequest, p,
+    payer: { ...payer, balance: async () => ({ sats: 1890, usdPerSat: 0.001 }) } }), /dedicated/));
+  await checkAsync('higher balance-query price cannot weaken invoice or wallet caps', async () => {
+    await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, balance: async () => ({ sats: 3000, usdPerSat: 0.0014 }) } }), /cap/);
+    await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, balance: async () => ({ sats: 4000, usdPerSat: 0.00101 }) } }), /dedicated/);
+  });
+  await checkAsync('invalid balances and missing price fail closed', async () => {
+    for (const balance of [{ sats: -1, usdPerSat: 0.001 }, { sats: 3000.5, usdPerSat: 0.001 }, { sats: 3000, usdPerSat: 0 }, { sats: 3000, usdPerSat: NaN }]) {
+      await assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, balance: async () => balance } }), /unavailable/);
+    }
+  });
   await checkAsync('resumed invoice over cap cannot pay', () => assert.rejects(checkedPay({ record: rec, paymentRequest, p: { ...p, maxInvoiceUsd: 1 }, payer }), /cap/));
   await checkAsync('changed BTC rate is checked again on resume', () => assert.rejects(checkedPay({ record: rec, paymentRequest, p, payer: { ...payer, usdPerSat: async () => 0.003 } }), /cap/));
   await checkAsync('mismatched payment hash refused', () => assert.rejects(checkedPay({ record: { ...rec, paymentHash: 'f'.repeat(64) }, paymentRequest, p, payer }), /validation/));
@@ -195,7 +258,67 @@ async function main() {
     await assert.rejects(runTest(options, { store, payer, order: () => { calls++; } }), /Previous checkout/);
     assert.equal(calls, 0);
   });
-  await checkAsync('immutable run cap cannot be changed', () => assert.rejects(runTest({ ...options, maxInvoiceUsd: 3 }, { store, payer, order: () => { calls++; } }), /bound/));
+  await checkAsync('immutable run invoice cap cannot be changed', () => assert.rejects(runTest({ ...options, maxInvoiceUsd: 2.2 }, { store, payer, order: () => { calls++; } }), /bound/));
+  await checkAsync('immutable payment and wallet caps cannot be changed', async () => {
+    for (const changed of [{ maxPaymentUsd: 3 }, { maxWalletUsd: 5 }]) await assert.rejects(runTest({ ...options, ...changed }, { store, payer, order: () => { calls++; } }), /bound/);
+    assert.equal(calls, 0);
+  });
+  await checkAsync('legacy run manifest cannot silently gain new spending settings', async () => {
+    const legacy = memoryStore(); await legacy.set('operator-run:' + options.runId, { schema: 1, sku: p.sku, slug: p.slug, cap: 2.5, catalogueUsd: p.catalogueUsd });
+    await assert.rejects(runTest(options, { store: legacy, payer, order: () => { calls++; } }), /bound/);
+    assert.equal(calls, 0);
+  });
+  await checkAsync('preflight is read-only and redacts existing invoice and activation data', async () => {
+    const readonly = { get: async key => key.startsWith('order:') ? issued : manifestOf(p), set: () => { throw new Error('unexpected write'); } };
+    const noAction = () => { throw new Error('unexpected payment or checkout'); };
+    const report = await runTest({ ...options, purchase: false, preflight: true }, { store: readonly,
+      catalogueLookup: async () => ({ sku: p.sku, priceUsd: 1.99 }), order: noAction,
+      payer: { ...payer, balance: async () => ({ sats: 0, usdPerSat: 0.001 }), pay: noAction, invoice: noAction, feeProbe: noAction } });
+    assert.equal(report.mode, 'preflight'); assert.equal(report.wallet.status, 'needs-funding');
+    assert.equal(report.storage, 'read-access-verified'); assert.equal(report.paymentTested, false);
+    const output = JSON.stringify(report);
+    for (const secret of [paymentRequest, issued.ac, issued.iccid]) assert.ok(!output.includes(secret));
+  });
+  await checkAsync('preflight reports missing credentials without claiming account access', async () => {
+    const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({ sku: p.sku, priceUsd: 1.99 }) });
+    assert.equal(report.wallet.status, 'credential-required'); assert.equal(report.storage, 'credential-required');
+    assert.equal(report.paymentTested, false);
+  });
+  await checkAsync('preflight distinguishes a present balance from an oversized wallet', async () => {
+    for (const [sats, status] of [[3000, 'balance-present'], [5000, 'over-cap']]) {
+      const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({}), payer: { ...payer, balance: async () => ({ sats, usdPerSat: 0.001 }) } });
+      assert.equal(report.wallet.status, status); assert.equal(report.wallet.feeLimitEnforced, false);
+    }
+  });
+  await checkAsync('preflight rejects bound-setting changes before catalogue lookup', async () => {
+    let lookups = 0;
+    await assert.rejects(runTest({ ...options, purchase: false, preflight: true }, { store: { get: async key => key.startsWith('order:') ? null : { ...manifestOf(p), maxWalletUsd: 20 } }, catalogueLookup: async () => { lookups++; } }), /bound/);
+    assert.equal(lookups, 0);
+  });
+  await checkAsync('every spending-guard refusal dispatches zero payments and preserves the invoice', async () => {
+    const refusedPayers = [
+      { ...payer, feeProbe: undefined }, { ...payer, feeProbe: async () => ({ feeSats: 1000 }) },
+      { ...payer, feeProbe: async () => ({ feeSats: -1 }) }, { ...payer, feeProbe: async () => { throw new Error('route unavailable'); } },
+      { ...payer, balance: async () => ({ sats: 5000, usdPerSat: 0.001 }) }, { ...payer, balance: async () => ({ sats: 1890, usdPerSat: 0.001 }) },
+    ];
+    for (const guarded of refusedPayers) {
+      const fresh = memoryStore(); await fresh.set('order:' + rec.transactionId, rec);
+      const lease = { attempt: 'test', at: Date.now() }; await fresh.set('paylease:' + rec.transactionId, lease);
+      let sends = 0;
+      await assert.rejects(runTest(options, { store: fresh, payer: { ...guarded, sent: async () => ({ status: 'NONE' }), pay: async () => { sends++; } },
+        order: async (_args, guardedPay) => { const result = await guardedPay({ paymentRequest, paymentLease: lease }); throw new Error(result.error); } }), /before any send/);
+      assert.equal(sends, 0); assert.deepEqual(await fresh.get('order:' + rec.transactionId), rec);
+    }
+  });
+  check('CLI failure never exposes private upstream markers', () => {
+    const marker = 'PRIVATE-KEY-INVOICE-ACTIVATION';
+    const proc = spawnSync(process.execPath, ['scripts/test-esim.js', '--preflight', '--run-id', options.runId, '--sku', p.sku,
+      '--max-invoice-usd', '2.50', '--max-payment-usd', '2.50', '--max-wallet-usd', '4'], {
+      cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { PATH: process.env.PATH, USERPROFILE: os.homedir(),
+        BLINK_API_KEY: marker, BLINK_API_URL: 'https://evil.example/' + marker, KV_REST_API_URL: 'https://test.upstash.io', KV_REST_API_TOKEN: marker },
+    });
+    assert.equal(proc.status, 1); assert.ok(!(proc.stdout + proc.stderr).includes(marker));
+  });
   await checkAsync('uncertain payment status prevents another send', async () => {
     const fresh = memoryStore(); await fresh.set('order:' + rec.transactionId, rec);
     let sends = 0;

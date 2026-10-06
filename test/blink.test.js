@@ -108,6 +108,7 @@ async function main() {
   check('a successful payment', await payer.pay({ paymentRequest: 'lnfake1success', memo: 'OT+T order-1' }), { status: 'SUCCESS', error: '' });
   const lastPay = fake.state.log.filter((l) => l.op === 'pay').slice(-1)[0];
   check('the invoice and memo actually sent on the wire', [lastPay.variables.input.paymentRequest, lastPay.variables.input.memo], ['lnfake1success', 'OT+T order-1']);
+  check('ordinary sends retain the exact supported input fields', Object.keys(lastPay.variables.input).sort(), ['memo', 'paymentRequest', 'walletId']);
 
   fake.state.payHandler = () => ({ status: 'PENDING', errors: [] });
   check('PENDING', await payer.pay({ paymentRequest: 'lnfake1pending' }), { status: 'PENDING', error: '' });
@@ -137,6 +138,38 @@ async function main() {
   fake.state.forceBody = JSON.stringify({ data: {} });
   check('lnInvoicePaymentSend missing from the response entirely degrades to UNKNOWN rather than throwing', await payer.pay({ paymentRequest: 'lnfake1shapedrift' }), { status: 'UNKNOWN', error: '' });
   fake.state.payHandler = () => ({ status: 'SUCCESS', errors: [] });
+
+  console.log('\nfeeProbe() — an estimate in sats, not an enforced send limit');
+  const sendsBeforeProbe = fake.calls('pay');
+  check('the payer declares that Blink cannot enforce a caller-selected fee limit', payer.supportsFeeLimit, false);
+  delete process.env.BLINK_API_KEY;
+  const noKeyCalls = fake.state.log.length;
+  await rejects('a fee probe without a key fails before any request', payer.feeProbe({ paymentRequest: 'lnfake1fee' }), /BLINK_API_KEY is not set/);
+  check('the unauthenticated probe made no wallet or fee request', fake.state.log.length, noKeyCalls);
+  process.env.BLINK_API_KEY = fake.apiKey;
+  check('a valid estimate returns routing fee sats without adding invoice amount or converting units', await payer.feeProbe({ paymentRequest: 'lnfake1fee' }), { feeSats: 12 });
+  const feeLog = fake.state.log.filter(l => l.op === 'feeProbe').slice(-1)[0];
+  check('the probe names the exact invoice and BTC wallet', feeLog.variables.input, { walletId: 'wallet-btc-0001', paymentRequest: 'lnfake1fee' });
+  check('the probe uses its authenticated official GraphQL input type', [feeLog.query.includes('LnInvoiceFeeProbeInput!'), feeLog.headers['x-api-key']], [true, fake.apiKey]);
+  fake.state.feeProbeHandler = () => ({ amount: 0, errors: [] });
+  check('a zero-fee route is a valid estimate', await payer.feeProbe({ paymentRequest: 'lnfake1free' }), { feeSats: 0 });
+  fake.state.feeProbeHandler = () => ({ amount: 12, errors: [{ message: 'Unable to find a route', code: 'ROUTE_FIND_FAILED' }] });
+  await rejects('probe errors cannot be ignored even when an amount is present', payer.feeProbe({ paymentRequest: 'lnfake1noroute' }), /could not estimate/);
+  for (const amount of [null, -1, 1.5, '12', Number.MAX_SAFE_INTEGER + 1]) {
+    fake.state.feeProbeHandler = () => ({ amount, errors: [] });
+    await rejects('an invalid probe amount cannot authorize budgeting: ' + String(amount), payer.feeProbe({ paymentRequest: 'lnfake1invalidfee' }), /no valid routing fee/);
+  }
+  fake.state.forceBody = JSON.stringify({ data: { lnInvoiceFeeProbe: { amount: 12 } } });
+  await rejects('a malformed probe response without its errors list is refused', payer.feeProbe({ paymentRequest: 'lnfake1missingerrors' }), /could not estimate/);
+  fake.state.forceBody = JSON.stringify({ data: null, errors: [{ message: 'fee probe unavailable' }] });
+  await rejects('a GraphQL probe failure is not treated as a zero-fee route', payer.feeProbe({ paymentRequest: 'lnfake1gqlfee' }), /Blink: fee probe unavailable/);
+  fake.state.feeProbeHandler = () => ({ amount: 12, errors: [] });
+  check('probing never invoked payment send', fake.calls('pay'), sendsBeforeProbe);
+  const callsBeforeBoundedPay = fake.state.log.length;
+  for (const maxFeeSats of [0, 25, null]) {
+    await rejects('a requested hard fee cap is refused locally: ' + String(maxFeeSats), payer.pay({ paymentRequest: 'lnfake1capped', maxFeeSats }), /does not support a hard Lightning fee limit; payment was not sent/);
+  }
+  check('hard-limit refusal did not look up a wallet, probe a route or send payment', fake.state.log.length, callsBeforeBoundedPay);
 
   console.log('\ninvoice()');
   fake.state.invoiceHandler = (input) => ({ invoice: { paymentRequest: 'lnfake1inv-' + input.amount, paymentHash: hash('inv-' + input.amount) }, errors: [] });

@@ -4,8 +4,8 @@
  *
  * Blink (blink.sv) is a hosted Lightning wallet with a GraphQL API at api.blink.sv, authenticated by
  * a single X-API-KEY header (dashboard.blink.sv issues keys with Read, Receive and Write scopes;
- * paying needs Write). Its public schema was read on 15 Sep 2026 and these are the six operations
- * used, with the fields they are known to have:
+ * paying needs Write). Its public schema was read on 15 Sep 2026 for these original operations,
+ * with the fields they are known to have:
  *
  *   me { defaultAccount { wallets { id walletCurrency balance } } }          which wallet, how much
  *   realtimePrice(currency: "USD") { btcSatPrice { base offset } }           public, no key: cents per sat
@@ -13,6 +13,7 @@
  *   walletById(walletId) { transactionsByPaymentHash(paymentHash) }          did we pay this one already
  *   lnInvoiceCreate(input: { walletId, amount, memo, expiresIn })            an invoice for the funding leg
  *   lnInvoicePaymentStatusByHash(input: { paymentHash })                    did OUR invoice get paid: public, no key
+ *   lnInvoiceFeeProbe(input: { walletId, paymentRequest })                  routing fee estimate in sats (checked 6 Oct 2026)
  *
  * Balances are in sats for a BTC wallet and cents for a USD one. The dollar figure this file
  * reports is sats × the public price, which is what the treasury card shows as the pool.
@@ -77,9 +78,24 @@ async function usdPerSat() {
 module.exports = {
   name: 'blink',
   usdPerSat,
+  // Official public schema and live introspection checked 6 Oct 2026:
+  // LnInvoicePaymentInput has only walletId, paymentRequest and memo. A probe
+  // estimates a route; it does not impose a caller-selected fee ceiling on send.
+  supportsFeeLimit: false,
 
-  /** Pay an invoice. Never throws on a refusal: the status and the wallet's own words come back. */
-  async pay({ paymentRequest, memo }) {
+  /** Estimated routing fee in sats (not msats or dollars). Never authorizes a send. */
+  async feeProbe({ paymentRequest }) {
+    const input = { walletId: await walletId(), paymentRequest };
+    const d = await gql('mutation ($input: LnInvoiceFeeProbeInput!) { lnInvoiceFeeProbe(input: $input) { amount errors { message code } } }', { input });
+    const r = d.lnInvoiceFeeProbe;
+    if (!r || !Array.isArray(r.errors) || r.errors.length) throw new Error('Blink could not estimate the Lightning routing fee');
+    if (!Number.isSafeInteger(r.amount) || r.amount < 0) throw new Error('Blink gave no valid routing fee estimate');
+    return { feeSats: r.amount };
+  },
+
+  /** Pay an invoice. Wallet refusals return status/error; unsupported hard limits fail locally. */
+  async pay({ paymentRequest, memo, maxFeeSats }) {
+    if (maxFeeSats !== undefined) throw new Error('Blink does not support a hard Lightning fee limit; payment was not sent');
     const input = { walletId: await walletId(), paymentRequest };
     if (memo) input.memo = String(memo).slice(0, 200);
     const d = await gql('mutation ($input: LnInvoicePaymentInput!) { lnInvoicePaymentSend(input: $input) { status errors { message code } } }', { input });

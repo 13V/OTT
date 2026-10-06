@@ -4,7 +4,7 @@
  * blink.js against something, fake or real, for the first time.
  *
  * One POST /graphql, exactly like the real API: every request is told apart by which operation its
- * query text names, not by a separate route. The six shapes below were checked directly against
+ * query text names, not by a separate route. The original six shapes below were checked directly against
  * the live, public schema at api.blink.sv on 16 Sep 2026 (introspection, plus a couple of live
  * unauthenticated calls) rather than trusted from blink.js's own 15 Sep 2026 comment — which had
  * in fact drifted from it in exactly one place: `lnInvoicePaymentStatusByHash` answers a payment
@@ -12,12 +12,15 @@
  * never a graceful null, because the field the schema gives it is non-nullable. blink.js's
  * received() did not expect that and threw; it has been fixed to treat it as UNKNOWN, and this
  * fake's default for an unlisted hash reproduces the real error text so a regression fails loudly.
+ * Fee-probe input and SatAmount payload were checked against the official live schema on
+ * 6 Oct 2026. The send input has no supported caller-selected fee-limit field.
  *
  *   - "wallets {"                     (no walletById in the same query) -> me.defaultAccount.wallets
  *                                       (walletId(), balance())
  *   - "realtimePrice"                                                   -> realtimePrice.btcSatPrice
  *                                       (usdPerSat())
  *   - "lnInvoicePaymentSend"                                            -> pay()
+ *   - "lnInvoiceFeeProbe"                                               -> feeProbe()
  *   - "transactionsByPaymentHash"                                       -> sent()
  *   - "lnInvoiceCreate"                                                 -> invoice()
  *   - "lnInvoicePaymentStatusByHash"                                    -> received()
@@ -62,6 +65,7 @@ function start() {
     price: { base: 8, offset: 2 },              // 8 / 10^2 / 100 = $0.0008 per sat
     priceMissing: false,
     payHandler: () => ({ status: 'SUCCESS', errors: [] }),
+    feeProbeHandler: () => ({ amount: 12, errors: [] }), // routing fee in sats
     invoiceHandler: () => ({
       invoice: { paymentRequest: 'lnfake1' + crypto.randomBytes(16).toString('hex'), paymentHash: crypto.randomBytes(32).toString('hex') },
       errors: [],
@@ -76,12 +80,13 @@ function start() {
   // Which operations need X-API-KEY, and — for the ones that do — whether an unresolved field
   // nulls out just itself (the field is nullable, like `me`) or the whole `data` (the field is
   // non-null, the way GraphQL null-propagation was observed to behave for lnInvoicePaymentStatusByHash).
-  const AUTH_REQUIRED = { wallets: true, price: false, pay: true, sent: true, invoice: true, received: false };
+  const AUTH_REQUIRED = { wallets: true, price: false, pay: true, feeProbe: true, sent: true, invoice: true, received: false };
   const NULLABLE_ROOT = { wallets: 'me', sent: 'me' };
 
   function opOf(query) {
     if (query.indexOf('realtimePrice') !== -1) return 'price';
     if (query.indexOf('lnInvoicePaymentSend') !== -1) return 'pay';
+    if (query.indexOf('lnInvoiceFeeProbe') !== -1) return 'feeProbe';
     if (query.indexOf('transactionsByPaymentHash') !== -1) return 'sent';
     if (query.indexOf('lnInvoiceCreate') !== -1) return 'invoice';
     if (query.indexOf('lnInvoicePaymentStatusByHash') !== -1) return 'received';
@@ -123,6 +128,10 @@ function start() {
     if (op === 'pay') {
       const r = state.payHandler(input) || {};
       return { data: { lnInvoicePaymentSend: { status: r.status === undefined ? null : r.status, errors: r.errors || [] } } };
+    }
+    if (op === 'feeProbe') {
+      const r = state.feeProbeHandler(input) || {};
+      return { data: { lnInvoiceFeeProbe: { amount: r.amount === undefined ? null : r.amount, errors: r.errors || [] } } };
     }
     if (op === 'sent') {
       const txs = state.transactions.get(vars.hash) || [];
