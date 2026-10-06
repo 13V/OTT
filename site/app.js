@@ -276,8 +276,8 @@
   async function renderAbout(view, isCurrent) {
     view.appendChild(h('div', { class: 'page-head' },
       h('div', { class: 'label' }, 'HOW THIS WORKS'),
-      h('h1', {}, 'How this works'),
-      h('p', { class: 'page-lede' }, 'Where the data comes from, how your credit is calculated and the limits to keep in mind.')));
+      h('h1', {}, 'Burn once. Get connected.'),
+      h('p', { class: 'page-lede' }, 'The planned membership: burn OTT to enrol and receive your first eSIM. Collected trading fees then fund members’ ongoing data.')));
     const body = h('div', {}, notice('Loading the programme details…', 'plain'));
     view.appendChild(body);
 
@@ -288,7 +288,7 @@
     } catch (e) { cfg = {}; }
     if (!isCurrent()) return;
     cfg = cfg || {};
-    const programmeLaunched = [cfg.coin, cfg.curve, cfg.treasury].every((a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || '')));
+    const programmeLaunched = [cfg.coin, cfg.curve, cfg.treasury].every((a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || '')) && !/^0x0{40}$/i.test(String(a)));
 
     // A percentage read from the config, or null — never a made-up figure. The two sentences below
     // that use these read naturally either way.
@@ -304,7 +304,7 @@
     const sizesText = sizes.length > 1 ? sizes.slice(0, -1).join(', ') + ' and ' + sizes[sizes.length - 1] : String(sizes[0] || '');
     const cheapest = list.length ? Math.min(...list.map((p) => Number(p.priceUsd))) : null;
     const catalogueText = list.length
-      ? 'The current catalogue covers ' + places + ' ' + (places === 1 ? 'place' : 'places') + '. Packages come in ' + sizesText + ' GB sizes and require at least $' + cheapest.toFixed(2) + ' in data credit.'
+      ? 'The sample catalogue covers ' + places + ' ' + (places === 1 ? 'place' : 'places') + ' with ' + sizesText + ' GB packages, starting at $' + cheapest.toFixed(2) + ' in example data credit. Catalogue prices do not set the membership burn amount or guarantee an allowance.'
       : 'The eSIM catalogue is not configured yet.';
 
     // Prose, not cards. Five bordered boxes stacked down a page is the "cards on cards" habit every
@@ -314,16 +314,22 @@
 
     clear(body);
     body.appendChild(h('div', { class: 'prose' },
-      entry('What OT+T is',
-        'OT+T stands for Onchain Telephone + Telegraph. OTT is its memecoin, linking eligible holdings to mobile data. ' + (programmeLaunched ? 'The coin trades' : 'The coin has not launched. When active, it will trade') + ' on Robinhood Chain through a bonding curve, with ' + taxPhrase + ' on each trade. The collected tax goes into a treasury that pays for mobile data.'),
-      entry('How weekly data credit works',
-        'Each Monday, the previous week’s collected creator tax funds the new week’s data budget. Any reserve is held back first. Your eligible OTT balance is divided by the applicable circulating supply, then multiplied by that budget to calculate your credit. Credit is measured in dollars because data prices vary by country and package size. You can spend it on eSIM packages. Unused credit expires at the weekly reset, while a redeemed package follows its own validity rules.'),
-      entry('What decides your share',
-        'The weekly snapshot records OTT balances and determines which wallets are eligible. A trade itself does not earn data credit. Your allocation can change when your balance, the circulating supply or the funded budget changes. There is nothing to stake or claim in advance.'),
-      entry('Current limits',
-        'The current version supports USDG-paired coins before graduation. Once a coin graduates, trading moves from its bonding curve to a public pool. The current system does not track balances and creator tax from that pool, so it cannot calculate new weekly allocations from them. ETH-paired coins are also unsupported because their tax is collected in ETH and cannot currently be used to calculate the dollar budget.'),
-      entry('What holding OTT gives you',
-        'Eligible holders can receive data credit for the week already funded by collected tax. Credit can only be spent on eSIMs. It cannot be withdrawn as cash, paid out as another asset or carried into the next week. OTT is not equity, a dividend or a claim on the treasury. Buying it does not guarantee a fixed data allowance. Its price can fall to zero. Nothing on this site is financial advice.')));
+      entry('One burn starts your membership',
+        'OT+T stands for Onchain Telephone + Telegraph. The planned entry is simple: choose your first eSIM, review the membership terms, then approve a one-time OTT burn to enrol. Holding OTT or connecting a wallet alone will not enrol you. There is no additional burn for each data top-up. Membership enrolment is not open yet.'),
+      entry('Trading fees keep the data pool going',
+        'Collected trading fees will fund a shared data pool for enrolled members. The burn removes tokens; it does not pay the mobile supplier. Actual collected fees pay for the data. The portion reserved for data and the operating reserve must be published before enrolment opens. Unspent money stays in the pool, including funds reserved to back any outstanding member balances.'),
+      entry('A fair share of a funded pool',
+        'An equal-member split is the proposed starting point: funded data budget divided by eligible memberships. That formula is an illustration, not a final allocation rule. The membership rules will define who is eligible, how multiple memberships are treated and whether unused balances accumulate or expire. The available allowance changes with collected fees, supplier prices and membership numbers. If there is no funded budget, there is no new data allocation.'),
+      entry('Before you approve anything',
+        'The exact burn amount, initial eSIM package, membership duration, fee allocation percentage and balance rules are still to be decided. They will appear together before approval. Burn once does not mean unlimited data or a guaranteed allowance forever. Each data package will show its own coverage, size, activation rules and expiry.'),
+      entry('Make the money trail visible',
+        'The planned public dashboard will show fees received, money allocated to data, supplier spending, reserves and eligible memberships, with timestamps and transaction links. On-chain records can verify burns and transfers. Off-chain supplier and payment-provider balances must be labelled as reported figures. Public burn enrolment will wait for contract review and a real funded eSIM test.'),
+      entry('Protect the first connection',
+        'The proposed protection is refundable enrolment escrow until the first eSIM is issued, followed by a finalised burn. A timeout would provide a refund route. This escrow, its issuance verification and recovery rules are not implemented yet. They need to be built and reviewed before users can enrol. Any later failed top-up needs a clear retry or recovery path without another burn.'),
+      entry('An eSIM still needs a mobile network',
+        'An external supplier provides the eSIM and mobile service. You will need a compatible, unlocked phone and coverage at your destination. OTT can make the funding and membership records verifiable; it cannot put the mobile network itself on-chain. The app preview demonstrates plan selection and setup using sample data, without an active eSIM.'),
+      entry('What is available today',
+        'You can explore the catalogue and sample app, sign in with a supported wallet and review programme status. Burn membership and its protections are planned. The existing test system still uses a weekly holding-based allocation; it is not the proposed membership rule. ' + (programmeLaunched ? 'The current test configuration uses' : 'The token contracts are not configured for launch. The test design uses') + ' Robinhood Chain bonding-curve fees with ' + taxPhrase + '. Purchases remain paused while the funded supplier and phone test is completed.')));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 

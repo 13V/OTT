@@ -153,7 +153,7 @@ test('the mobile clay hero explains the product and invites prelaunch visitors i
   const image = page.locator('.ott-hero-scene > img');
   await expect(image).toHaveAttribute('src', './assets/ott/hero-touch-grass.webp');
   await expect.poll(() => image.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
-  await expect(page.locator('.ott-hero-note')).toContainText('Weekly credit and redemption are not available yet.');
+  await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);
   await expect(page.locator('.ott-hero-note')).toContainText('sample eSIM setup without a wallet');
   await expect(page.locator('.ott-token-strip')).toContainText('Prelaunch');
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
@@ -219,25 +219,21 @@ test('a featured destination in the catalogue updates coverage while the Tokyo i
 test('allocation example is clearly illustrative and computes real input changes', async ({ page }) => {
   stubNetwork(page);
   await page.goto('/index.html#/');
-  await expect(page.locator('.ott-statement')).toContainText('SAMPLE ACCOUNT. EXAMPLE ONLY.');
-  await expect(page.locator('.ott-example')).not.toHaveAttribute('open', '');
+  await expect(page.locator('.ott-statement')).toContainText('SAMPLE MEMBER ACCOUNT. EXAMPLE ONLY.');
   await expect(page.locator('.ott-example-label')).toContainText('Example only. This is not your balance or a forecast.');
-  await expect(page.locator('.ott-allocation-result')).toHaveText('$10.00');
-  await expect(page.locator('.ott-allocation-explanation')).toContainText('1% of the $1,000.00 weekly budget');
-  await page.locator('.ott-example summary').click();
-  await page.locator('#ott-example-share').fill('0');
-  await expect(page.locator('.ott-allocation-result')).toHaveText('$0.00');
-  await expect(page.locator('.ott-allocation-percentage')).toHaveText('0%');
-  await page.locator('#ott-example-share').fill('101');
-  await expect(page.locator('.ott-allocation-result')).toHaveText('—');
-  await expect(page.locator('.ott-example-error')).toContainText('share from 0% to 100%');
-  await page.locator('#ott-example-share').fill('2.5');
-  await expect(page.locator('.ott-allocation-result')).toHaveText('$25.00');
-  await expect(page.locator('.ott-allocation-percentage')).toHaveText('2.5%');
-  await expect(page.locator('.ott-allocation-explanation')).toContainText('$25.00 in data credit');
+  const result = page.getByLabel('Illustrative weekly data credit', { exact: true });
+  await expect(result).toHaveText('$5.60');
+  await page.locator('#ott-example-percent').fill('0');
+  await expect(result).toHaveText('$0.00');
+  await page.locator('#ott-example-percent').fill('101');
+  await expect(result).toHaveText('—');
+  await expect(page.locator('.ott-example-error')).not.toHaveText('');
+  await page.locator('#ott-example-percent').fill('50');
+  await expect(result).toHaveText('$3.50');
+  await page.locator('#ott-example-members').fill('500');
+  await expect(result).toHaveText('$7.00');
   await page.locator('#ott-example-budget').fill('0');
-  await expect(page.locator('.ott-allocation-result')).toHaveText('$0.00');
-  await expect(page.locator('.ott-allocation-budget')).toHaveText('$0.00');
+  await expect(result).toHaveText('$0.00');
   await expect(page.locator('.ott-statement-balance')).toContainText('$15.00');
 });
 

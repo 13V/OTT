@@ -147,16 +147,16 @@ test('before launch, home explains the mechanism and availability', async ({ pag
 
   await page.goto('/index.html#/');
   await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
-  await expect(page.locator('.ott-hero-sub')).toContainText('Weekly data credit for eligible OTT holders.');
+  await expect(page.locator('.ott-hero-sub')).toContainText('Burn once to get your eSIM.');
+  await expect(page.locator('.ott-hero-sub')).toContainText('Trading fees fund your data.');
   await expect(page).toHaveTitle('OT+T — a memecoin with a data plan');
-  await expect(page.locator('.ott-station')).toHaveCount(4);
-  await expect(page.locator('.ott-station h3')).toHaveText(['OTT trades fund the data.', 'The weekly budget is set.', 'He checks his weekly credit.', 'He gets online in Tokyo.']);
+  await expect(page.locator('.ott-member-enrol-copy h3, .ott-member-stop-copy h3')).toHaveText(['One burn. Your first eSIM.', 'Trading fees pay for data.', 'Members use their data credit.']);
   await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
   await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'Explore the app' })).toHaveAttribute('href', '#/app');
-  await expect(page.locator('.ott-hero-note')).toContainText('Prelaunch');
-  await expect(page.locator('.ott-hero-note')).toContainText('not available yet');
-  await expect(page.locator('.ott-journey-note')).toContainText('no weekly holder credit');
-  await expect(page.locator('.ott-faq')).toContainText('Buying today does not establish eligibility for the current week');
+  await expect(page.locator('.ott-hero-note')).toContainText('Planned membership.');
+  await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);
+  await expect(page.locator('.ott-journey-note')).toContainText('Burn membership is planned.');
+  await expect(page.locator('.ott-faq')).toContainText(/burn/i);
   await expect(page.getByRole('link', { name: 'Launch the coin on whatever.fun' })).toHaveCount(0);
   await expect(page.locator('.data-mine')).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -174,8 +174,9 @@ test('coverage leads with a supported place and reveals actual plans from config
 
   await page.goto('/index.html#/');
 
-  await expect(page.locator('.ott-journey')).toContainText('From a trading screen to a Tokyo street.');
-  await expect(page.locator('.ott-station')).toContainText(['Trading itself does not earn data credit', 'Last week’s collected tax', 'weekly balance check', 'He can use available credit']);
+  await expect(page.locator('.ott-journey')).toContainText('Burn once. Stay connected.');
+  await expect(page.locator('.ott-journey')).toContainText('No repeat burn for each top-up.');
+  await expect(page.locator('.ott-journey')).toContainText('fees actually collected');
 
   // This fixture lacks both the US and Japan, so coverage starts with its first valid place.
   const picker = page.locator('#plan-place');
@@ -219,8 +220,8 @@ test('coverage leads with a supported place and reveals actual plans from config
   await expect(grid).toContainText('$4.99');
   await expect(grid.locator('.plan-meta').first()).toContainText('DE');
 
-  await expect(page.locator('.ott-station')).toHaveCount(4);
-  await expect(page.locator('.ott-allocation')).toContainText('weekly balance check');
+  await expect(page.locator('.ott-member-enrol-copy h3, .ott-member-stop-copy h3')).toHaveCount(3);
+  await expect(page.locator('.ott-allocation')).toContainText('shared equally');
 
   // The optional coverage directory lists each configured place once; prices stay with plans.
   const cov = page.locator('.cov-item');
@@ -272,7 +273,7 @@ test('a config with no brand block renders exactly as it did before the brand ex
   await page.goto('/index.html#/');
   // A missing optional brand block does not break the public story or catalogue.
   await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
-  await expect(page.locator('.ott-station')).toHaveCount(4);
+  await expect(page.locator('.ott-member-enrol-copy h3, .ott-member-stop-copy h3')).toHaveCount(3);
   await expect(page.locator('.ott-journey-note')).toContainText('Prelaunch');
   expect(errors).toEqual([]);
 });
@@ -283,7 +284,7 @@ test('the nav exposes destinations, explanation, account, and status', async ({ 
   await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
   await page.goto('/index.html#/');
   const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
-  expect(links).toEqual(['The idea', 'Destinations', 'My data', 'Status', 'Open app']);
+  expect(links).toEqual(['The idea', 'Destinations', 'Trust', 'My data', 'Status', 'Open app']);
   await expect(page.locator('#nav a[data-route="home"]')).toHaveClass(/active/);
 });
 
@@ -296,7 +297,7 @@ test('once launched, the public page routes holders to My data and keeps operati
 
   await page.goto('/index.html#/');
   await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
-  await expect(page.locator('.ott-hero-note')).toContainText('Weekly credit depends');
+  await expect(page.locator('.ott-hero-note')).toContainText(/(?:burn membership|enrolment).*(?:planned|not open|closed)/i);
   await expect(page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' })).toHaveAttribute('href', '#/data');
   await expect(page.locator('#programme')).toHaveCount(0);
   await page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' }).click();

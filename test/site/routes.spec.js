@@ -18,7 +18,7 @@ const PAGES = [
   { hash: '#/data', heading: 'My data', title: 'My data — OT+T' },
   { hash: '#/status', heading: 'Everything, and whether it is running.', title: 'Status — OT+T' },
   { hash: '#/holders', heading: 'Who holds, and what it buys them.', title: 'Holders — OT+T' },
-  { hash: '#/about', heading: 'How this works', title: 'How this works — OT+T' },
+  { hash: '#/about', heading: 'Burn once. Get connected.', title: 'How this works — OT+T' },
 ];
 
 for (const page_ of PAGES) {

@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v12';
+const CACHE_NAME = CACHE_PREFIX + 'v13';
 const SHELL = [
-  'index.html', 'fonts.css', 'style.css?v=20261006-design', 'ui.css', 'home.css?v=20261006-design', 'account-preview.css',
-  'mobile-app.css?v=20261006-holders', 'ui.js', 'qr.js', 'esim.js?v=20261006-holders', 'clay-type.js', 'account-preview.js?v=20261006-design',
-  'home.js?v=20261006-design', 'status.js', 'holders.js', 'mobile-app.js?v=20261006-holders', 'app.js?v=20261006-holders', 'pwa.js',
+  'index.html', 'fonts.css', 'style.css?v=20261006-design', 'ui.css', 'home.css?v=20261007-membership', 'membership-story.css?v=20261007-membership', 'account-preview.css',
+  'mobile-app.css?v=20261006-holders', 'ui.js', 'qr.js', 'esim.js?v=20261006-holders', 'clay-type.js', 'account-preview.js?v=20261007-membership',
+  'membership-story.js?v=20261007-membership', 'home.js?v=20261007-membership', 'status.js', 'holders.js', 'mobile-app.js?v=20261007-membership', 'app.js?v=20261007-membership', 'pwa.js',
   'client-config.js?v=20261006-holders', 'wallet.js?v=20261006-holders', 'solana-login.js?v=20261006-holders',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',
@@ -29,7 +29,7 @@ const ICONS = ['assets/app/icon.svg', 'assets/app/icon-180.png', 'assets/app/ico
 const APP_ART = ['app-home-world', 'app-japan-world', 'app-kit-world', 'app-clay-logo'].map((name) => 'assets/app/' + name + '.webp');
 const urls = (files) => files.map((file) => new URL(file, ROOT).href);
 const shellUrls = new Set(urls(SHELL));
-const assetUrls = new Set(urls([...ART, ...APP_ART, ...FLAGS, ...FONTS, ...ICONS, 'vendor/walletconnect.js']));
+const assetUrls = new Set(urls([...ART, 'assets/ott/membership-burn-world.png', ...APP_ART, ...FLAGS, ...FONTS, ...ICONS, 'vendor/walletconnect.js']));
 const indexUrl = new URL('index.html', ROOT).href;
 
 self.addEventListener('install', (event) => {

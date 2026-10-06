@@ -40,6 +40,7 @@ body.home-active #view { padding-top: 0; }
 .ott-status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); }
 .ott-token-rules { display: inline-flex; align-items: center; min-height: 44px; color: var(--text); font-size: 17px; text-decoration: underline; text-underline-offset: 7px; }
 .ott-token-status:hover, .ott-token-rules:hover { color: var(--accent); }
+.ott-hero-trust { display: inline-flex; align-items: center; min-height: 44px; margin-top: 4px; color: var(--accent); font-size: 13px; text-decoration: underline; text-underline-offset: 4px; }
 .ott-coverage-shortcuts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0 0 18px; }
 .ott-destination-shortcut { display: inline-flex; align-items: center; min-height: 44px; color: var(--text); font-size: 15px; white-space: nowrap; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 6px; }
 .ott-destination-shortcut:hover { color: var(--accent); }
@@ -209,7 +210,7 @@ body.home-active #view { padding-top: 0; }
 .ott-close > div { display: flex; align-items: center; flex-wrap: wrap; gap: 25px; }
 .ott-close .ott-primary-action { min-height: 54px; font-size: 17px; }
 .ott-close .ott-text-action { font-size: 17px; }
-#how-it-works, #plans, #coverage { scroll-margin-top: 105px; }
+#how-it-works, #plans, #coverage, #trust, #data-pool { scroll-margin-top: 105px; }
 
 @media (max-width: 1150px) {
   body.home-active .mh-top { gap: 18px; }

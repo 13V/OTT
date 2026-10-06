@@ -12,11 +12,11 @@ test('My data example switches between credit and eSIMs without issuing a packag
   await page.goto('/index.html#/');
   const preview = page.locator('.ott-account-preview');
   await expect(preview.getByRole('heading', { name: 'Your wallet. Your data.' })).toBeVisible();
-  await expect(preview.locator('.ott-statement')).toContainText('SAMPLE ACCOUNT. EXAMPLE ONLY.');
+  await expect(preview.locator('.ott-statement')).toContainText('SAMPLE MEMBER ACCOUNT. EXAMPLE ONLY.');
   await expect(preview.locator('.ott-statement-balance')).toContainText('$15.00');
   await expect(preview.locator('.ott-ap-credit-stats')).toContainText('$20.00');
   await expect(preview.locator('.ott-ap-credit-stats')).toContainText('$5.00');
-  await expect(preview.getByRole('button', { name: 'Weekly credit', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(preview.getByRole('button', { name: 'Data balance', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(preview.locator('#account-esim-example')).toBeHidden();
   await preview.getByRole('button', { name: 'eSIMs', exact: true }).click();
   await expect(preview.getByRole('button', { name: 'eSIMs', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -26,11 +26,12 @@ test('My data example switches between credit and eSIMs without issuing a packag
   await expect(preview.locator('#account-esim-example')).toContainText('Japan');
   await expect(preview.locator('.ott-ap-package-size')).toHaveText('5GB');
   await expect(preview.locator('.ott-ap-package-bottom')).toContainText('30 days');
-  await expect(preview.locator('#account-esim-example')).toContainText('Package validity is separate from the weekly credit reset.');
-  await preview.getByRole('button', { name: 'Weekly credit', exact: true }).focus();
+  await expect(preview.locator('#account-esim-example')).toContainText('Each package has its own validity');
+  await preview.getByRole('button', { name: 'Data balance', exact: true }).focus();
   await page.keyboard.press('Space');
   await expect(preview.locator('#account-credit-example')).toBeVisible();
-  await expect(preview.locator('#account-credit-example')).toContainText('Unused weekly credit expires at the weekly reset.');
+  await expect(preview.locator('#account-credit-example')).toContainText('Fees fund the data pool');
+  await expect(preview.locator('.ott-ap-footnote')).toContainText('Membership enrolment is not open.');
   await expect(preview.locator('.ott-ap-intro')).toContainText('No wallet needed. No real orders.');
   const exploreApp = preview.getByRole('link', { name: 'Explore the app' });
   await expect(exploreApp).toHaveAttribute('href', '#/app');
@@ -49,9 +50,9 @@ test('configured launch links to My data while preserving the example label and 
   await page.goto('/index.html#/');
   const preview = page.locator('.ott-account-preview');
   await expect(preview.getByRole('link', { name: 'Open My data' })).toHaveAttribute('href', '#/data');
-  await expect(preview.locator('.ott-statement')).toContainText('SAMPLE ACCOUNT. EXAMPLE ONLY.');
+  await expect(preview.locator('.ott-statement')).toContainText('SAMPLE MEMBER ACCOUNT. EXAMPLE ONLY.');
   await expect(preview.locator('.ott-statement-balance')).toContainText('$15.00');
-  await expect(preview.locator('.ott-ap-demo-wallet')).toHaveText('Demo wallet');
+  await expect(preview.locator('.ott-ap-demo-wallet')).toHaveText('Sample member account');
 });
 
 test('the account preview stays readable and operable at phone widths with reduced motion', async ({ page }) => {
@@ -62,7 +63,7 @@ test('the account preview stays readable and operable at phone widths with reduc
     await page.goto('/index.html#/');
     const preview = page.locator('.ott-account-preview');
     await preview.scrollIntoViewIfNeeded();
-    for (const button of ['Weekly credit', 'eSIMs']) {
+    for (const button of ['Data balance', 'eSIMs']) {
       const control = preview.getByRole('button', { name: button, exact: true });
       const size = await control.boundingBox();
       expect(size.height).toBeGreaterThanOrEqual(44);

@@ -160,7 +160,7 @@ test('a different wallet returned by Phantom cannot become the verified identity
 test('refresh restores only a trusted connection and requires a new login signature', async ({ page }) => {
   await customer(page);
   await signInButton(page);
-  await expect(page.getByRole('heading', { name: 'Link for holder credit.', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Solana account.', exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Finish signing in.', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.solanaMethods)).toEqual(['restore']);
@@ -172,7 +172,7 @@ test('disconnect clears the page and revokes the backend session', async ({ page
   const verification = page.waitForResponse(response => response.url() === apiOrigin + '/api/auth' && response.request().postDataJSON().action === 'verify');
   await signInButton(page);
   const { token } = await (await verification).json();
-  await expect(page.getByRole('heading', { name: 'Link for holder credit.', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Solana account.', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Wallet settings', exact: true }).click();
   const logout = page.waitForResponse(response => response.url() === apiOrigin + '/api/auth' && response.request().postDataJSON().action === 'logout');
   await page.getByRole('button', { name: 'Disconnect wallet', exact: true }).click();
