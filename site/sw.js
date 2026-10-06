@@ -2,12 +2,12 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v10';
+const CACHE_NAME = CACHE_PREFIX + 'v11';
 const SHELL = [
   'index.html', 'fonts.css', 'style.css?v=20261006-design', 'ui.css', 'home.css?v=20261006-design', 'account-preview.css',
-  'mobile-app.css?v=20261006-product', 'ui.js', 'qr.js', 'esim.js?v=20261006-account', 'clay-type.js', 'account-preview.js?v=20261006-design',
-  'home.js?v=20261006-design', 'status.js', 'holders.js', 'mobile-app.js?v=20261006-account', 'app.js?v=20261006-account', 'pwa.js',
-  'client-config.js', 'wallet.js?v=20261006-account',
+  'mobile-app.css?v=20261006-solana', 'ui.js', 'qr.js', 'esim.js?v=20261006-solana', 'clay-type.js', 'account-preview.js?v=20261006-design',
+  'home.js?v=20261006-design', 'status.js', 'holders.js', 'mobile-app.js?v=20261006-solana', 'app.js?v=20261006-solana', 'pwa.js',
+  'client-config.js?v=20261006-solana', 'wallet.js?v=20261006-solana', 'solana-login.js?v=20261006-solana',
   'manifest.webmanifest',
 ];
 const ART = [

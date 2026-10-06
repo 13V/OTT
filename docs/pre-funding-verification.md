@@ -3,6 +3,10 @@
 Verified locally on 6 October 2026. This prepares the app for a limited operator
 test; it does not certify live purchases, phone connectivity or token launch.
 
+Phantom [Solana sign-in](solana-login.md) is also implemented. It verifies wallet
+ownership with a one-time message and keeps Solana identity separate from EVM
+holder credit, redemption and the operator funding route.
+
 ## App and installation flow
 
 The app now shares the website's cream canvas, display typography and clay

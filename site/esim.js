@@ -214,6 +214,7 @@
   const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
   const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
   async function signIn(addr, want, ctx) {
+    if (!isAddress(addr) || window.OTTWallet?.state().chain === 'solana') throw new Error('Holder credit and redemption require a Robinhood Chain OTT wallet.');
     // Validate the backend destination before asking the holder to sign anything.
     window.OTTClientConfig?.apiUrl('./api/redeem');
     const generation = walletGeneration;
@@ -573,6 +574,11 @@
     clear(panel);
     stopCountdown();
     panel.appendChild(h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, 'Your data')));
+    if (account && (!isAddress(account) || window.OTTWallet?.state().chain === 'solana')) {
+      panel.appendChild(h('p', {}, 'Holder credit currently requires a Robinhood Chain OTT wallet. Solana wallet linking is not available yet.'),
+        h('a', { class: 'btn btn-primary', href: '#/app' }, 'Open your account'));
+      return;
+    }
 
     if (!account) {
       const hint = h('p', { class: 'hint' }, '');

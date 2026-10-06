@@ -31,25 +31,41 @@ const COMPARE_DEL = `if redis.call('GET', KEYS[1]) == ARGV[1] then
 end
 return 0`;
 
+function ttlSeconds(ex) {
+  if (ex !== undefined && (!Number.isSafeInteger(ex) || ex < 1)) throw new Error('store TTL must be positive whole seconds');
+  return ex;
+}
+
 function memoryStore() {
   const kv = new Map();
   const zs = new Map();
+  const expiry = new Map();
+  const expire = key => {
+    if (expiry.has(key) && Date.now() >= expiry.get(key)) { kv.delete(key); expiry.delete(key); }
+  };
   return {
     name: 'memory',
-    async get(key) { const v = kv.get(key); return v === undefined ? null : JSON.parse(v); },
-    async set(key, value, { nx = false } = {}) {
+    async get(key) { expire(key); const v = kv.get(key); return v === undefined ? null : JSON.parse(v); },
+    async set(key, value, { nx = false, ex } = {}) {
+      ttlSeconds(ex);
+      expire(key);
       if (nx && kv.has(key)) return false;
       kv.set(key, JSON.stringify(value));
+      if (ex === undefined) expiry.delete(key); else expiry.set(key, Date.now() + ex * 1000);
       return true;
     },
-    async del(key) { kv.delete(key); },
+    async del(key) { kv.delete(key); expiry.delete(key); },
     async compareSet(key, expected, value) {
+      expire(key);
       if (expected === null ? kv.has(key) : kv.get(key) !== JSON.stringify(expected)) return false;
       kv.set(key, JSON.stringify(value));
+      expiry.delete(key);
       return true;
     },
     async compareDel(key, expected) {
+      expire(key);
       if (kv.get(key) !== JSON.stringify(expected)) return false;
+      expiry.delete(key);
       return kv.delete(key);
     },
     async zadd(set, score, member) {
@@ -61,7 +77,7 @@ function memoryStore() {
       if (!z) return [];
       return [...z.entries()].filter(([, s]) => s >= min && s <= max).sort((a, b) => a[1] - b[1]).slice(0, limit).map(([m]) => m);
     },
-    _reset() { kv.clear(); zs.clear(); },
+    _reset() { kv.clear(); zs.clear(); expiry.clear(); },
   };
 }
 
@@ -89,9 +105,11 @@ function restStore({ url, token }) {
     name: 'upstash',
     url: base,
     async get(key) { const v = await cmd(['GET', key]); return v === null || v === undefined ? null : JSON.parse(v); },
-    async set(key, value, { nx = false } = {}) {
+    async set(key, value, { nx = false, ex } = {}) {
+      ttlSeconds(ex);
       const args = ['SET', key, JSON.stringify(value)];
       if (nx) args.push('NX');
+      if (ex !== undefined) args.push('EX', String(ex));
       return (await cmd(args)) === 'OK';
     },
     async del(key) { await cmd(['DEL', key]); },

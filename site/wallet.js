@@ -1,6 +1,6 @@
 'use strict';
 /**
- * One EIP-1193 transport for the whole site. Injected wallets stay dependency-free;
+ * Selected EVM or Solana transport for the whole site. Injected wallets stay dependency-free;
  * the locally bundled WalletConnect SDK is loaded only for an explicit mobile
  * connection or a remembered WalletConnect session. No account or signature is
  * stored here. WalletConnect owns its encrypted pairing/session storage.
@@ -24,6 +24,33 @@
 
   function injected() {
     return window.ethereum && typeof window.ethereum.request === 'function' ? window.ethereum : null;
+  }
+  function solana() {
+    const selected = window.phantom?.solana?.isPhantom ? window.phantom.solana : window.solana?.isPhantom ? window.solana : null;
+    return selected && typeof selected.connect === 'function' ? selected : null;
+  }
+  // A Solana public key is exactly 32 bytes of base58 and is case-sensitive.
+  function solanaAddress(value) {
+    try {
+      const address = typeof value === 'string' ? value : value?.toString?.();
+      if (typeof address !== 'string' || address.length < 32 || address.length > 44) return null;
+      const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      let number = 0n;
+      for (const character of address) {
+        const digit = alphabet.indexOf(character);
+        if (digit < 0) return null;
+        number = number * 58n + BigInt(digit);
+      }
+      let bytes = 0;
+      while (number > 0n) { bytes++; number >>= 8n; }
+      let leading = 0;
+      while (address[leading] === '1') leading++;
+      return bytes + leading === 32 ? address : null;
+    } catch (_) { return null; }
+  }
+  function accountKey(value, kind = transport) {
+    const joined = value.join(',');
+    return kind === 'solana' ? joined : joined.toLowerCase();
   }
   function remembered() {
     try { return localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
@@ -71,11 +98,12 @@
       source.on(event, callback);
       bindings.push([source, event, callback]);
     }
-    listen('accountsChanged', (value) => {
+    listen(kind === 'solana' ? 'accountChanged' : 'accountsChanged', (value) => {
       if (provider !== source) return;
       generation++;
       accountRevision++;
-      accounts = normalize(value);
+      const address = kind === 'solana' ? solanaAddress(value) : null;
+      accounts = kind === 'solana' ? address ? [address] : [] : normalize(value);
       if (!accounts.length) {
         remember('disconnected');
         clearCurrent({ code: 4900, message: 'Wallet access was removed.' });
@@ -83,7 +111,7 @@
       }
       emit('accountsChanged', accounts.slice());
     });
-    listen('chainChanged', (value) => {
+    if (kind !== 'solana') listen('chainChanged', (value) => {
       if (provider !== source) return;
       generation++;
       emit('chainChanged', value);
@@ -166,7 +194,19 @@
     let source = null;
     let kind = null;
     let restored = [];
-    if (remembered() === 'walletconnect' && remoteAvailable()) {
+    if (remembered() === 'solana') {
+      source = solana();
+      kind = 'solana';
+      if (!source) return [];
+      try {
+        const result = await source.connect({ onlyIfTrusted: true });
+        const address = solanaAddress(result?.publicKey || source.publicKey);
+        // Phantom updates publicKey on account changes/revocation even before
+        // this boot restoration has installed its normal event listeners.
+        if ('publicKey' in source && solanaAddress(source.publicKey) !== address) return [];
+        restored = address ? [address] : [];
+      } catch { return []; }
+    } else if (remembered() === 'walletconnect' && remoteAvailable()) {
       source = await getRemote();
       kind = 'walletconnect';
       restored = source.session ? normalize(source.accounts) : [];
@@ -184,15 +224,16 @@
     if (connecting) return connecting;
     connecting = (async () => {
       const choice = options?.transport || 'auto';
-      if (!['auto', 'injected', 'walletconnect'].includes(choice)) throw failure('Unknown wallet connection method.', 'INVALID_TRANSPORT');
-      const kind = choice === 'auto' ? (provider ? transport : injected() ? 'injected' : 'walletconnect') : choice;
+      if (!['auto', 'injected', 'walletconnect', 'solana'].includes(choice)) throw failure('Unknown wallet connection method.', 'INVALID_TRANSPORT');
+      const kind = choice === 'auto' ? (provider && transport !== 'solana' ? transport : injected() ? 'injected' : 'walletconnect') : choice;
       // A deliberate new connection supersedes an unfinished boot restoration
       // and any private request started under the previous selection.
       const opening = ++lifecycle;
       generation++;
-      const source = kind === 'injected' ? injected() : await getRemote();
+      const source = kind === 'injected' ? injected() : kind === 'solana' ? solana() : await getRemote();
       if (opening !== lifecycle) throw failure('Wallet connection was cancelled. Please connect again.', 4900);
-      if (!source) throw failure('No browser wallet was found. Open OTT in your wallet browser, or choose a mobile wallet.', 'WALLET_UNAVAILABLE');
+      if (!source) throw failure(kind === 'solana' ? 'Open OTT in Phantom’s browser or install Phantom to sign in with Solana.'
+        : 'No browser wallet was found. Open OTT in your wallet browser, or choose a mobile wallet.', 'WALLET_UNAVAILABLE');
       if (provider && provider !== source) {
         const releasing = disconnect();
         const released = lifecycle;
@@ -206,12 +247,13 @@
       try {
         const result = kind === 'injected' ? await source.request({ method: 'eth_requestAccounts' }) : await source.connect();
         if (provider !== source || op !== lifecycle) throw failure('Wallet connection changed. Please connect again.', 4900);
-        const next = normalize(kind === 'injected' ? result : source.accounts);
+        const address = kind === 'solana' ? solanaAddress(result?.publicKey || source.publicKey) : null;
+        const next = kind === 'solana' ? address ? [address] : [] : normalize(kind === 'injected' ? result : source.accounts);
         if (!next.length) throw failure('The wallet did not share an account.', 4900);
         // Sharing the requested account may emit accountsChanged normally. A
         // different event-selected account must not be overwritten by an older
         // approval result. Network events alone do not change this selection.
-        if (accountRevision !== openingAccounts && accounts.join(',').toLowerCase() !== next.join(',').toLowerCase()) {
+        if (accountRevision !== openingAccounts && accountKey(accounts, kind) !== accountKey(next, kind)) {
           throw failure('Your wallet changed while connecting. Check the connected account and try again.', 4900);
         }
         accounts = next;
@@ -227,14 +269,30 @@
   }
   async function request(args) {
     const selected = provider;
+    const kind = transport;
     const op = generation;
-    const originalAccounts = accounts.join(',').toLowerCase();
+    const originalAccounts = accountKey(accounts, kind);
     if (!selected) throw failure('Connect your wallet first.', 4900);
+    if (kind === 'solana') {
+      if (args?.method !== 'solana_signIn') throw failure('This action requires an EVM wallet. Choose the Robinhood Chain connection.', 'WRONG_WALLET_CHAIN');
+      if (typeof selected.signIn !== 'function') throw failure('Update Phantom to use Sign In With Solana, then try again.', 'SOLANA_SIGNIN_UNAVAILABLE');
+      const input = args.params;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw failure('The Solana sign-in request is invalid. Please try again.', 'INVALID_SIGNIN');
+      if (input.address && input.address !== accounts[0]) throw failure('The Solana sign-in request belongs to another account.', 'ACCOUNT_MISMATCH');
+      const result = await selected.signIn(input);
+      if (provider !== selected || transport !== kind || originalAccounts !== accountKey(accounts, kind) || op !== generation) throw failure('Wallet connection changed. Please try again.', 4900);
+      const address = solanaAddress(result?.account?.address);
+      if (!address || address !== accounts[0]) throw failure('The wallet signed in with another Solana account. Please reconnect and try again.', 'ACCOUNT_MISMATCH');
+      if (!(result.signedMessage instanceof Uint8Array) || !result.signedMessage.length || !(result.signature instanceof Uint8Array) || result.signature.length !== 64
+        || result.signatureType && result.signatureType !== 'ed25519') throw failure('The wallet returned an invalid Solana sign-in response.', 'INVALID_SIGNIN');
+      return { address, signedMessage: result.signedMessage, signature: result.signature, signatureType: result.signatureType || 'ed25519' };
+    }
+    if (args?.method === 'solana_signIn') throw failure('Connect a Solana wallet to sign in with Solana.', 'WRONG_WALLET_CHAIN');
     const result = await selected.request(args);
     // Switching networks deliberately emits chainChanged while this request is
     // pending. Signatures and other results must still match the original wallet.
     const switching = args?.method === 'wallet_switchEthereumChain' || args?.method === 'wallet_addEthereumChain';
-    if (provider !== selected || originalAccounts !== accounts.join(',').toLowerCase() || op !== generation && !switching) throw failure('Wallet connection changed. Please try again.', 4900);
+    if (provider !== selected || originalAccounts !== accountKey(accounts, kind) || op !== generation && !switching) throw failure('Wallet connection changed. Please try again.', 4900);
     return result;
   }
   async function disconnect() {
@@ -247,7 +305,7 @@
       // A disconnected provider is safe to reuse for a new explicit connection;
       // keeping it avoids duplicate AppKit instances and relay subscriptions.
       try { await previous?.disconnect?.(); } catch (error) { remote = null; throw error; }
-    }
+    } else if (kind === 'solana') await previous?.disconnect?.();
   }
   function on(event, callback) {
     if (!listeners.has(event)) listeners.set(event, new Set());
@@ -257,8 +315,10 @@
   function off(event, callback) { listeners.get(event)?.delete(callback); }
   window.OTTWallet = {
     configure, restore, connect, request, disconnect, on, off, remoteAvailable,
+    solanaAvailable: () => !!solana(),
     available: () => !!injected() || remoteAvailable(),
     getProvider: () => provider,
-    state: () => ({ transport, accounts: accounts.slice(), connected: !!provider && !!accounts.length, remoteAvailable: remoteAvailable() }),
+    state: () => ({ transport, chain: transport === 'solana' ? 'solana' : transport ? 'evm' : null,
+      accounts: accounts.slice(), connected: !!provider && !!accounts.length, remoteAvailable: remoteAvailable() }),
   };
 })();

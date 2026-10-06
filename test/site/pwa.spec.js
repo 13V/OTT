@@ -142,7 +142,7 @@ test('the service worker caches public release files but never configuration, le
   await visitApp(page);
   await controlled(page);
   const result = await page.evaluate(async (base) => {
-    const privatePaths = ['config/addresses.json', 'config/esim.json', 'data/allowances.json', 'data/treasury.json', 'api/status', 'api/redeem?address=0xfixture', 'ui.js?wallet=private-marker', 'activation/fixture.svg'];
+    const privatePaths = ['config/addresses.json', 'config/esim.json', 'data/allowances.json', 'data/treasury.json', 'api/status', 'api/auth', 'api/redeem?address=0xfixture', 'ui.js?wallet=private-marker', 'activation/fixture.svg'];
     for (const rel of privatePaths) await fetch(new URL(rel, base), { cache: 'no-store' });
     await fetch(new URL('api/redeem', base), {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -161,7 +161,7 @@ test('the service worker caches public release files but never configuration, le
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));
   expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual([
-    'account-preview.js', 'app.js', 'esim.js', 'home.css', 'home.js', 'mobile-app.css', 'mobile-app.js', 'style.css', 'wallet.js',
+    'account-preview.js', 'app.js', 'client-config.js', 'esim.js', 'home.css', 'home.js', 'mobile-app.css', 'mobile-app.js', 'solana-login.js', 'style.css', 'wallet.js',
   ]);
   for (const url of publicVersions) expect(urls).toContain(url);
   expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);

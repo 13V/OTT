@@ -1,10 +1,15 @@
 # Customer account audit — 6 October 2026
 
-OTT accounts use an Ethereum-compatible (EVM) wallet on Robinhood Chain. There
+OTT holder accounts use an Ethereum-compatible (EVM) wallet on Robinhood Chain. There
 is no email/password registration, custodial customer wallet, or private-key
 entry in OTT. Connecting shares a public address; viewing credit needs no
 signature. Installation details and redemption each require wallet approval.
 USDC on Solana is the proposed operator funding source, a separate flow.
+
+The subsequent [Solana login change](solana-login.md) adds Phantom message
+authentication as a separate identity with zero holder credit. Its server
+sessions have explicit expiry and logout; the EVM signed-read limits described
+below still apply to EVM installation details.
 
 ## Customer journey exercised
 

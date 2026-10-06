@@ -81,6 +81,7 @@ try {
     window.OTTClientConfig.configure(read());
     assert.equal(window.OTTClientConfig.apiUrl('./api/redeem?address=public'), 'https://api.example/api/redeem?address=public');
     assert.equal(window.OTTClientConfig.apiUrl('./api/status'), 'https://api.example/api/status');
+    assert.equal(window.OTTClientConfig.apiUrl('./api/auth'), 'https://api.example/api/auth');
   });
   check('CLI usage and error output never print supplied secret values', () => {
     const script = path.join(__dirname, '..', 'scripts', 'configure-app.js');

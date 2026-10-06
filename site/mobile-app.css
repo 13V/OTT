@@ -86,6 +86,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-credit-expiry { margin-top: 12px; font-size: 14px; line-height: 1.5; color: var(--om-muted); }
 .om-wallet-address { overflow-wrap: anywhere; user-select: text; font-size: 14px; font-variant-numeric: tabular-nums; }
 .om-wallet-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+.om-wallet-choices { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; flex: none; }
 .om-install-progress { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; padding: 0; margin: 20px 0; list-style: none; }
 .om-install-progress li { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; color: #62716c; font-size: 12px; }
 .om-install-progress li > span { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #d6c6ad; border-radius: 50%; background: #eee5d6; font-size: 14px; }

@@ -4,6 +4,9 @@
   "installCommand": "",
   "cleanUrls": true,
   "functions": {
+    "api/auth.js": {
+      "maxDuration": 30
+    },
     "api/redeem.js": {
       "maxDuration": 60,
       "includeFiles": "config/esim.json"

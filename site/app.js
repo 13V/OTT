@@ -97,21 +97,29 @@
   // ============================================================================ wallet
   const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
   const walletRequest = args => window.OTTWallet ? window.OTTWallet.request(args) : window.ethereum.request(args);
+  const accountChain = () => window.OTTWallet?.state().chain || (STATE.account ? 'evm' : null);
+  const sameAccount = (left, right) => accountChain() === 'solana' ? left === right : left?.toLowerCase() === right?.toLowerCase();
   function setAccount(account) {
-    if (account !== STATE.account) window.WhateverData?.resetWallet?.();
+    if (account !== STATE.account) {
+      window.WhateverData?.resetWallet?.();
+      void window.OTTSolanaLogin?.reset();
+    }
     STATE.account = account || null;
     paintWallet();
   }
   async function disconnect() {
     accountEpoch++;
     window.WhateverData?.resetWallet?.();
+    const revoked = window.OTTSolanaLogin?.reset();
     STATE.account = null;
     paintWallet();
     if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
     await window.OTTWallet?.disconnect?.();
+    await revoked;
   }
   async function connect(options) {
-    if (!walletAvailable()) {
+    const solana = options?.transport === 'solana';
+    if (!solana && !walletAvailable()) {
       toast('Connect your wallet', 'Open OTT in your wallet browser, or install a browser wallet to connect.');
       paintWallet();
       return null;
@@ -120,7 +128,7 @@
     const account = accounts && accounts[0] || null;
     if (!account) { setAccount(null); return null; }
     const connectingEpoch = accountEpoch;
-    try { await ensureChain(); }
+    try { if (!solana) await ensureChain(); }
     catch (error) {
       // An account event has already selected (or revoked) the current wallet.
       // Do not disconnect that selection for a stale connection's network check.
@@ -128,14 +136,24 @@
       throw error;
     }
     const selectedAccount = window.OTTWallet?.state?.().accounts[0];
-    if (connectingEpoch !== accountEpoch || window.OTTWallet && (!selectedAccount || selectedAccount.toLowerCase() !== account.toLowerCase())) {
+    if (connectingEpoch !== accountEpoch || window.OTTWallet && (!selectedAccount || !sameAccount(selectedAccount, account))) {
       throw new Error('Your wallet changed while connecting. Check the connected account and try again.');
     }
     setAccount(account);
+    if (solana) {
+      try {
+        await window.OTTSolanaLogin.login(account, () => connectingEpoch === accountEpoch && STATE.account === account);
+        toast('Signed in with Solana', 'Your wallet ownership is verified. Holder credit currently requires a Robinhood Chain OTT wallet.');
+      } catch (error) {
+        if (STATE.route === 'app' || STATE.route === 'data') renderRoute();
+        throw error;
+      }
+    }
     if (STATE.route === 'app') renderRoute();
     return STATE.account;
   }
   async function ensureChain() {
+    if (accountChain() === 'solana') throw new Error('Holder credit and redemption require a Robinhood Chain OTT wallet.');
     try {
       const current = await walletRequest({ method: 'eth_chainId' });
       if (String(current).toLowerCase() === CHAIN_ID_HEX) return true;
@@ -232,6 +250,12 @@
   }
 
   function renderData(view, isCurrent) {
+    if (accountChain() === 'solana') {
+      view.appendChild(h('div', { class: 'page-head' }, h('h1', {}, 'Your Solana account'),
+        h('p', { class: 'page-lede' }, 'Holder credit currently requires a Robinhood Chain OTT wallet.'),
+        h('a', { class: 'btn btn-primary', href: '#/app' }, 'Open your account')));
+      return;
+    }
     const D = window.WhateverData;
     if (!D || typeof D.renderMyData !== 'function') { view.appendChild(notice('The data module has not loaded.', 'warn')); return; }
     D.renderMyData(view, {
@@ -319,7 +343,7 @@
       h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
       account: STATE.account, currentAccount: () => STATE.account, isCurrent,
       refresh: renderRoute,
-      walletAvailable, disconnect,
+      walletAvailable, disconnect, accountChain,
     }, STATE.appScreen);
   }
 
@@ -400,6 +424,7 @@
       accountEpoch++;
       // Revoke signatures even when the provider reports the same account again.
       window.WhateverData?.resetWallet?.();
+      void window.OTTSolanaLogin?.reset();
       STATE.account = accs && accs[0] || null;
       paintWallet();
       if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
@@ -408,10 +433,15 @@
       window.OTTWallet.on('accountsChanged', accountChanged);
       window.OTTWallet.on('chainChanged', () => {
         window.WhateverData?.resetWallet?.();
+        void window.OTTSolanaLogin?.reset();
         if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
       });
       window.OTTWallet.on('disconnect', () => { if (STATE.account) accountChanged([]); });
     }
+    window.OTTSolanaLogin?.onChange(() => {
+      paintWallet();
+      if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
+    });
 
     const chain = $('foot-chain');
     if (chain && Number(STATE.cfg.chainId) === 4663) chain.textContent = 'Robinhood Chain · ' + STATE.cfg.chainId;
@@ -430,7 +460,8 @@
     if (window.OTTWallet) {
       try {
         const accs = await window.OTTWallet.restore();
-        if (accs && accs.length) {
+        const selected = window.OTTWallet.state().accounts[0];
+        if (accs && accs.length && selected && sameAccount(selected, accs[0])) {
           STATE.account = accs[0]; paintWallet();
           if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
         }
