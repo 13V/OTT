@@ -529,7 +529,7 @@
       const support = (label, href) => h('a', { class: 'om-text-link', href, target: '_blank', rel: 'noopener noreferrer' }, label + ' ↗');
       content.replaceChildren(
         h('p', {}, 'Check these settings on your phone. OTT cannot detect whether your eSIM is installed or connected.'),
-        preview ? h('p', { class: 'om-inline-note' }, 'Preview only. Sample eSIMs cannot connect to a mobile network.') : null,
+        ...(preview ? [h('p', { class: 'om-inline-note' }, 'Preview only. Sample eSIMs cannot connect to a mobile network.')] : []),
         platforms,
         h('ol', { class: 'om-device-checklist' },
           h('li', {}, h('h3', {}, 'Select the installed data eSIM'), h('p', {}, iphone
