@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OT+T — a memecoin with a data plan</title>
-<meta name="description" content="OT+T plans to turn creator tax into a variable weekly mobile-data budget for eligible OTT holders. Explore the eSIM catalogue and see how the programme works before launch.">
+<meta name="description" content="OT+T plans one OTT burn to enrol for an eSIM, with collected trading fees funding ongoing member data. Explore the plans, shared-pool example and safeguards before launch.">
 <meta name="theme-color" content="#F4F0E7">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,8 @@
 <link href="fonts.css" rel="stylesheet">
 <link rel="stylesheet" href="./style.css?v=20261006-design">
 <link rel="stylesheet" href="./ui.css">
-<link rel="stylesheet" href="./home.css?v=20261006-design">
+<link rel="stylesheet" href="./home.css?v=20261007-membership">
+<link rel="stylesheet" href="./membership-story.css?v=20261007-membership">
 <link rel="stylesheet" href="./account-preview.css">
 <link rel="stylesheet" href="./mobile-app.css?v=20261006-holders">
 <link rel="manifest" href="./manifest.webmanifest">
@@ -29,6 +30,7 @@
     <nav id="nav" aria-label="Primary">
       <a data-route="home" href="#/">The idea</a>
       <a href="#plans">Destinations</a>
+      <a href="#trust">Trust</a>
       <a data-route="data" href="#/data">My data</a>
       <a data-route="status" href="#/status">Status</a>
       <a data-route="app" href="#/app">Open app</a>
@@ -63,6 +65,7 @@
         <a href="#/status">Status</a>
         <a href="#/holders">Holders</a>
         <a href="#/about">How it works</a>
+        <a href="#trust">Before you burn</a>
       </nav>
       <nav class="foot-col" aria-label="Network">
         <p class="foot-col-title">Network</p>
@@ -76,10 +79,10 @@
     </div>
     <div class="foot-bottom">
       <p class="disclaimer">
-        OT+T links a memecoin to mobile data. Once active, creator tax collected in one week funds a
-        variable data budget for eligible holders the next week. Unused credit expires and cannot be
-        withdrawn as cash. See Status for current availability. A memecoin can go to zero; nothing here
-        is financial advice.
+        Planned: burn OTT once to enrol for an eSIM, then collected trading fees fund ongoing member
+        data. Enrolment is not open. Burn amount, membership duration and allocation rules are still
+        being finalised; data depends on available funding. See Status for current availability.
+        A memecoin can go to zero; nothing here is financial advice.
       </p>
       <p class="foot-meta"><span id="foot-chain">Robinhood Chain · 4663</span> · © 2026 OT+T</p>
     </div>
@@ -98,14 +101,15 @@
 <!-- My data and redemption stay in esim.js; home.js renders the public homepage. -->
 <script src="./esim.js?v=20261006-holders"></script>
 <script src="./clay-type.js"></script>
-<script src="./account-preview.js?v=20261006-design"></script>
-<script src="./home.js?v=20261006-design"></script>
+<script src="./account-preview.js?v=20261007-membership"></script>
+<script src="./membership-story.js?v=20261007-membership"></script>
+<script src="./home.js?v=20261007-membership"></script>
 <!-- The Status route (#/status): the network status page and the operator's dashboard. Same wiring
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
 <script src="./status.js"></script>
 <script src="./holders.js"></script>
-<script src="./mobile-app.js?v=20261006-holders"></script>
+<script src="./mobile-app.js?v=20261007-membership"></script>
 <script src="./pwa.js"></script>
-<script src="./app.js?v=20261006-holders"></script>
+<script src="./app.js?v=20261007-membership"></script>
 </body>
 </html>

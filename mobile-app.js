@@ -171,7 +171,7 @@
     sheet = dialog(h, 'Your wallet', h('div', { class: 'om-guide-copy' },
       h('p', { class: 'om-wallet-address' }, account),
       h('p', {}, solana ? (verified ? 'Signed in with Solana. ' : 'Your Solana wallet is connected. Approve a sign-in message to verify ownership. ')
-        + (linked ? 'Your linked holder wallet supplies the existing weekly credit shown in OTT.' : 'Link a Robinhood Chain holder wallet to view its existing credit.')
+        + (linked ? 'Your linked holder wallet supplies the existing test credit shown in OTT.' : 'Link a Robinhood Chain holder wallet to view its existing test credit.')
         : 'Your EVM wallet on Robinhood Chain is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
       h('div', { class: 'om-wallet-actions' }, copy, disconnect,
         linked ? h('p', { class: 'om-wallet-address' }, 'Holder wallet: ' + linked.address) : null,
@@ -278,7 +278,7 @@
 
   function previewBanner(h, ctx) {
     return h('div', { class: 'om-preview-banner', role: 'status' },
-      h('span', {}, h('strong', {}, 'App preview'), 'Sample credit and eSIMs. No real orders.'),
+      h('span', {}, h('strong', {}, 'App preview'), 'Sample credit and eSIMs. No real orders. No membership enrolment.'),
       action(h, 'Exit preview', () => { preview = false; demoSpent = 5; demoOrders = []; ctx.refresh(); }, 'om-small-button'));
   }
 
@@ -329,13 +329,13 @@
     const content = h('div', { class: 'om-pass-content' }, chip(h),
         h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : solana ? 'SOLANA ACCOUNT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
-          : solana && verified && !holder ? h('h2', { class: 'om-pass-title' }, 'Link for holder credit.')
-          : solana && holder ? h('h2', { class: 'om-pass-title' }, active ? 'Reading your credit…' : 'Linked for launch.')
+          : solana && verified && !holder ? h('h2', { class: 'om-pass-title' }, active ? 'Link for holder credit.' : 'Your Solana account.')
+          : solana && holder ? h('h2', { class: 'om-pass-title' }, active ? 'Reading your credit…' : 'Wallets linked.')
           : solana ? h('h2', { class: 'om-pass-title' }, 'Finish signing in.')
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.'
-          : solana ? verified ? holder ? 'Existing credit from your linked Robinhood Chain holder wallet.' : 'Link a Robinhood Chain holder wallet in Wallet settings to view its credit.' : signing ? 'Finish approval in Phantom. OTT will verify your signature.' : 'Approve the sign-in message in Phantom to verify this account.'
-            : active ? 'Check your weekly credit and eSIMs.' : 'Choose a plan and explore eSIM setup with a sample account.'),
+          : solana ? verified ? !active ? 'Wallet ownership is verified. Membership enrolment is not open.' : holder ? 'Existing credit from your linked Robinhood Chain holder wallet.' : 'Link a Robinhood Chain holder wallet in Wallet settings to view its credit.' : signing ? 'Finish approval in Phantom. OTT will verify your signature.' : 'Approve the sign-in message in Phantom to verify this account.'
+            : active ? 'Check your weekly credit and eSIMs.' : 'Explore a sample member account. Membership enrolment is not open.'),
         preview || solana || (active && account) ? h('div', { class: 'om-pass-action' }, primary) : null);
     const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : solana ? 'Solana account' : active ? 'Weekly credit' : 'App preview invitation', 'aria-live': 'polite' }, content);
     const realAccount = !preview && active && holder;
@@ -415,21 +415,21 @@
     const intro = h('div', { class: 'om-home-intro' },
       h('p', { class: 'om-home-eyebrow' }, 'OT+T / YOUR DATA'),
       h('h1', {}, 'Touch grass.', h('br', {}), 'Stay online.'),
-      h('p', { class: 'om-home-lede' }, 'Check your credit. Pick a data plan.', h('br', {}), 'Set up your eSIM.'),
+      h('p', { class: 'om-home-lede' }, preview || active ? 'Check your credit. Pick a data plan.' : 'Burn once to enrol.', h('br', {}), preview || active ? 'Set up your eSIM.' : 'Trading fees fund your data.'),
       h('div', { class: 'om-home-actions' }, introAction,
-        h('a', { class: 'om-text-link', href: preview || account ? '#/app/help' : '#/app/plans' },
-          preview || account ? 'How to get online' : 'Browse plans', icon('arrow'))),
+        h('a', { class: 'om-text-link', href: !active && !preview ? '#/about' : preview || account ? '#/app/help' : '#/app/plans' },
+          !active && !preview ? 'How membership will work' : preview || account ? 'How to get online' : 'Browse plans', icon('arrow'))),
       h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
         : solana ? verified ? 'Signed in with Solana. Your wallet ownership is verified.' : 'Solana wallet connected. Sign in to verify ownership.'
         : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your EVM wallet on Robinhood Chain is your account. Connecting does not move funds.'
-          : 'Explore now. Weekly credit starts when OTT launches.'), credit);
+          : 'Membership enrolment is not open. Preview only.'), credit);
     const result = h('div', { class: 'om-home-grid' },
       h('div', { class: 'om-home-feature' + (realAccount ? ' om-home-account' : preview ? ' om-home-preview' : '') }, intro,
         h('div', { class: 'om-home-visual' }, world(h, 'home'))),
       h('div', { class: 'om-home-tools' }, connection,
         !preview ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, verified ? 'Signed in with Solana' : account ? 'Wallet connected' : 'Your wallet is your account'),
-            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Robinhood wallet for holder credit. Solana wallet for sign-in.')),
+            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : active ? 'Robinhood wallet for holder credit. Solana wallet for sign-in.' : 'Sign in to explore. Connecting a wallet does not enrol you.')),
           h('div', { class: 'om-wallet-choices' },
           action(h, account ? 'Wallet settings' : 'Connect wallet',
             event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button'),
@@ -480,11 +480,11 @@
       action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-review-device-check'),
       preview ? h('div', { class: 'om-inline-note' }, 'Preview only. Adding this package changes the sample account. It does not issue an eSIM or request a wallet signature.')
         : solana ? h('div', { class: 'om-inline-note' }, holderAddress(ctx) ? 'This linked holder wallet owns the credit. Switch to that Robinhood Chain wallet to approve a redemption.' : 'Link your Robinhood Chain holder wallet in Wallet settings to view its credit. Redemptions require that holder wallet’s approval.')
-          : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Weekly credit and redemption are not available yet.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
+          : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Membership enrolment and purchases are not open. Package costs do not set the one-time burn amount.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
       preview ? addPreview : solana ? action(h, 'Use Robinhood wallet', event => void switchHolder(event))
         : launched(cfg) ? continueLive : action(h, 'See the setup guide', () => { sheet.close(); go('help'); }),
       preview && addPreview.disabled ? h('p', { class: 'om-form-message' }, 'This sample account needs more credit for that package. Choose a smaller plan or restart the preview.') : null,
-      h('p', { class: 'om-muted' }, 'Package validity and the weekly credit reset follow separate rules. The activation window depends on the provider.'));
+      h('p', { class: 'om-muted' }, launched(cfg) ? 'Package validity and the weekly credit reset follow separate rules. The activation window depends on the provider.' : 'Every package has its own validity and activation window. Membership balance rules will be published before enrolment opens.'));
     content.appendChild(h('p', { class: 'om-muted' }, 'If you already have an eSIM for this destination, the provider will top it up when compatible. Otherwise, it may issue a new eSIM with new installation details.'));
     sheet = dialog(h, pkg.name + ' data plan', content, source);
   }
@@ -566,7 +566,7 @@
             h('p', { class: 'om-package-price' }, money(pkg.priceUsd), h('small', {}, ' data credit')),
             preview ? null : h('p', { class: 'om-pass-note' }, !launched(cfg) ? 'Catalogue preview' : 'Available package'),
             action(h, ['Review package', icon('arrow')], event => reviewPackage(h, ctx, cfg, pkg, event.currentTarget), 'om-button om-package-review'))),
-        h('p', { class: 'om-plan-disclaimer' }, 'Use data credit for this package. Package validity is separate from the weekly credit reset.')].filter(Boolean));
+        h('p', { class: 'om-plan-disclaimer' }, launched(cfg) ? 'Use data credit for this package. Package validity is separate from the weekly credit reset.' : 'Sample package costs. The planned one-time burn enrols you; collected fees fund later data. Final membership terms are still being defined.')].filter(Boolean));
       if (focusCode) [...sizes.querySelectorAll('button')].find(button => button.dataset.packageCode === focusCode)?.focus();
     }
 
@@ -706,8 +706,11 @@
       h('section', { class: 'om-panel om-help-notes' },
         h('img', { src: './assets/ott/faq-clay-help.webp', alt: '', loading: 'lazy', width: 720, height: 720 }),
         h('h2', {}, 'Before you connect'),
+        h('details', {}, h('summary', {}, 'How will I get an eSIM with OTT?'), h('p', {}, 'The planned membership starts with one OTT burn to enrol and receive your first eSIM. After that, collected trading fees fund members’ data through a shared pool. Holding tokens or signing in alone does not enrol you. Membership enrolment is not open yet.'), h('a', { class: 'om-text-link', href: '#/about' }, 'Read the membership plan ', icon('arrow'))),
+        h('details', {}, h('summary', {}, 'Will I burn again for every top-up?'), h('p', {}, 'No. The proposed burn is the one-time entry to membership. Future data is funded by collected trading fees, without another burn for each top-up. The allowance can change with fees and membership numbers; unlimited data is not promised. Burn amount and membership duration are still to be finalised.')),
+        h('details', {}, h('summary', {}, 'What happens if my first eSIM fails?'), h('p', {}, 'Refundable enrolment escrow is planned: finalise the burn after confirmed first-eSIM issuance, or provide a refund route after a timeout. The escrow, issuance verification and recovery rules are not built yet. Contract review and a real funded phone test must happen before public enrolment opens.')),
         h('details', {}, h('summary', {}, 'Can I set it up on the same phone?'), h('p', {}, 'Use the provider’s installation link if one is available. Otherwise, use manual details or display the QR on another screen. Supported iPhones can also add an eSIM from a QR shown in Safari.')),
-        h('details', {}, h('summary', {}, 'Does weekly credit become cash?'), h('p', {}, 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.')),
+        h('details', {}, h('summary', {}, launched(cfg) ? 'Does weekly credit become cash?' : 'Can I withdraw the data balance?'), h('p', {}, launched(cfg) ? 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.' : 'The proposed balance is for mobile data, not cash withdrawals. The final membership terms will explain how balances are allocated and whether unused amounts accumulate or expire. The preview uses example figures.')),
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
         h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home for an EVM wallet on Robinhood Chain, or Sign in with Solana for Phantom. Sign-in verifies ownership without moving funds. After signing in with Solana, use Wallet settings to link one holder wallet with a fresh approval from both wallets. You can then view that wallet’s existing credit; linking creates no extra allowance. Redemptions and installation details still require approval from the holder wallet. You can unlink or disconnect in Wallet settings. EVM mobile wallets can connect through WalletConnect when enabled.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
@@ -827,7 +830,7 @@
     const screenContent = screen === 'plans' ? plans(h, ctx, cfg) : screen === 'esims' ? esims(h, ctx, cfg) : screen === 'help' ? help(h, cfg) : cfg ? home(h, ctx, cfg) : unavailable(h, ctx, 'Credit and orders need a live connection. The setup guide still works.');
     contents.replaceChildren(screenContent);
     if (preview && cfg) body.insertBefore(previewBanner(h, ctx), contents);
-    else if (cfg && !launched(cfg) && screen !== 'home') body.insertBefore(h('p', { class: 'om-prelaunch-note' }, 'Prelaunch. Weekly credit and redemption are not available yet.'), contents);
+    else if (cfg && !launched(cfg) && screen !== 'home') body.insertBefore(h('p', { class: 'om-prelaunch-note' }, 'Membership enrolment is not open. Preview only.'), contents);
   }
 
   window.OTTMobileApp = {
