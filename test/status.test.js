@@ -21,6 +21,7 @@ const path = require('path');
 const API = path.join(__dirname, '..', 'site', 'api');
 const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
 const week = require(path.join(API, '_lib', 'week.js'));
+const { catalogueFingerprint } = require(path.join(API, '_lib', 'catalogue.js'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -38,10 +39,10 @@ const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OT
 // Four packages across three places, so packages/places are two different numbers and a mistake
 // between them (counting rows instead of distinct slugs) would be caught.
 const PACKAGES = [
-  { code: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99 },
-  { code: 'fixed_5GB_30D_DE', slug: 'germany', priceUsd: 4.99 },
-  { code: 'fixed_1GB_7D_FR', slug: 'france', priceUsd: 1.19 },
-  { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', priceUsd: 8.99 },
+  { code: 'fixed_1GB_7D_DE', slug: 'germany', name: 'Germany', kind: 'country', regions: 'DE', gb: 1, days: 7, priceUsd: 1.99 },
+  { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', regions: 'DE', gb: 5, days: 30, priceUsd: 4.99 },
+  { code: 'fixed_1GB_7D_FR', slug: 'france', name: 'France', kind: 'country', regions: 'FR', gb: 1, days: 7, priceUsd: 1.19 },
+  { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', name: 'Global', kind: 'region', regions: 'DE,FR,US', gb: 1, days: 7, priceUsd: 8.99 },
 ];
 const LAUNCHED_CONFIG = {
   coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'wholesale', catalogueAt: '2026-09-15',
@@ -189,6 +190,21 @@ async function main() {
   check('ready mirrors every check, config included', r.body.ready, { config: true, provider: true, payer: true, store: true, allowances: true });
   check('the brand comes from the config', r.body.brand, BRAND);
   check('packages counts rows, places counts distinct slugs', [r.body.config.packages, r.body.config.places, r.body.config.catalogueAt], [4, 3, '2026-09-15']);
+  check('the public catalogue fingerprint describes the same purchase terms loaded by the backend', r.body.config.catalogueFingerprint, catalogueFingerprint(LAUNCHED_CONFIG));
+  const healthyFingerprint = r.body.config.catalogueFingerprint;
+  try {
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, packages: PACKAGES.map((bundle, index) => index === 0 ? { ...bundle, priceUsd: 2.49 } : bundle) };
+    r = await GET();
+    checkThat('a changed price changes the fingerprint while the package count and catalogue date remain unchanged', r.body.config.catalogueFingerprint !== healthyFingerprint
+      && r.body.config.packages === 4 && r.body.config.catalogueAt === LAUNCHED_CONFIG.catalogueAt);
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, packages: [{}] };
+    r = await GET();
+    check('an incomplete catalogue cannot report configuration or live redemption ready', [r.body.ready.config, r.body.redemption.ready, r.body.config.catalogueFingerprint], [false, false, '']);
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, packages: [PACKAGES[0], PACKAGES[0]] };
+    r = await GET();
+    check('duplicate provider SKUs cannot report configuration ready', [r.body.ready.config, r.body.config.catalogueFingerprint], [false, '']);
+  } finally { FILES['/config/esim.json'] = LAUNCHED_CONFIG; }
+  r = await GET();
   check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
   check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'wholesale', payer: 'mock', store: 'memory' });

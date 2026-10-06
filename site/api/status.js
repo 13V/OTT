@@ -48,6 +48,7 @@ const { store: chooseStore } = require('./_lib/store');
 const { weekOf } = require('./_lib/week');
 const { allowRequestOrigin } = require('./_lib/request-origin');
 const { redemptionsEnabled } = require('./_lib/redemption-policy');
+const { catalogueReady, catalogueFingerprint } = require('./_lib/catalogue');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -151,6 +152,7 @@ function summariseConfig(config) {
     packages: packages.length,
     places,
     catalogueAt: String(config.catalogueAt || ''),
+    catalogueFingerprint: catalogueFingerprint(config),
     // Trading's rebate (rebateBps) is retired; budgetBps is its replacement, the share of last
     // week's tax that becomes this week's data budget. It defaults to 10000 (all of it) when the
     // config is silent on it, exactly as the indexer treats a missing value, so this reports what
@@ -292,9 +294,11 @@ async function computeStatus() {
 
   // config is not one of the four checks the dashboard shows a line for — the top-level `config`
   // object below is already its detail — but it is still one of the five things `ready` reports,
-  // so whether it loaded (a real object with a packages array) is kept as a plain boolean.
-  const configOk = configR.status === 'fulfilled' && configR.value && Array.isArray(configR.value.packages);
-  const config = configOk ? configR.value : {};
+  // so whether it loaded a valid catalogue is kept as a plain boolean. Preserve a loaded but
+  // invalid config in the summary for diagnosis, without reporting it ready for redemption.
+  const configLoaded = configR.status === 'fulfilled' && configR.value && typeof configR.value === 'object' && !Array.isArray(configR.value);
+  const config = configLoaded ? configR.value : {};
+  const configOk = catalogueReady(config);
   const checks = {
     store: storeR.status === 'fulfilled' ? storeR.value : { ok: false, detail: messageOf(storeR.reason) },
     payer: payerR.status === 'fulfilled' ? payerR.value : { ok: false, detail: messageOf(payerR.reason), pool: null },

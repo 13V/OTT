@@ -239,8 +239,9 @@ test('a pool that cannot cover the week says so before the button, not after', a
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   await expect(mine).toContainText('The data pool holds $6.20 just now, less than the $20.00 you have left this week');
-  await expect(mine).toContainText('topped up');
-  // The plan picker is still there: smaller plans genuinely do go through.
+  await expect(mine).toContainText('Some packages may be unavailable until the pool is funded');
+  await expect(mine).not.toContainText('Smaller plans will go through');
+  // Advisory pool figures leave the picker available without promising settlement.
   await expect(mine.locator('.data-redeem')).toHaveCount(1);
 
   // A pool that covers it says nothing at all, and neither does one it could not read.

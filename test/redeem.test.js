@@ -516,6 +516,59 @@ async function main() {
     if (privatePortfolioBefore === undefined) delete process.env.WHOLESALE_PORTFOLIO_URL; else process.env.WHOLESALE_PORTFOLIO_URL = privatePortfolioBefore;
   }
 
+  console.log('\npublic failure notes cannot bypass installation-code privacy');
+  const storedPrivateOrder = await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0));
+  const beforePrivateOrder = { ...storedPrivateOrder };
+  const privateProfile = {
+    ac: 'LPA:1$rsp.example.invalid$activation-test-marker',
+    manualCode: 'manual-test-marker', smdpAddress: 'rsp.example.invalid', matchingId: 'matching-test-marker',
+    qrCodeUrl: 'https://qr.example.invalid/private-qr-test-marker',
+    appleInstallUrl: 'https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=LPA%3A1%24rsp.example.invalid%24apple-test-marker',
+    androidInstallUrl: 'https://android.example.invalid/android-test-marker',
+    paymentRequest: 'lnbc20u1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq',
+    paymentHash: 'payment-hash-test-marker', preimage: 'payment-preimage-test-marker',
+  };
+  Object.assign(storedPrivateOrder, privateProfile);
+  try {
+    for (const [field, value] of Object.entries(privateProfile)) {
+      for (const form of new Set([value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1).replace(/\//g, '\\/')])) {
+        storedPrivateOrder.error = 'provider could not complete ' + form;
+        redeem._resetCaches();
+        r = await GET(addr(RICH));
+        checkThat('unsigned failure text redacts ' + field + (form === value ? '' : ' (encoded)'),
+          r.status === 200 && r.body.orders[0].codes === false && !JSON.stringify(r.body).includes(form)
+          && /provider could not complete.*redacted/.test(r.body.orders[0].note), r.body.orders[0].note);
+      }
+    }
+    storedPrivateOrder.error = 'provider could not complete ' + privateProfile.ac;
+    redeem._resetCaches();
+    r = await POST(signed(RICH, null));
+    check('a signed account read still returns the installation code through its authorized field', r.body.orders[0].ac, privateProfile.ac);
+    checkThat('signed reads also keep credentials out of failure notes', !r.body.orders[0].note.includes('activation-test-marker') && /redacted/.test(r.body.orders[0].note), r.body.orders[0].note);
+
+    const unknownActivation = 'LPA:1$new-rsp.example.invalid$new-activation-test-marker';
+    const unknownInvoice = 'lnbc30u1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+    for (const value of [unknownActivation, encodeURIComponent(unknownActivation), unknownInvoice, 'matchingId=new-matching-test-marker']) {
+      mock.find = async () => { throw new Error('provider read failed ' + value); };
+      redeem._resetCaches();
+      r = await GET(addr(RICH));
+      checkThat('a provider read error redacts credentials before they have been saved: ' + value.split(/[:=]/)[0],
+        r.status === 502 && !JSON.stringify(r.body).includes(value) && /provider read failed.*redacted/.test(r.body.error), r.body.error);
+    }
+    for (const [field, value] of Object.entries({ ...privateProfile, qrCode: 'https://qr.example.invalid/new-private-qr-test-marker' })) {
+      mock.find = async () => { throw new Error('provider read failed ' + JSON.stringify({ [field]: value })); };
+      redeem._resetCaches();
+      r = await GET(addr(RICH));
+      checkThat('an unsaved credential in provider JSON is redacted: ' + field,
+        r.status === 502 && !r.body.error.includes(value) && /provider read failed.*redacted/.test(r.body.error), r.body.error);
+    }
+  } finally {
+    mock.find = findBeforePrivateUrl;
+    for (const key of Object.keys(storedPrivateOrder)) delete storedPrivateOrder[key];
+    Object.assign(storedPrivateOrder, beforePrivateOrder);
+    redeem._resetCaches();
+  }
+
   console.log('\nclosing redemption keeps account and installation reads available');
   const gateSetting = process.env.REDEMPTIONS_ENABLED;
   const findBeforeGate = mock.find, orderBeforeGate = mock.order;

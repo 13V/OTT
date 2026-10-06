@@ -21,6 +21,7 @@
   let selectedCode = '';
   let helpPlatform = 'iphone';
   let helpStep = 0;
+  let dialogSequence = 0;
 
   const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
   const launched = cfg => cfg && ['coin', 'curve', 'treasury'].every(key => /^0x[0-9a-fA-F]{40}$/.test(cfg[key] || '') && !/^0x0{40}$/i.test(cfg[key]));
@@ -44,7 +45,7 @@
   }
 
   function dialog(h, title, content, source) {
-    const id = 'om-dialog-title';
+    const id = 'om-dialog-title-' + (++dialogSequence);
     const sheet = h('dialog', { class: 'om-dialog', 'aria-labelledby': id },
       h('div', { class: 'om-dialog-head' }, h('h2', { id }, title),
         action(h, icon('close'), () => sheet.close(), 'om-icon-button')),
@@ -182,6 +183,7 @@
           h('p', {}, 'Use it within the package’s coverage. Your regular number can remain on your usual line.'),
           h('p', {}, 'To check the connection, turn Wi-Fi off and open a webpage with this eSIM selected for mobile data. Loading the page confirms the data line is working.'),
           h('p', { class: 'om-inline-note' }, 'OTT can’t detect whether your phone has finished installation or connected. Check your phone’s SIM settings.'),
+          action(h, 'Installed but no data?', event => troubleshoot(h, event.currentTarget, platform), 'om-secondary-button om-troubleshooting-button'),
           h('a', { class: 'om-text-link', href: iphone ? 'https://support.apple.com/en-au/118669' : 'https://support.google.com/pixelphone/answer/16115470?hl=en', target: '_blank', rel: 'noopener noreferrer' }, os + ' setup support ↗'));
       }
       const back = action(h, 'Back', () => { step--; paint(); content.querySelector('h3')?.focus(); }, 'om-secondary-button');
@@ -341,6 +343,7 @@
         h('div', {}, h('dt', {}, 'Coverage'), h('dd', {}, pkg.name)),
         h('div', {}, h('dt', {}, 'Required data credit'), h('dd', {}, money(pkg.priceUsd)))),
       h('p', {}, 'Check that your phone supports eSIMs and is unlocked before redeeming. You’ll need an internet connection for setup.'),
+      action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-review-device-check'),
       preview ? h('div', { class: 'om-inline-note' }, 'Preview only. Adding this package changes the sample account. It does not issue an eSIM or request a wallet signature.') : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Weekly credit and redemption are not available yet.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
       preview ? addPreview : launched(cfg) ? continueLive : action(h, 'See the setup guide', () => { sheet.close(); go('help'); }),
       preview && addPreview.disabled ? h('p', { class: 'om-form-message' }, 'This sample account needs more credit for that package. Choose a smaller plan or restart the preview.') : null,
@@ -499,6 +502,7 @@
       h('section', { class: 'om-panel om-guide-panel', 'aria-label': 'eSIM setup guide' },
         h('p', { class: 'om-screen-lede' }, 'OTT gives you the installation details. Your phone confirms and completes setup.'),
         action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-device-check-button'),
+        action(h, 'Installed but no data?', event => troubleshoot(h, event.currentTarget, helpPlatform), 'om-secondary-button om-troubleshooting-button'),
         h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ios, android), guide),
       h('section', { class: 'om-panel om-help-notes' },
         h('img', { src: './assets/ott/faq-clay-help.webp', alt: '', loading: 'lazy', width: 720, height: 720 }),
@@ -508,6 +512,40 @@
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
         h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home. A browser wallet connects directly; mobile wallets open through WalletConnect when enabled. Return to OTT after approving the connection. You can disconnect in Wallet settings. If mobile connection hasn’t been enabled yet, open OTT in your wallet’s browser.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
+  }
+
+  function troubleshoot(h, source, initialPlatform) {
+    let platform = initialPlatform || (/Android/i.test(navigator.userAgent) ? 'android' : 'iphone');
+    const content = h('div', { class: 'om-guide-copy om-troubleshooting' });
+    function paint() {
+      const iphone = platform === 'iphone';
+      const platforms = h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ['iphone', 'android'].map(key => {
+        const button = action(h, key === 'iphone' ? 'iPhone' : 'Android', () => {
+          platform = key; paint(); content.querySelector('[aria-pressed="true"]').focus();
+        }, 'om-platform-button');
+        button.setAttribute('aria-pressed', String(platform === key));
+        return button;
+      }));
+      const support = (label, href) => h('a', { class: 'om-text-link', href, target: '_blank', rel: 'noopener noreferrer' }, label + ' ↗');
+      content.replaceChildren(
+        h('p', {}, 'Check these settings on your phone. OTT cannot detect whether your eSIM is installed or connected.'),
+        preview ? h('p', { class: 'om-inline-note' }, 'Preview only. Sample eSIMs cannot connect to a mobile network.') : null,
+        platforms,
+        h('ol', { class: 'om-device-checklist' },
+          h('li', {}, h('h3', {}, 'Select the installed data eSIM'), h('p', {}, iphone
+            ? 'In Settings → Cellular or Mobile Data, enable the installed eSIM with Turn On This Line. Under Cellular Data, select that eSIM.'
+            : 'In Settings → Network & internet → SIMs, select the installed eSIM. Check Use SIM and Mobile data, and choose it for mobile data. Names vary on other Android phones.')),
+          h('li', {}, h('h3', {}, 'Check coverage and validity'), h('p', {}, 'Use the package inside its coverage and follow its activation and validity instructions. OTT shows package details, not live remaining-data readings.')),
+          h('li', {}, h('h3', {}, 'Follow the provider’s roaming instructions'), h('p', {}, 'Change roaming only for this data eSIM if its provider requires it. Leave your regular line’s roaming settings alone.')),
+          h('li', {}, h('h3', {}, 'Test this data line'), h('p', {}, 'Turn Wi-Fi off and load a webpage. If it still does not load, turn Wi-Fi back on and contact your eSIM provider with the error shown in your phone’s settings.'))),
+        h('p', { class: 'om-muted' }, 'Keep your QR and activation code private when asking for help.'),
+        iphone ? support('Apple’s cellular data guide', 'https://support.apple.com/en-us/118227')
+          : support('Google Pixel mobile data guide', 'https://support.google.com/pixelphone/answer/2926415?hl=en'),
+        iphone ? support('Apple’s roaming guide', 'https://support.apple.com/en-us/109037')
+          : support('Google Pixel troubleshooting', 'https://support.google.com/pixelphone/answer/14116080?hl=en'));
+    }
+    paint();
+    dialog(h, 'Installed but no data?', content, source);
   }
 
   function checkPhone(h, source) {

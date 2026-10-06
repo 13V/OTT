@@ -5,17 +5,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { weekOf } = require('../site/api/_lib/week');
+const { catalogueReady, catalogueFingerprint } = require('../site/api/_lib/catalogue');
 const FRONTEND = 'https://13v.github.io';
 const address = value => /^0x[\da-f]{40}$/i.test(value || '') && !/^0x0{40}$/i.test(value);
 const row = (id, label, ok, detail) => ({ id, label, ok: !!ok, detail });
 const tokenKeys = ['coin', 'curve', 'treasury'];
 const unlaunched = esim => tokenKeys.every(key => esim?.[key] === '');
-function catalogueReady(esim) {
-  const packages = esim?.packages;
-  return Array.isArray(packages) && packages.length > 0 && new Set(packages.map(item => item?.code)).size === packages.length
-    && packages.every(item => item && ['code', 'slug', 'name', 'regions'].every(key => typeof item[key] === 'string' && item[key].trim())
-      && ['country', 'region'].includes(item.kind) && Number.isFinite(item.gb) && item.gb > 0
-      && Number.isSafeInteger(item.days) && item.days > 0 && Number.isFinite(item.priceUsd) && item.priceUsd > 0);
+function catalogueMatches(body, esim) {
+  const fingerprint = catalogueFingerprint(esim);
+  return !!fingerprint && body?.ready?.config === true && body?.config?.packages === esim.packages.length
+    && body?.config?.catalogueAt === esim.catalogueAt && body?.config?.catalogueFingerprint === fingerprint;
 }
 function freshStatus(body, now) {
   const asOf = Number(body?.asOf);
@@ -56,7 +55,7 @@ function prelaunchStatusChecks(body, esim, now = Date.now()) {
     row('status', 'Backend status response', freshStatus(body, now), 'A fresh, valid status response is required; HTTP 200 alone is insufficient.'),
     row('prelaunch-contracts-match', 'Backend remains prelaunch', unlaunched(body?.config) && body?.config?.launched === false, 'The backend must also keep all three token launch addresses blank.'),
     row('redemption-paused', 'Redemption remains disabled', body?.redemption?.enabled === false && body?.redemption?.ready === false, 'Disable redemption while preparing the service.'),
-    row('backend-config', 'Backend catalogue', body?.ready?.config === true && body?.config?.packages === esim?.packages?.length && body?.config?.catalogueAt === esim?.catalogueAt, 'Deploy the same reviewed catalogue as the frontend.'),
+    row('backend-config', 'Backend catalogue', catalogueMatches(body, esim), 'Deploy the same reviewed catalogue, including provider SKU, coverage, data, duration and price, as the frontend.'),
     row('backend-provider', 'Provider catalogue access', body?.ready?.provider === true && body?.wiring?.provider === 'wholesale', 'The real provider catalogue must answer without placing an order.'),
     row('backend-store', 'Durable order storage', body?.ready?.store === true && body?.wiring?.store === 'upstash', 'Connect the durable Redis REST store before live use.'),
     row('payer-selection', 'Lightning payer selection', body?.wiring?.payer === 'blink', 'Select Blink; funding and payment validation are deferred.'),
@@ -74,7 +73,8 @@ function statusChecks(body, esim, now = Date.now()) {
     row('redemption-enabled', 'Redemption enabled', body?.redemption?.enabled === true && body?.redemption?.ready === true, 'Enable redemption only after validating the launched, funded service.'),
   ];
   for (const key of ['config', 'provider', 'payer', 'store', 'allowances']) {
-    rows.push(row('backend-' + key, 'Backend ' + key, body?.ready?.[key] === true, 'Check this dependency in the hosting environment.'));
+    rows.push(row('backend-' + key, 'Backend ' + key, key === 'config' ? catalogueMatches(body, esim) : body?.ready?.[key] === true,
+      key === 'config' ? 'Deploy the same reviewed catalogue, including provider SKU, coverage, data, duration and price, as the frontend.' : 'Check this dependency in the hosting environment.'));
   }
   rows.push(row('real-provider', 'Verified provider and durable store', body?.wiring?.provider === esim?.provider && body?.wiring?.provider === 'wholesale'
     && body?.wiring?.payer === 'blink' && body?.wiring?.store === 'upstash', 'Use the probed wholesale provider, Blink and durable storage. Alternative providers need a real liveness probe before passing.'));

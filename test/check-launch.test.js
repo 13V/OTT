@@ -8,11 +8,12 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend } = require('../scripts/check-launch');
 const { weekOf } = require('../site/api/_lib/week');
+const { catalogueFingerprint } = require('../site/api/_lib/catalogue');
 const now = Date.now();
 const bundle = { code: 'fixed_5GB_30D_US', slug: 'united-states', name: 'United States', kind: 'country', regions: 'US', gb: 5, days: 30, priceUsd: 7.99 };
 const esim = { coin: '0x' + '1'.repeat(40), curve: '0x' + '2'.repeat(40), treasury: '0x' + '3'.repeat(40), provider: 'wholesale', catalogueAt: '2026-10-05', packages: [bundle] };
 const config = { app: { walletConnect: { projectId: 'a'.repeat(32) }, apiBaseUrl: 'https://api.example' }, esim, chain: { chainId: 4663, rpc: 'https://rpc.example' } };
-const status = { ok: true, asOf: Math.floor(now / 1000), config: { ...esim, launched: true },
+const status = { ok: true, asOf: Math.floor(now / 1000), config: { ...esim, packages: esim.packages.length, catalogueFingerprint: catalogueFingerprint(esim), launched: true },
   redemption: { enabled: true, ready: true },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
   wiring: { provider: 'wholesale', payer: 'blink', store: 'upstash' },
@@ -44,7 +45,7 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
 
   console.log('prelaunch checks separate preparation from wallet funding and token launch');
   const prelaunchEsim = { ...esim, coin: '', curve: '', treasury: '' };
-  const prelaunchStatus = { ...status, config: { ...prelaunchEsim, packages: 1, launched: false }, redemption: { enabled: false, ready: false }, ready: { ...status.ready, payer: false, allowances: false }, allowances: null, pool: null };
+  const prelaunchStatus = { ...status, config: { ...prelaunchEsim, packages: 1, catalogueFingerprint: catalogueFingerprint(prelaunchEsim), launched: false }, redemption: { enabled: false, ready: false }, ready: { ...status.ready, payer: false, allowances: false }, allowances: null, pool: null };
   assert.deepEqual(failed(prelaunchPublicChecks({ ...config, esim: prelaunchEsim })), []);
   assert.equal(failed(prelaunchPublicChecks({ ...config, esim: { ...prelaunchEsim, coin: esim.coin } })).includes('prelaunch-contracts'), true);
   assert.deepEqual(failed(prelaunchStatusChecks(prelaunchStatus, prelaunchEsim, now)), []);
@@ -53,6 +54,25 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
   assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, wiring: { ...prelaunchStatus.wiring, store: 'memory' } }, prelaunchEsim, now)).includes('backend-store'), true);
   assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, config: { ...prelaunchStatus.config, catalogueAt: '2026-09-01' } }, prelaunchEsim, now)).includes('backend-config'), true);
   assert.equal(failed(prelaunchStatusChecks({ ok: true }, prelaunchEsim, now)).includes('status'), true);
+
+  console.log('catalogue agreement checks purchase terms, not only a matching count and date');
+  for (const [field, value] of Object.entries({ code: 'different-provider-SKU', slug: 'australia', name: 'Australia',
+    kind: 'region', regions: 'AU', gb: 1, days: 7, priceUsd: 9.99 })) {
+    const otherCatalogue = { ...esim, packages: [{ ...bundle, [field]: value }] };
+    const changedConfig = { ...status.config, catalogueFingerprint: catalogueFingerprint(otherCatalogue) };
+    assert.equal(failed(statusChecks({ ...status, config: changedConfig }, esim, now)).includes('backend-config'), true, field);
+    assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, config: { ...prelaunchStatus.config, catalogueFingerprint: changedConfig.catalogueFingerprint } }, prelaunchEsim, now)).includes('backend-config'), true, field);
+  }
+  for (const fingerprint of [undefined, '', 'old-schema-fingerprint']) {
+    assert.equal(failed(statusChecks({ ...status, config: { ...status.config, catalogueFingerprint: fingerprint } }, esim, now)).includes('backend-config'), true);
+    assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, config: { ...prelaunchStatus.config, catalogueFingerprint: fingerprint } }, prelaunchEsim, now)).includes('backend-config'), true);
+  }
+  const secondBundle = { ...bundle, code: 'fixed_1GB_7D_US', gb: 1, days: 7, priceUsd: 1.99 };
+  assert.equal(catalogueFingerprint({ packages: [bundle, secondBundle] }), catalogueFingerprint({ packages: [secondBundle, bundle] }));
+  assert.equal(catalogueFingerprint({ packages: [{ ...bundle, internalMemo: 'metadata outside purchase terms' }] }), catalogueFingerprint(esim));
+  assert.equal(catalogueFingerprint({ packages: [{ code: bundle.code, slug: bundle.slug, priceUsd: bundle.priceUsd }] }), '');
+  assert.equal(catalogueFingerprint({ packages: [bundle, bundle] }), '');
+  assert.equal(catalogueFingerprint({ packages: [] }), '');
 
   console.log('remote checks are read-only and verify the browser origin');
   const requests = [];

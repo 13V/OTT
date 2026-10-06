@@ -70,6 +70,7 @@ const { provider: chooseProvider } = require('./_lib/providers');
 const { weekOf, weekEnd: weekEndOf } = require('./_lib/week');
 const { allowRequestOrigin, isProduction } = require('./_lib/request-origin');
 const { redemptionsEnabled } = require('./_lib/redemption-policy');
+const { redactError, orderSecrets } = require('./_lib/redact');
 
 const MESSAGE_HEAD = 'OT+T';
 const SIGNIN_WINDOW_S = 10 * 60;
@@ -107,23 +108,12 @@ function withinBurst(nowMs) {
 }
 
 /**
- * Nothing an upstream said, verbatim, ever reaches a caller. Every error here is ours or a
- * provider's, and none of them interpolate a key today — but status.js already learned to scrub
- * its details rather than rely on that staying true, and the endpoint that spends money should
- * not have the weaker posture of the two.
+ * Error context can be public; credentials and installation data cannot. Scrub saved order
+ * values as well as recognizable new activation codes/invoices and deployment secrets before
+ * truncating the message, including on unsigned reads.
  */
-function scrubbed(message) {
-  let out = String(message || 'redeem failed');
-  for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 8) continue;
-    const privateUrl = /^WHOLESALE_(BASE|PORTFOLIO)_URL$/i.test(name);
-    if (!privateUrl && !/_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_CODE$|PRIVATE_KEY/i.test(name)) continue;
-    // The provider normalizes whitespace and a trailing slash before fetching; scrub that
-    // normalized prefix too, rather than expose the private endpoint on a failed request.
-    const values = privateUrl ? [value, value.trim().replace(/\/+$/, '')] : [value];
-    for (const secret of values) if (secret.length >= 8) out = out.split(secret).join('[' + name + ']');
-  }
-  return out.slice(0, 160);
+function scrubbed(message, order) {
+  return redactError(message, { privateValues: orderSecrets(order) });
 }
 
 async function fetchJson(url) {
@@ -279,7 +269,7 @@ function publicOrder(o, config, { codes = false } = {}) {
     stage: o.stage || o.step || (o.pending ? 'pending' : 'done'),
     smdpAddress: c(o.smdpAddress), matchingId: c(o.matchingId),
     appleInstallUrl: safeHref(c(o.appleInstallUrl)), androidInstallUrl: safeHref(c(o.androidInstallUrl)),
-    note: o.error ? scrubbed(o.error) : '',
+    note: o.error ? scrubbed(o.error, o) : '',
     codes,
   };
 }

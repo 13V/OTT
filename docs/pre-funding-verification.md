@@ -71,6 +71,43 @@ sign a message, order an eSIM or pay an invoice.
 
 ## Remaining before a paid test
 
+### Product completion pass — 6 October
+
+The latest pass adds phone-specific **Installed but no data?** help from the
+general guide and authorized installation guide, plus compatibility checks from
+package review. Connected app accounts show eSIM management before expandable
+holdings details. The website's separate My data dashboard retains its expanded
+holdings view. Sample troubleshooting explicitly explains that sample eSIMs
+cannot connect.
+
+A lost purchase response locks the original package and offers a GET-only
+**Check existing order** action. A deliberate retry uses the original package,
+week and slot with a new approval; it never submits automatically. Declined
+approvals restore the picker, and leaving the account during approval stops
+dispatch. Mismatched account responses cannot reveal another wallet's details.
+The unconfirmed marker contains only public plan/slot information in page memory;
+it saves no signatures, keys or installation codes to browser storage.
+
+The API now redacts private installation/payment values from public error notes,
+including encoded and JSON-escaped forms. Status hashes the complete public
+purchase terms so release checks reject a price, coverage, validity or SKU
+mismatch even when catalogue count and timestamp are unchanged. The new GitHub
+verification workflow runs backend, browser and Windows credential fixtures.
+
+Validation: all **119 browser tests** and **22 backend suites** passed locally.
+After the final privacy amendment, both affected redemption suites passed again,
+including 34 new privacy checks. Syntax/config lint passes for 106 files. These
+checks use fixtures and make no real purchase. Service-worker cache v7 and new
+asset versions publish the app changes for returning browsers.
+
+The current hosted API needs a separate deployment of this reviewed `site/` tree.
+The strengthened live prelaunch check currently passes 14 of 15 checks; catalogue
+verification waits because the older deployed API has no fingerprint. This pass
+does not claim the server fixes are live until that deployment and remote check
+succeed. Public redemption remains disabled.
+
+### Paid test preparation
+
 The prepared run is `phone-test-20261006-au-001`: Australia 1 GB for 7 days
 (`fixed_1GB_7D_AU`), currently $1.99 from the official supplier. Proposed limits
 are $2.50 for the invoice, $2.50 for the invoice plus estimated Lightning routing

@@ -91,4 +91,13 @@ Validation: all 109 browser tests, syntax/config lint and 15 live prelaunch chec
 passed. Four phone navigation/layout tests also passed after the final navigation
 adjustment. Visual checks covered the homepage and app at 1440 px, app Home at
 2538 px and phone layouts at 320, 360 and 390 px. No funds or real orders moved.
-The real connected dashboard follow-on and paid physical-phone test remain open.
+The paid physical-phone test remains open.
+
+The next product pass resolves the connected dashboard's reading order: eSIM
+cards now precede expandable credit/holdings details inside the app, while the
+separate website dashboard remains expanded. Browser fixtures verify this at
+320 and 1440 px widths with no horizontal overflow. Compatibility checks are
+available from package review, and installation troubleshooting covers both
+phone types. All 119 browser tests pass. These checks use fixture accounts;
+physical installation, paid issuance and connectivity still require the funded
+operator test.
