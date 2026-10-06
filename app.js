@@ -316,11 +316,24 @@
 
   function renderRoute() {
     const version = ++renderVersion;
+    const renderedRoute = STATE.route, renderedScreen = STATE.appScreen;
+    const isCurrent = () => {
+      if (version !== renderVersion) return false;
+      const sectionId = location.hash.slice(1);
+      // Focus/section anchors do not navigate away from the current page.
+      if (sectionId === 'view') return true;
+      if (sectionId && !sectionId.startsWith('/') && renderedRoute === 'home' && document.getElementById(sectionId)) return true;
+      // The hash changes before hashchange rerenders. Reject stale async work in that gap.
+      const path = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
+      const route = ROUTES.includes(path[0]) ? path[0] : 'home';
+      const screen = route === 'app' && path.length <= 2 && APP_SCREENS.includes(path[1]) ? path[1] : 'home';
+      return route === renderedRoute && (route !== 'app' || screen === renderedScreen);
+    };
     window.OTTMobileApp?.dispose?.();
     const view = $('view');
     clear(view);
     view.scrollTop = 0;
-    (RENDERERS[STATE.route] || renderHome)(view, () => version === renderVersion);
+    (RENDERERS[STATE.route] || renderHome)(view, isCurrent);
   }
 
   function navigate() {
