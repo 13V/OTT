@@ -49,6 +49,7 @@ test('offline troubleshooting gives phone-specific checks and returns keyboard f
   await source.click();
   const sheet = page.getByRole('dialog', { name: 'Installed but no data?', exact: true });
   await expect(sheet).toBeVisible();
+  await expect(sheet).not.toContainText(/\bnull\b/);
   await expect(sheet).toContainText('OTT cannot detect whether your eSIM is installed or connected.');
   await expect(sheet.locator('li')).toHaveCount(4);
   await expect(sheet).toContainText('Turn On This Line');

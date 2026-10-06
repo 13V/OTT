@@ -97,7 +97,7 @@ verification workflow runs backend, browser and Windows credential fixtures.
 Validation: all **119 browser tests** and **22 backend suites** passed locally.
 After the final privacy amendment, both affected redemption suites passed again,
 including 34 new privacy checks. Syntax/config lint passes for 106 files. These
-checks use fixtures and make no real purchase. Service-worker cache v7 and new
+checks use fixtures and make no real purchase. Service-worker cache v8 and new
 asset versions publish the app changes for returning browsers.
 
 The current hosted API needs a separate deployment of this reviewed `site/` tree.
