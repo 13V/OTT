@@ -21,6 +21,7 @@
   const CHAIN_ID_HEX = '0x1237';           // 4663, Robinhood Chain
 
   const STATE = { cfg: null, account: null, route: '', appScreen: 'home', endpoint: 0 };
+  let accountEpoch = 0;
   window.OTT_STATE = STATE;                // a harmless inspection hook
 
   // ============================================================================ DOM helpers
@@ -102,6 +103,7 @@
     paintWallet();
   }
   async function disconnect() {
+    accountEpoch++;
     window.WhateverData?.resetWallet?.();
     STATE.account = null;
     paintWallet();
@@ -117,8 +119,18 @@
     const accounts = window.OTTWallet ? await window.OTTWallet.connect(options) : await window.ethereum.request({ method: 'eth_requestAccounts' });
     const account = accounts && accounts[0] || null;
     if (!account) { setAccount(null); return null; }
+    const connectingEpoch = accountEpoch;
     try { await ensureChain(); }
-    catch (error) { await disconnect(); throw error; }
+    catch (error) {
+      // An account event has already selected (or revoked) the current wallet.
+      // Do not disconnect that selection for a stale connection's network check.
+      if (connectingEpoch === accountEpoch) await disconnect();
+      throw error;
+    }
+    const selectedAccount = window.OTTWallet?.state?.().accounts[0];
+    if (connectingEpoch !== accountEpoch || window.OTTWallet && (!selectedAccount || selectedAccount.toLowerCase() !== account.toLowerCase())) {
+      throw new Error('Your wallet changed while connecting. Check the connected account and try again.');
+    }
     setAccount(account);
     if (STATE.route === 'app') renderRoute();
     return STATE.account;
@@ -385,6 +397,7 @@
     window.OTTWallet?.configure({ projectId: publicConfig.walletConnect?.projectId || '',
       chainId: STATE.cfg.chainId, rpc: STATE.cfg.rpc, explorer: STATE.cfg.explorer });
     function accountChanged(accs) {
+      accountEpoch++;
       // Revoke signatures even when the provider reports the same account again.
       window.WhateverData?.resetWallet?.();
       STATE.account = accs && accs[0] || null;
@@ -429,6 +442,7 @@
       } catch { /* an unavailable wallet is not an error here */ }
       if (typeof window.ethereum.on === 'function') {
         window.ethereum.on('accountsChanged', (accs) => {
+          accountEpoch++;
           window.WhateverData?.resetWallet?.();
           STATE.account = accs && accs[0] || null;
           paintWallet();

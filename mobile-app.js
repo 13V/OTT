@@ -113,7 +113,7 @@
     }, 'om-secondary-button');
     sheet = dialog(h, 'Your wallet', h('div', { class: 'om-guide-copy' },
       h('p', { class: 'om-wallet-address' }, account),
-      h('p', {}, 'Your wallet is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
+      h('p', {}, 'Your EVM wallet on Robinhood Chain is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
       h('div', { class: 'om-wallet-actions' }, copy, disconnect)), source);
   }
 
@@ -304,7 +304,7 @@
         h('a', { class: 'om-text-link', href: preview || account ? '#/app/help' : '#/app/plans' },
           preview || account ? 'How to get online' : 'Browse plans', icon('arrow'))),
       h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
-        : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your wallet is your account. Connect to see your data.'
+        : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your EVM wallet on Robinhood Chain is your account. Connecting does not move funds.'
           : 'Explore now. Weekly credit starts when OTT launches.'), credit);
     const result = h('div', { class: 'om-home-grid' },
       h('div', { class: 'om-home-feature' + (realAccount ? ' om-home-account' : preview ? ' om-home-preview' : '') }, intro,
@@ -312,7 +312,7 @@
       h('div', { class: 'om-home-tools' }, connection,
         !preview && (!active || account) ? h('div', { class: 'om-wallet-row' },
           h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
-            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Weekly credit starts after launch.')),
+            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : 'Use an EVM wallet on Robinhood Chain. Connecting does not move funds.')),
           action(h, account ? 'Wallet settings' : 'Connect wallet',
             event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button')) : null,
         realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
@@ -510,7 +510,7 @@
         h('details', {}, h('summary', {}, 'Can I set it up on the same phone?'), h('p', {}, 'Use the provider’s installation link if one is available. Otherwise, use manual details or display the QR on another screen. Supported iPhones can also add an eSIM from a QR shown in Safari.')),
         h('details', {}, h('summary', {}, 'Does weekly credit become cash?'), h('p', {}, 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.')),
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
-        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home. A browser wallet connects directly; mobile wallets open through WalletConnect when enabled. Return to OTT after approving the connection. You can disconnect in Wallet settings. If mobile connection hasn’t been enabled yet, open OTT in your wallet’s browser.')),
+        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Use an EVM wallet on Robinhood Chain, then tap Connect wallet on Home. Connecting shares your public wallet address and does not request a signature or move funds. A browser wallet connects directly; mobile wallets open through WalletConnect when enabled. Return to OTT after approving the connection. You can disconnect in Wallet settings. If mobile connection hasn’t been enabled yet, open OTT in your wallet’s browser.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
   }
 
