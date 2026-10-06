@@ -161,7 +161,7 @@ test('the service worker caches public release files but never configuration, le
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));
   expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual([
-    'account-preview.js', 'esim.js', 'home.css', 'home.js', 'mobile-app.css', 'mobile-app.js', 'style.css',
+    'account-preview.js', 'app.js', 'esim.js', 'home.css', 'home.js', 'mobile-app.css', 'mobile-app.js', 'style.css',
   ]);
   for (const url of publicVersions) expect(urls).toContain(url);
   expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);

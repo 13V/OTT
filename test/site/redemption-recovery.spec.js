@@ -139,7 +139,9 @@ test('leaving the account during wallet approval cancels a purchase before dispa
   await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'wallet');
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Help', exact: true }).click();
   await page.evaluate(() => { window.pauseRecoveryApproval = false; window.resolveRecoveryApproval(); });
+  await expect(page.getByRole('heading', { name: 'Set up your eSIM', exact: true })).toBeVisible();
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your eSIMs.', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Redeem / })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Check existing order', exact: true })).toHaveCount(0);
   expect(posts).toBe(0);

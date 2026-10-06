@@ -31,6 +31,22 @@ The current backend at `https://ott-prelaunch.vercel.app` uses this manual deplo
 GitHub automatic deployment integration is pending, so future reviewed API or catalogue changes
 need a separate manual deployment of the committed `site/` tree.
 
+For a reviewed release, package only the committed tree. In local PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path build -Force | Out-Null
+git archive --format=zip --output=build/ott-backend-release.zip HEAD:site
+Expand-Archive -LiteralPath build/ott-backend-release.zip -DestinationPath build/ott-backend-release
+```
+
+Use a fresh destination for each release. Drop that extracted folder onto the
+existing **ott-prelaunch** project overview in Vercel, then verify the new
+production deployment is Ready and run `npm run check:prelaunch -- --remote`.
+Keep the existing environment settings and `REDEMPTIONS_ENABLED=0`. Vercel's
+[Drop documentation](https://vercel.com/docs/drop#keep-iterating-on-a-dropped-project)
+describes updating an existing project this way. Opening the dashboard alone or
+redeploying the older uploaded files does not publish a new local release.
+
 Apply the hosted configuration below to **both Production and Preview**, including
 `NODE_ENV=production` and `REDEMPTIONS_ENABLED=0`. Do not use the portable server's `HOST`, `PORT`
 or start command for these serverless functions. Use the verified provider base
