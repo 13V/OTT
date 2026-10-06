@@ -248,10 +248,11 @@ Vercel configuration and untracked files, adds `.nojekyll`, and does not change 
 Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
 using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
 
-The current Vercel backend was deployed manually and passed all 15 remote prelaunch checks.
-GitHub automatic deployment integration is still pending; pushing to `main` does not redeploy the
-backend. Publish reviewed changes to the committed `site/` tree through a separate manual Vercel
-deployment. Token launch, wallet funding, a real payment and installation on a phone remain deferred.
+The Vercel backend is connected to `13V/OTT`, with production deployments from `main` and Root
+Directory `site`. The reviewed release `094057b` deployed successfully on 6 October 2026 and passed
+all 15 remote prelaunch checks, including the catalogue fingerprint. Future changes to `site/`
+deploy through Git. Token launch, wallet funding, a real payment and installation on a phone remain
+deferred; public redemption stays disabled.
 
 `npm run serve:api` runs the same redemption/status handlers as a portable Node server. It listens
 on `127.0.0.1:3000` by default and serves only those two API routes. A public `HOST` forces

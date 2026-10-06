@@ -24,14 +24,19 @@ Keep the output directory at its default. `site/vercel.json` sets function durat
 the public eSIM catalogue in both function bundles. Utility modules live in `api/_lib`, so Vercel
 does not generate a separate function for each helper.
 
-If the account has no GitHub login connection, a deployment can instead upload only the committed
-`site/` files through Vercel's deployment API. That does not configure automatic Git deployments.
-Never upload the entire local workspace: it may contain private or untracked files.
-The current backend at `https://ott-prelaunch.vercel.app` uses this manual deployment path.
-GitHub automatic deployment integration is pending, so future reviewed API or catalogue changes
-need a separate manual deployment of the committed `site/` tree.
+The **ott-prelaunch** project is now connected to the `13V/OTT` Git repository. Release
+`094057b` deployed to production on 6 October 2026 and passed all 15 remote prelaunch checks.
+Use the latest reviewed **`main`** commit for future deployments. The Git checkout contains `site/`
+directory, so keep Root Directory **`site`** for that source. Connecting Git does not prove that
+the latest production deployment is Ready or that the live catalogue matches the release;
+confirm the deployment's source commit and run the prelaunch checks after it finishes.
 
-For a reviewed release, package only the committed tree. In local PowerShell:
+A manual upload is a separate fallback. Upload only committed files, never the entire local
+workspace, which may contain private or untracked files. A flattened archive of `HEAD:site`
+contains `index.html`, `api/` and `config/` directly at its source root; it contains no `site/`
+directory. That source requires an **empty Root Directory**, unlike the Git checkout.
+
+For that manual fallback, package only the committed tree. In local PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Path build -Force | Out-Null
@@ -39,10 +44,14 @@ git archive --format=zip --output=build/ott-backend-release.zip HEAD:site
 Expand-Archive -LiteralPath build/ott-backend-release.zip -DestinationPath build/ott-backend-release
 ```
 
-Use a fresh destination for each release. Drop that extracted folder onto the
-existing **ott-prelaunch** project overview in Vercel, then verify the new
-production deployment is Ready and run `npm run check:prelaunch -- --remote`.
-Keep the existing environment settings and `REDEMPTIONS_ENABLED=0`. Vercel's
+Use a fresh destination for each release. Before uploading that extracted folder, make sure
+the deployment uses an **empty Root Directory**: leaving it at `site` makes Vercel look for a
+missing nested folder and fail. Restore Root Directory **`site`** before deploying the Git
+checkout again. Prefer the configured Git source for ongoing releases.
+
+After either deployment method, verify the production deployment is Ready and uses the reviewed
+commit, then run `npm run check:prelaunch -- --remote`. Keep the existing environment settings
+and `REDEMPTIONS_ENABLED=0`. Vercel's
 [Drop documentation](https://vercel.com/docs/drop#keep-iterating-on-a-dropped-project)
 describes updating an existing project this way. Opening the dashboard alone or
 redeploying the older uploaded files does not publish a new local release.

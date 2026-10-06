@@ -100,11 +100,14 @@ including 34 new privacy checks. Syntax/config lint passes for 106 files. These
 checks use fixtures and make no real purchase. Service-worker cache v9 and new
 asset versions publish the app changes for returning browsers.
 
-The current hosted API needs a separate deployment of this reviewed `site/` tree.
-The strengthened live prelaunch check currently passes 14 of 15 checks; catalogue
-verification waits because the older deployed API has no fingerprint. This pass
-does not claim the server fixes are live until that deployment and remote check
-succeed. Public redemption remains disabled.
+The reviewed API release `094057b` is live at `https://ott-prelaunch.vercel.app`
+from the connected `13V/OTT` repository's `main` branch, using Root Directory
+`site`. Vercel deployment `BEDMSwFqNazTpPZ6mUpxn99cDpAJ` became Ready on
+6 October 2026. All **15 live prelaunch checks** now pass, including the exact
+catalogue fingerprint, provider catalogue access, durable order storage and
+GitHub Pages CORS. The server privacy fixes and catalogue comparison are live.
+Public redemption remains disabled; this does not validate a funded purchase
+or physical phone connectivity.
 
 ### Paid test preparation
 
