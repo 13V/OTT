@@ -103,6 +103,44 @@ async function livePackage(p) {
       !bundle.roamingEnabled?.some(value => value.iso === country)) throw new Error('Live package differs from the reviewed catalogue. Review it before funding.');
   return { sku: p.sku, priceUsd: bundle.price, gb: bundle.dataInGB, days: bundle.durationInDays, country };
 }
+const PAYMENT_STATES = new Set(['not-sent', 'sending', 'pending', 'uncertain', 'failed', 'settled']);
+function preflightReadiness(wallet, hasStore, record, paymentState) {
+  const requiredActions = [];
+  if (!hasStore) requiredActions.push('Configure the standard read/write Upstash credentials, then rerun this read-only preflight.');
+  if (wallet.status === 'credential-required') requiredActions.push('Complete private Blink credential setup for the dedicated default BTC wallet, then rerun this read-only preflight.');
+  let status;
+  if (record) {
+    if (record.step === 'done') {
+      status = 'installation-ready';
+      requiredActions.push('Recover the private order export using the same run ID and settings, then build the offline installation pack. Do not buy another eSIM.');
+    } else if (record.step === 'paid' || (record.step === 'invoiced' && paymentState === 'settled')) {
+      status = 'issuance-pending';
+      requiredActions.push('Resume issuance using the same run ID and settings. Do not send another payment.');
+    } else if (paymentState === 'pending' || paymentState === 'sending') {
+      status = 'payment-pending';
+      requiredActions.push('Check the existing payment outcome and resume only the same run ID and settings. Do not start another payment or run.');
+    } else if (paymentState === 'uncertain') {
+      status = 'payment-review-required';
+      requiredActions.push('Review the existing wallet payment outcome and resume only the same run ID and settings. An uncertain reservation does not permit another send.');
+    } else {
+      status = record.step === 'invoiced' && ['not-sent', 'failed'].includes(paymentState) ? 'existing-invoice-review-required' : 'existing-run-review-required';
+      requiredActions.push('Review the stored run and original invoice/payment state before resuming the same run ID and caps. Do not create a second run.');
+    }
+  } else if (!hasStore || wallet.status === 'credential-required') status = 'setup-required';
+  else {
+    status = wallet.status === 'balance-present' ? 'invoice-required' : wallet.status;
+    if (status === 'needs-funding') requiredActions.push('Confirm the wallet is dedicated and the credential scopes are correct; review a conversion quote within the approved total funding budget and obtain funding approval.');
+    else if (status === 'insufficient-principal') requiredActions.push('The balance cannot cover the reviewed package price before routing fees. Review the received funding amount and total budget before any additional transfer; do not raise caps.');
+    else if (status === 'over-cap') requiredActions.push('Review the wallet balance against the original wallet cap before proceeding; do not raise caps.');
+    else requiredActions.push('Confirm the dedicated wallet and credential scopes, and obtain purchase approval. A real invoice and routing estimate are still required before a send.');
+  }
+  return { status, readOnlyPrerequisitesPassed: !record && hasStore && ['needs-funding', 'invoice-required'].includes(status),
+    paymentReady: false, requiredActions, limitations: [
+      'Storage read access does not verify write or atomic-operation permission. Blink balance access does not verify Receive or Write scopes.',
+      'No supplier invoice or routing-fee quote was created. Fee probes are estimates and do not enforce a hard routing-fee cap.',
+      'This report does not authorize funding or purchase. Conversion/source-chain costs and private output permissions remain unverified.'
+    ] };
+}
 async function preflight(p, deps, record) {
   const manifest = deps.store ? await deps.store.get('operator-run:' + p.runId) : null;
   if (manifest && JSON.stringify(manifest) !== JSON.stringify(manifestOf(p))) throw new Error('Run ID is already bound to different package or spending settings.');
@@ -112,11 +150,13 @@ async function preflight(p, deps, record) {
     const balance = await deps.payer.balance();
     if (!Number.isSafeInteger(balance.sats) || balance.sats < 0 || !Number.isFinite(balance.usdPerSat) || balance.usdPerSat <= 0) throw new Error('BTC balance or price is unavailable.');
     const btcUsd = balance.sats * balance.usdPerSat;
-    wallet = { status: btcUsd > p.maxWalletUsd ? 'over-cap' : balance.sats ? 'balance-present' : 'needs-funding',
+    wallet = { status: btcUsd > p.maxWalletUsd ? 'over-cap' : !balance.sats ? 'needs-funding' : btcUsd < p.catalogueUsd ? 'insufficient-principal' : 'balance-present',
       sats: balance.sats, btcUsd, feeEstimateAvailable: typeof deps.payer.feeProbe === 'function', feeLimitEnforced: false };
   }
+  const storedPaymentState = record?.paymentState == null ? null : PAYMENT_STATES.has(record.paymentState) ? record.paymentState : 'unknown';
   return { mode: 'preflight', plan: p, livePackage: reviewed, storedStage: record?.step || null,
-    storage: deps.store ? 'read-access-verified' : 'credential-required', wallet,
+    storedPaymentState, storage: deps.store ? 'read-access-verified' : 'credential-required', wallet,
+    readiness: preflightReadiness(wallet, !!deps.store, record, storedPaymentState),
     checkedAt: new Date().toISOString(), paymentTested: false,
     note: 'No checkout, invoice, payment or storage write. Fee estimates are not a strict fee cap. Keep this dedicated wallet within its cap; review conversion and source fees before funding.' };
 }

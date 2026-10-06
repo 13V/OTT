@@ -1,5 +1,8 @@
 # Prelaunch phone test
 
+Start with the [first funded phone test runbook](phone-test-quickstart.md) for the prepared
+package, local setup and funding sequence. This document describes the detailed safeguards.
+
 OTT is not launched. Public redemption stays disabled. A private operator test can check supplier
 payment, eSIM issuance and data on an actual phone without inventing token addresses or holder
 credit. It cannot validate holder eligibility, weekly allocation or the future token launch.
@@ -36,7 +39,8 @@ handoff and a successful read-only preflight.
 
 ## Prepared test and funding budget
 
-Prepared on 6 October 2026; this is a proposal, not authorization to fund or buy:
+Prepared on 6 October 2026 and catalogue rechecked on 7 October; this is a proposal, not
+authorization to fund or buy:
 
 | Setting | Prepared value |
 | --- | --- |
@@ -121,9 +125,18 @@ operator storage records. It creates no provider checkout or invoice, sends no p
 writes no order or run record. An accessible wallet with zero BTC reports **needs funding**;
 that is not a failed account check and is not paid-test readiness. Missing credentials, storage
 access errors, package/price changes or mismatched existing records still require correction.
+The JSON `readiness` summary gives the current status, required actions and limitations;
+`paymentReady` is always false during preflight. A positive balance below the reviewed package
+price reports `insufficient-principal`, while a sufficiently funded wallet reports
+`invoice-required`. Stored payment states are allowlisted, and pending or uncertain runs
+explicitly require recovery/review using the same run ID. `readOnlyPrerequisitesPassed`
+only describes successful catalogue, record and wallet reads for a fresh run within the cap.
+It does not establish storage write/atomic permissions, Blink Receive/Write scopes, conversion
+costs or authorization to transfer funds. Confirm the standard read/write storage token and
+appropriate Blink key scopes separately.
 A routing-fee estimate requires a real supplier invoice later, so preflight does not promise a
 final payment quote. At this preparation stage, credentialed live preflight has not passed.
-A check without private credentials on 6 October 2026 confirmed the live Australia package
+A check without private credentials on 7 October 2026 confirmed the live Australia package
 matches the reviewed 1 GB, 7 day, $1.99 plan; wallet and local storage access remain unverified.
 
 ## Later automated paid test

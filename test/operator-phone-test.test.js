@@ -293,6 +293,7 @@ async function main() {
       payer: { ...payer, balance: async () => ({ sats: 0, usdPerSat: 0.001 }), pay: noAction, invoice: noAction, feeProbe: noAction } });
     assert.equal(report.mode, 'preflight'); assert.equal(report.wallet.status, 'needs-funding');
     assert.equal(report.storage, 'read-access-verified'); assert.equal(report.paymentTested, false);
+    assert.equal(report.readiness.status, 'installation-ready'); assert.equal(report.readiness.paymentReady, false);
     const output = JSON.stringify(report);
     for (const secret of [paymentRequest, issued.ac, issued.iccid]) assert.ok(!output.includes(secret));
   });
@@ -300,11 +301,69 @@ async function main() {
     const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({ sku: p.sku, priceUsd: 1.99 }) });
     assert.equal(report.wallet.status, 'credential-required'); assert.equal(report.storage, 'credential-required');
     assert.equal(report.paymentTested, false);
+    assert.equal(report.readiness.status, 'setup-required'); assert.equal(report.readiness.readOnlyPrerequisitesPassed, false);
+    assert.equal(report.readiness.requiredActions.length, 2);
   });
-  await checkAsync('preflight distinguishes a present balance from an oversized wallet', async () => {
-    for (const [sats, status] of [[3000, 'balance-present'], [5000, 'over-cap']]) {
+  await checkAsync('preflight distinguishes insufficient principal, a present balance and an oversized wallet', async () => {
+    for (const [sats, status] of [[1, 'insufficient-principal'], [1989, 'insufficient-principal'], [1990, 'balance-present'], [3000, 'balance-present'], [5000, 'over-cap']]) {
       const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({}), payer: { ...payer, balance: async () => ({ sats, usdPerSat: 0.001 }) } });
       assert.equal(report.wallet.status, status); assert.equal(report.wallet.feeLimitEnforced, false);
+    }
+  });
+  await checkAsync('preflight readiness separates setup, empty, insufficient, over-cap and invoice-needed wallets without actions', async () => {
+    let writes = 0, invoices = 0, payments = 0, fees = 0;
+    const noWrite = () => { writes++; throw new Error('unexpected write'); };
+    const readOnly = { get: async () => null, set: noWrite, compareSet: noWrite, compareDel: noWrite };
+    const base = { store: readOnly, catalogueLookup: async () => ({ sku: p.sku, priceUsd: p.catalogueUsd }),
+      order: () => { invoices++; throw new Error('unexpected invoice'); } };
+    for (const [sats, status, passed] of [[0, 'needs-funding', true], [1, 'insufficient-principal', false], [1990, 'invoice-required', true], [5000, 'over-cap', false]]) {
+      const report = await runTest({ ...options, purchase: false, preflight: true }, { ...base, payer: { ...payer,
+        balance: async () => ({ sats, usdPerSat: 0.001 }), pay: () => { payments++; }, feeProbe: () => { fees++; } } });
+      assert.equal(report.readiness.status, status); assert.equal(report.readiness.readOnlyPrerequisitesPassed, passed);
+      assert.equal(report.readiness.paymentReady, false); assert.equal(report.storedPaymentState, null);
+      assert.ok(report.readiness.requiredActions.length);
+      assert.match(report.readiness.limitations.join(' '), /does not verify write or atomic-operation permission/);
+      assert.match(report.readiness.limitations.join(' '), /does not verify Receive or Write scopes/);
+      assert.match(report.readiness.limitations.join(' '), /does not authorize funding or purchase/);
+      assert.ok(!Object.hasOwn(report.readiness, 'readyForFunding'));
+    }
+    const noWallet = await runTest({ ...options, purchase: false, preflight: true }, base);
+    assert.equal(noWallet.readiness.status, 'setup-required'); assert.equal(noWallet.readiness.readOnlyPrerequisitesPassed, false);
+    const noStore = await runTest({ ...options, purchase: false, preflight: true }, { ...base, store: null, payer });
+    assert.equal(noStore.readiness.status, 'setup-required'); assert.equal(noStore.readiness.readOnlyPrerequisitesPassed, false);
+    assert.deepEqual([writes, invoices, payments, fees], [0, 0, 0, 0]);
+  });
+  await checkAsync('preflight existing-run summaries block repeat funding/payment and preserve private state', async () => {
+    let writes = 0, sends = 0;
+    const noAction = () => { writes++; throw new Error('unexpected mutation'); };
+    for (const [step, paymentState, status] of [
+      ['invoiced', 'sending', 'payment-pending'], ['invoiced', 'pending', 'payment-pending'],
+      ['invoiced', 'uncertain', 'payment-review-required'], ['paid', 'settled', 'issuance-pending'],
+      ['invoiced', 'settled', 'issuance-pending'], ['done', 'settled', 'installation-ready'],
+      ['invoiced', 'not-sent', 'existing-invoice-review-required'], ['invoiced', 'failed', 'existing-invoice-review-required'],
+      ['failed', 'failed', 'existing-run-review-required'], ['failed', 'settled', 'existing-run-review-required'],
+      ['claiming', undefined, 'existing-run-review-required']
+    ]) {
+      const record = { ...issued, step, paymentState };
+      const report = await runTest({ ...options, purchase: false, preflight: true }, {
+        store: { get: async key => key.startsWith('order:') ? record : manifestOf(p), set: noAction, compareSet: noAction },
+        catalogueLookup: async () => ({ sku: p.sku, priceUsd: p.catalogueUsd }), order: noAction,
+        payer: { ...payer, pay: () => { sends++; }, feeProbe: noAction } });
+      assert.equal(report.readiness.status, status); assert.equal(report.storedPaymentState, paymentState ?? null);
+      assert.equal(report.readiness.readOnlyPrerequisitesPassed, false); assert.equal(report.readiness.paymentReady, false);
+      assert.match(report.readiness.requiredActions.join(' '), /same run ID/);
+      for (const secret of [paymentRequest, issued.ac, issued.iccid, hash]) assert.ok(!JSON.stringify(report).includes(secret));
+    }
+    assert.deepEqual([writes, sends], [0, 0]);
+  });
+  await checkAsync('preflight never exposes an unrecognized stored payment-state value', async () => {
+    for (const paymentState of ['PRIVATE-PAYMENT-STATE', { error: 'PRIVATE-PAYMENT-STATE' }]) {
+      const record = { ...rec, paymentState };
+      const report = await runTest({ ...options, purchase: false, preflight: true }, {
+        store: { get: async key => key.startsWith('order:') ? record : null }, payer,
+        catalogueLookup: async () => ({ sku: p.sku, priceUsd: p.catalogueUsd }) });
+      assert.equal(report.storedPaymentState, 'unknown'); assert.equal(report.readiness.status, 'existing-run-review-required');
+      assert.ok(!JSON.stringify(report).includes('PRIVATE-PAYMENT-STATE'));
     }
   });
   await checkAsync('preflight rejects bound-setting changes before catalogue lookup', async () => {
