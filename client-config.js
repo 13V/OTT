@@ -18,7 +18,7 @@
   }
   function apiUrl(path) {
     if (apiError) throw apiError;
-    if (!/^\.\/api\/(redeem|status)(?:\?|$)/.test(path)) throw new Error('Unknown OTT API endpoint.');
+    if (!/^\.\/api\/(redeem|status|auth)(?:\?|$)/.test(path)) throw new Error('Unknown OTT API endpoint.');
     return settings.apiBaseUrl ? new URL(path.slice(1), settings.apiBaseUrl).href : path;
   }
   window.OTTClientConfig = { configure, apiUrl, get: () => settings };
