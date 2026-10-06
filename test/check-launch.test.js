@@ -56,7 +56,7 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
   assert.equal(failed(prelaunchStatusChecks({ ok: true }, prelaunchEsim, now)).includes('status'), true);
 
   console.log('catalogue agreement checks purchase terms, not only a matching count and date');
-  for (const [field, value] of Object.entries({ code: 'different-provider-SKU', slug: 'australia', name: 'Australia',
+  for (const [field, value] of Object.entries({ code: 'different-public-code', packageCode: 'different-provider-SKU', slug: 'australia', name: 'Australia',
     kind: 'region', regions: 'AU', gb: 1, days: 7, priceUsd: 9.99 })) {
     const otherCatalogue = { ...esim, packages: [{ ...bundle, [field]: value }] };
     const changedConfig = { ...status.config, catalogueFingerprint: catalogueFingerprint(otherCatalogue) };
@@ -70,6 +70,8 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
   const secondBundle = { ...bundle, code: 'fixed_1GB_7D_US', gb: 1, days: 7, priceUsd: 1.99 };
   assert.equal(catalogueFingerprint({ packages: [bundle, secondBundle] }), catalogueFingerprint({ packages: [secondBundle, bundle] }));
   assert.equal(catalogueFingerprint({ packages: [{ ...bundle, internalMemo: 'metadata outside purchase terms' }] }), catalogueFingerprint(esim));
+  assert.equal(catalogueFingerprint({ packages: [{ ...bundle, packageCode: bundle.code }] }), catalogueFingerprint(esim));
+  for (const packageCode of ['', '   ', 7, null]) assert.equal(catalogueReady({ packages: [{ ...bundle, packageCode }] }), false);
   assert.equal(catalogueFingerprint({ packages: [{ code: bundle.code, slug: bundle.slug, priceUsd: bundle.priceUsd }] }), '');
   assert.equal(catalogueFingerprint({ packages: [bundle, bundle] }), '');
   assert.equal(catalogueFingerprint({ packages: [] }), '');
