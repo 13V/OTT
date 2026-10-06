@@ -271,7 +271,7 @@ test('the picker says whether a plan tops up an eSIM or issues one, before anyth
   await expect(redeem.locator('.label').first()).toHaveText('ADD DATA');
   const place = redeem.locator('#f-place');
   await place.selectOption('germany');
-  await expect(redeem).toContainText('Adds to your eSIM for Germany — nothing to install again.');
+  await expect(redeem).toContainText('The provider will top up a compatible eSIM for Germany where possible, or issue a new eSIM.');
   await place.selectOption('japan');
   await expect(redeem).toContainText('Issues a new eSIM for Japan, ready to install.');
   expect(errors).toEqual([]);

@@ -7,6 +7,12 @@ Phantom [Solana sign-in](solana-login.md) is also implemented. It verifies walle
 ownership with a one-time message and keeps Solana identity separate from EVM
 holder credit, redemption and the operator funding route.
 
+The [holder experience](holder-experience.md) adds confirmed-credit plan matching,
+saved catalogue destinations and explicit repeat-destination package review.
+Solana users can link one Robinhood Chain holder wallet with fresh proofs from
+both wallets. This permits public credit display only; it creates no allocation
+or payment authority. Redemptions remain disabled in production.
+
 ## App and installation flow
 
 The app now shares the website's cream canvas, display typography and clay

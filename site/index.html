@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="./ui.css">
 <link rel="stylesheet" href="./home.css?v=20261006-design">
 <link rel="stylesheet" href="./account-preview.css">
-<link rel="stylesheet" href="./mobile-app.css?v=20261006-solana">
+<link rel="stylesheet" href="./mobile-app.css?v=20261006-holders">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./assets/app/icon-180.png">
 </head>
@@ -91,11 +91,12 @@
      of its own. It defines window.WhateverQr and does nothing on its own, so loading it here costs
      the page nothing until a redemption actually needs it. -->
 <script src="./qr.js"></script>
-<script src="./client-config.js?v=20261006-solana"></script>
-<script src="./wallet.js?v=20261006-solana"></script>
-<script src="./solana-login.js?v=20261006-solana"></script>
+<script src="./client-config.js?v=20261006-holders"></script>
+<script src="./wallet.js?v=20261006-holders"></script>
+<script src="./solana-login.js?v=20261006-holders"></script>
+<script src="./holder-tools.js?v=20261006-holders"></script>
 <!-- My data and redemption stay in esim.js; home.js renders the public homepage. -->
-<script src="./esim.js?v=20261006-solana"></script>
+<script src="./esim.js?v=20261006-holders"></script>
 <script src="./clay-type.js"></script>
 <script src="./account-preview.js?v=20261006-design"></script>
 <script src="./home.js?v=20261006-design"></script>
@@ -103,8 +104,8 @@
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
 <script src="./status.js"></script>
 <script src="./holders.js"></script>
-<script src="./mobile-app.js?v=20261006-solana"></script>
+<script src="./mobile-app.js?v=20261006-holders"></script>
 <script src="./pwa.js"></script>
-<script src="./app.js?v=20261006-solana"></script>
+<script src="./app.js?v=20261006-holders"></script>
 </body>
 </html>

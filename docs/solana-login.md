@@ -21,13 +21,15 @@ wallet changed. If logout cannot reach the API, server expiry still bounds the
 token lifetime. Refresh can restore a trusted public wallet connection, but a
 new message approval is required to authenticate again.
 
-Solana accounts have zero holder credit and no purchase eligibility. EVM
-allocations, order history and private installation details are not looked up
-using a Solana address. The app also explains this on plan review and account
-screens. Wallet linking, Solana token migration and SOL/USDC supplier payments
-are separate work and are not implemented by this change.
+Solana identity itself has zero holder credit and no purchase eligibility. The
+[holder experience](holder-experience.md) now supports verified linking to one
+Robinhood Chain holder wallet. Public credit is read using that linked EVM
+address, without copying or creating allocations. Private installation details
+and redemptions still require that EVM wallet's approval. Solana token migration
+and SOL/USDC supplier payments remain separate work.
 
-`POST /api/auth` accepts `challenge`, `verify`, `session` and `logout` actions.
+`POST /api/auth` accepts `challenge`, `verify`, `session` and `logout` actions,
+plus `link-challenge`, `link-verify`, `link` and `unlink` for wallet links.
 It enforces a 16 KiB request limit, configured frontend origins, no-store
 responses and a short challenge cooldown. Production requires the existing
 durable Upstash configuration; memory storage is restricted to development.

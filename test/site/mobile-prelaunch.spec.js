@@ -77,5 +77,5 @@ test('zero token addresses never make the app advertise a configured programme',
   await expect(page.locator('.om-status-pill')).toHaveText('Prelaunch');
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('Weekly credit and redemption are not available yet.');
-  await expect(page.getByRole('button', { name: 'Continue in My data', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue to eSIMs', exact: true })).toHaveCount(0);
 });

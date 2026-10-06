@@ -30,6 +30,36 @@ const COMPARE_DEL = `if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('DEL', KEYS[1])
 end
 return 0`;
+// Compare the entire batch before changing any key. Check-only entries keep session TTLs intact;
+// replacements preserve existing TTLs, while new persistent link indexes have no expiry.
+const COMPARE_MUTATE = `for i = 1, #KEYS do
+  local at = (i - 1) * 4
+  local current = redis.call('GET', KEYS[i])
+  if ARGV[at + 1] == 'missing' then
+    if current then return 0 end
+  elseif current ~= ARGV[at + 2] then return 0 end
+end
+for i = 1, #KEYS do
+  local at = (i - 1) * 4
+  if ARGV[at + 3] == 'delete' then redis.call('DEL', KEYS[i])
+  elseif ARGV[at + 3] == 'set' then redis.call('SET', KEYS[i], ARGV[at + 4], 'KEEPTTL') end
+end
+return 1`;
+
+function mutationEntries(entries) {
+  if (!Array.isArray(entries) || !entries.length || entries.length > 16) throw new Error('invalid store mutation batch');
+  const keys = new Set();
+  return entries.map(entry => {
+    if (!entry || typeof entry.key !== 'string' || !entry.key || keys.has(entry.key)
+      || entry.expected === undefined) throw new Error('invalid store mutation entry');
+    keys.add(entry.key);
+    const expected = entry.expected === null ? null : JSON.stringify(entry.expected);
+    const action = !Object.hasOwn(entry, 'value') ? 'check' : entry.value === null ? 'delete' : 'set';
+    const value = action === 'set' ? JSON.stringify(entry.value) : '';
+    if (expected === undefined || value === undefined) throw new Error('invalid store mutation value');
+    return { key: entry.key, expected, action, value };
+  });
+}
 
 function ttlSeconds(ex) {
   if (ex !== undefined && (!Number.isSafeInteger(ex) || ex < 1)) throw new Error('store TTL must be positive whole seconds');
@@ -67,6 +97,18 @@ function memoryStore() {
       if (kv.get(key) !== JSON.stringify(expected)) return false;
       expiry.delete(key);
       return kv.delete(key);
+    },
+    async compareMutate(entries) {
+      const batch = mutationEntries(entries);
+      for (const entry of batch) {
+        expire(entry.key);
+        if (entry.expected === null ? kv.has(entry.key) : kv.get(entry.key) !== entry.expected) return false;
+      }
+      for (const entry of batch) {
+        if (entry.action === 'delete') { kv.delete(entry.key); expiry.delete(entry.key); }
+        else if (entry.action === 'set') kv.set(entry.key, entry.value);
+      }
+      return true;
     },
     async zadd(set, score, member) {
       if (!zs.has(set)) zs.set(set, new Map());
@@ -120,6 +162,11 @@ function restStore({ url, token }) {
     async compareDel(key, expected) {
       return Number(await cmd(['EVAL', COMPARE_DEL, '1', key, JSON.stringify(expected)])) === 1;
     },
+    async compareMutate(entries) {
+      const batch = mutationEntries(entries);
+      const args = batch.flatMap(entry => [entry.expected === null ? 'missing' : 'value', entry.expected || '', entry.action, entry.value]);
+      return Number(await cmd(['EVAL', COMPARE_MUTATE, String(batch.length), ...batch.map(entry => entry.key), ...args])) === 1;
+    },
     async zadd(set, score, member) { await cmd(['ZADD', set, String(score), member]); },
     async zrange(set, min, max, { limit = 1000 } = {}) {
       return (await cmd(['ZRANGEBYSCORE', set, String(min), String(max), 'LIMIT', '0', String(limit)])) || [];
@@ -138,6 +185,7 @@ function prefixed(inner) {
     del: (k) => inner.del(p(k)),
     compareSet: (k, expected, v) => inner.compareSet(p(k), expected, v),
     compareDel: (k, expected) => inner.compareDel(p(k), expected),
+    compareMutate: entries => inner.compareMutate(entries.map(entry => ({ ...entry, key: p(entry.key) }))),
     zadd: (s, score, m) => inner.zadd(p(s), score, m),
     zrange: (s, min, max, o) => inner.zrange(p(s), min, max, o),
     _reset: () => (inner._reset ? inner._reset() : undefined),

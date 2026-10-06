@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { store: chooseStore } = require('./_lib/store');
 const { allowRequestOrigin } = require('./_lib/request-origin');
 const solana = require('./_lib/solana-auth');
+const walletLinks = require('./_lib/wallet-links');
 
 const CHALLENGE_SECONDS = 5 * 60;
 const SESSION_SECONDS = 30 * 60;
@@ -85,7 +86,7 @@ module.exports = async (req, res) => {
       throw fail(400, 'body must be a JSON object');
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail(400, 'body must be a JSON object');
-    if (!['challenge', 'verify', 'session', 'logout'].includes(body.action)) throw fail(400, 'unknown authentication action');
+    if (!['challenge', 'verify', 'session', 'logout', 'link-challenge', 'link-verify', 'link', 'unlink'].includes(body.action)) throw fail(400, 'unknown authentication action');
     const store = chooseStore();
     const now = Date.now();
 
@@ -128,7 +129,8 @@ module.exports = async (req, res) => {
       if (!(await store.set(sessionKey(token), { address: body.address, origin: challenge.origin, expiresAt }, { nx: true, ex: SESSION_SECONDS }))) {
         throw fail(503, 'sign-in is temporarily unavailable');
       }
-      return send(res, 200, { ok: true, token, account: account(body.address), expiresAt });
+      const linkedWallet = await walletLinks.read(store, body.address);
+      return send(res, 200, { ok: true, token, account: account(body.address), expiresAt, ...(linkedWallet ? { linkedWallet } : {}) });
     }
 
     if (!validToken(body.token)) throw fail(401, 'session is invalid or expired');
@@ -138,10 +140,20 @@ module.exports = async (req, res) => {
     if (body.action === 'logout') { await store.del(key); return send(res, 200, { ok: true }); }
     if (!session || !Number.isSafeInteger(session.expiresAt) || now >= session.expiresAt
       || !solana.decodeAddress(session.address)) throw fail(401, 'session is invalid or expired');
-    return send(res, 200, { ok: true, account: account(session.address), expiresAt: session.expiresAt });
+    const context = { sessionKey: key, session, sessionHash: digest(body.token) };
+    if (body.action === 'link-challenge') {
+      return send(res, 200, await walletLinks.challenge(store, { ...context, site: frontend(body, req), evmAddress: body.evmAddress }));
+    }
+    if (body.action === 'link-verify') {
+      return send(res, 200, await walletLinks.verify(store, { ...context, body, checkFrontend: input => frontend(input, req) }));
+    }
+    if (body.action === 'unlink') return send(res, 200, await walletLinks.unlink(store, context));
+    const linkedWallet = await walletLinks.read(store, session.address);
+    if (body.action === 'link') return send(res, 200, { ok: true, linkedWallet });
+    return send(res, 200, { ok: true, account: account(session.address), expiresAt: session.expiresAt, ...(linkedWallet ? { linkedWallet } : {}) });
   } catch (error) {
     // Store failures are never echoed: they may contain deployment URLs or bearer credentials.
-    const known = [400, 401, 403, 413, 429].includes(error.status);
+    const known = [400, 401, 403, 409, 413, 429].includes(error.status);
     return send(res, known ? error.status : 503, { ok: false, error: known ? error.message : 'sign-in is temporarily unavailable' });
   }
 };

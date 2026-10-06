@@ -46,6 +46,39 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-kicker { display: block; font: 600 12px/1.35 var(--font-sans); text-transform: uppercase; letter-spacing: .1em; }
 .om-content { min-width: 0; }
 .om-home-grid, .om-plans-grid { min-width: 0; }
+.om-holder-shortcuts:empty { display: none; }
+.om-holder-shortcuts { display: grid; gap: 28px; border-top: 1px solid var(--om-line); padding-top: 28px; margin-top: 28px; }
+.om-holder-shortcuts h2 { margin: 0 0 8px; font: 700 24px/1.2 var(--font-display); letter-spacing: -.025em; }
+.om-shortcut-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 16px; }
+.om-shortcut-button { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 76px; padding: 16px; border: 1px solid var(--om-line); border-radius: 10px; text-align: left; }
+.om-shortcut-button > span { flex: 1; min-width: 0; font-weight: 600; }
+.om-shortcut-button small { display: block; color: var(--om-muted); font-size: 13px; font-weight: 400; margin-top: 4px; }
+.om-shortcut-button svg { width: 20px; height: 20px; flex: none; }
+.om-plan-budget { margin: 0 0 8px; font-size: 14px; color: var(--om-muted); }
+.om-package-budget { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; color: var(--om-muted); font-size: 14px; }
+.om-package-budget strong { color: var(--om-ink); font-weight: 600; }
+.om-link-steps { padding-left: 24px; margin: 16px 0; line-height: 1.5; }
+.om-link-steps li + li { margin-top: 10px; }
+.om-link-details { margin-top: 18px; font-size: 14px; }
+.om-link-details summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: #495b5b; }
+.om-plan-filters { margin-bottom: 16px; }
+.om-plan-filters label { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; }
+.om-plan-filters[hidden], .om-plan-filters.is-inactive label { display: none; }
+.om-plan-filters input { width: 20px; height: 20px; accent-color: var(--om-orange); }
+.om-saved-places { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.om-saved-place { border: 1px solid var(--om-line); border-radius: 24px; padding: 10px 14px; min-height: 44px; font-size: 14px; }
+.om-saved-place[aria-pressed="true"] { border-color: var(--om-orange); color: var(--om-orange); }
+.om-coverage-heading { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--om-line); }
+.om-coverage-heading .om-coverage-button { flex: 1; min-width: 0; border-bottom: 0; }
+.om-save-destination { flex: none; color: var(--om-muted); }
+.om-save-destination svg { width: 18px; height: 18px; }
+.om-save-destination[aria-pressed="true"] { color: var(--om-orange); border-color: var(--om-orange); background: #f4dfcb; }
+.om-save-destination[aria-pressed="true"] svg { fill: #b63c1c22; }
+.om-shortcut-button, .om-saved-place, .om-save-destination { transition: background-color .15s, border-color .15s; }
+@media (hover: hover) { .om-shortcut-button:hover, .om-saved-place:hover { background: #f4dfcb; border-color: var(--om-orange); } }
+@media (prefers-reduced-motion: reduce) { .om-shortcut-button, .om-saved-place, .om-save-destination { transition: none; } }
+.om-empty-plans { padding: 24px 0; }
+@media (max-width: 720px) { .om-shortcut-list { grid-template-columns: minmax(0,1fr); } }
 .om-plans-grid { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,.9fr); column-gap: clamp(28px,4vw,64px); row-gap: 18px; align-items: start; }
 .om-home-feature { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: clamp(28px,3vw,48px); align-items: center; }
 .om-home-intro { position: relative; z-index: 2; padding-block: 24px; }
@@ -67,7 +100,7 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-home-intro .om-pass-title { font-size: 32px; }
 .om-world-plans, .om-world-kit { width: 100%; max-width: 520px; height: clamp(320px,30vw,440px); margin-inline: auto; border-radius: 0; box-shadow: none; }
 .om-world-plans .om-world-art, .om-world-kit .om-world-art { object-fit: contain; }
-.om-plan-illustration { grid-column: 2; grid-row: 1 / span 2; align-self: center; min-width: 0; }
+.om-plan-illustration { grid-column: 2; grid-row: 1 / span 2; align-self: start; min-width: 0; margin-top: 24px; }
 .om-data-pass { position: relative; min-width: 0; padding: 7px; background: var(--om-rim); border-radius: 26px; clip-path: polygon(0 0,calc(100% - 30px) 0,100% 30px,100% 100%,0 100%); filter: drop-shadow(0 4px 0 #a9472140) drop-shadow(0 8px 9px #71452b18); }
 .om-data-pass::before { content: ''; position: absolute; inset: 5px 5px 7px; border: 1px solid #fffdf1; border-radius: 20px; background: linear-gradient(135deg,#fffbed 0%,#f7eddb 65%,#f4e6ce 100%); clip-path: polygon(0 0,calc(100% - 29px) 0,100% 29px,100% 100%,0 100%); box-shadow: inset 0 2px 3px #fffefa,inset 0 -2px 4px #d6bda577; pointer-events: none; }
 .om-pass-content { position: relative; z-index: 1; min-width: 0; padding: 22px; }
@@ -339,6 +372,11 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-home-context { margin-top: 14px; font-size: 14px; }
   .om-home-visual { margin-top: 22px; }
   .om-plan-feature { gap: 0; }
+  .om-coverage-heading { gap: 8px; margin-bottom: 10px; }
+  .om-coverage-heading .om-coverage-button { margin-bottom: 0; }
+  .om-save-destination { padding: 8px 10px; font-size: 13px; }
+  .om-saved-places { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; padding-bottom: 4px; margin-bottom: 10px; scroll-padding-inline: 8px; }
+  .om-saved-place { flex: none; white-space: nowrap; }
   .om-world-home { height: clamp(280px,82vw,380px); margin: 0; }
   .om-world-home .om-world-art { object-position: center; }
   .om-home-intro > .om-credit-card { width: 100%; max-width: 430px; margin: 22px auto 0; }
@@ -364,6 +402,10 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-home-tools > .om-home-footnote { padding-top: 9px; font-size: 14px; }
   .om-home-footnote .om-text-link { font-size: 12px; }
   .om-preview-banner { margin: 0 0 18px; padding: 10px; font-size: 14px; }
+  .om-screen-plans .om-preview-banner { margin-bottom: 12px; }
+  .om-screen-plans .om-heading { margin-bottom: 12px; }
+  .om-screen-plans .om-selected-package .om-pass-content { padding-block: 14px; }
+  .om-screen-plans .om-package-budget { margin-bottom: 8px; }
   .om-prelaunch-note { margin-bottom: 18px; }
   .om-nav { position: fixed; z-index: 50; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); width: 100%; justify-self: stretch; margin: 0; gap: 5px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); border: 0; border-top: 1px solid #d9cebc; border-radius: 20px 20px 0 0; background: #f9f4e9; box-shadow: 0 -3px 15px #4b382a08; }
   .om-nav > a { flex-direction: column; justify-content: center; gap: 4px; min-height: 58px; padding: 6px 4px; border-radius: 12px; font-size: 12px; }
@@ -376,7 +418,12 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-plan-illustration { grid-column: 1; grid-row: 3; margin-top: 20px; }
   .om-plan-illustration > .om-world { height: 180px; }
   .om-world-plans .om-world-art { object-position: 50% 55%; }
-  .om-plan-options { grid-column: 1; grid-row: 2; margin-top: 0; }
+  .om-plan-options { grid-column: 1; grid-row: 2; margin-top: 0; display: flex; flex-direction: column; }
+  .om-plan-options > .om-package-budget { order: 0; }
+  .om-plan-options > .om-package-sizes { order: 0; }
+  .om-plan-options > .om-selected-package { order: 1; }
+  .om-plan-options > .om-plan-filters { order: 2; margin-top: 18px; }
+  .om-plan-options > .om-plan-disclaimer { order: 3; }
   .om-package-sizes { gap: 7px; margin-bottom: 12px; }
   .om-size-button { min-height: 92px; font-size: 12px; }
   .om-size-button strong { font-size: 22px; }

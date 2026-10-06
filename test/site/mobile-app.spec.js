@@ -85,7 +85,7 @@ test('coverage picker supports keyboard selection, no matches and prelaunch pack
   await expect(page.getByRole('dialog')).toContainText('Japan');
   await expect(page.getByRole('dialog')).toContainText('Weekly credit and redemption are not available yet.');
   await expect(page.getByRole('button', { name: 'Add to preview', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Continue in My data', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue to eSIMs', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Review package', exact: true })).toBeFocused();

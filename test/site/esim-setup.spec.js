@@ -259,7 +259,7 @@ test('an issued top-up says the existing eSIM needs no additional installation',
   });
   await page.goto('/#/app/esims');
   await page.locator('#f-place').selectOption('united-states');
-  await expect(page.locator('.data-redeem')).toContainText('nothing to install again');
+  await expect(page.locator('.data-redeem')).toContainText('top up a compatible eSIM');
   await page.getByRole('button', { name: /^Redeem / }).click();
   const progress = page.locator('.data-order-progress');
   await expect(progress).toContainText('Top-up issued. Your existing eSIM does not need another installation.');

@@ -110,7 +110,7 @@ test('Phantom login verifies real Ed25519 bytes and never enters EVM redemption'
   expect(response.status(), JSON.stringify(body)).toBe(200);
   expect(body.account).toEqual({ address, chain: 'solana', verified: true, credit: 0, eligible: false });
   await expect(page.locator('.om-home-context')).toHaveText('Signed in with Solana. Your wallet ownership is verified.');
-  await expect(page.locator('.om-balance')).toHaveText('$0.00');
+  await expect(page.getByRole('heading', { name: 'Link for holder credit.', exact: true })).toBeVisible();
   expect(requests.map(request => request.action)).toEqual(['challenge', 'verify']);
   expect(await page.evaluate(() => window.solanaMethods)).toEqual(['connect', 'signIn']);
   const stored = await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage }, state: window.OTTSolanaLogin.state() }));
@@ -124,8 +124,8 @@ test('Phantom login verifies real Ed25519 bytes and never enters EVM redemption'
   await page.goto('/#/app/plans');
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
   const review = page.getByRole('dialog');
-  await expect(review).toContainText('Solana wallet linking is not available yet.');
-  await expect(review.getByRole('button', { name: 'Continue in My data' })).toHaveCount(0);
+  await expect(review).toContainText('Redemptions require that holder wallet’s approval.');
+  await expect(review.getByRole('button', { name: 'Continue to eSIMs' })).toHaveCount(0);
   await expect(review.getByRole('button', { name: 'Use Robinhood wallet' })).toBeVisible();
 });
 
@@ -160,7 +160,7 @@ test('a different wallet returned by Phantom cannot become the verified identity
 test('refresh restores only a trusted connection and requires a new login signature', async ({ page }) => {
   await customer(page);
   await signInButton(page);
-  await expect(page.locator('.om-balance')).toHaveText('$0.00');
+  await expect(page.getByRole('heading', { name: 'Link for holder credit.', exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Finish signing in.', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.solanaMethods)).toEqual(['restore']);
@@ -172,7 +172,7 @@ test('disconnect clears the page and revokes the backend session', async ({ page
   const verification = page.waitForResponse(response => response.url() === apiOrigin + '/api/auth' && response.request().postDataJSON().action === 'verify');
   await signInButton(page);
   const { token } = await (await verification).json();
-  await expect(page.locator('.om-balance')).toHaveText('$0.00');
+  await expect(page.getByRole('heading', { name: 'Link for holder credit.', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Wallet settings', exact: true }).click();
   const logout = page.waitForResponse(response => response.url() === apiOrigin + '/api/auth' && response.request().postDataJSON().action === 'logout');
   await page.getByRole('button', { name: 'Disconnect wallet', exact: true }).click();

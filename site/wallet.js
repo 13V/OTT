@@ -21,6 +21,7 @@
   let loadingSdk = null;
   let initializingRemote = null;
   let connecting = null;
+  let linkSignerLease = null;
 
   function injected() {
     return window.ethereum && typeof window.ethereum.request === 'function' ? window.ethereum : null;
@@ -221,6 +222,7 @@
     return accounts.slice();
   }
   async function connect(options) {
+    if (linkSignerLease) throw failure('Finish or cancel wallet linking before changing wallets.', 'LINK_IN_PROGRESS');
     if (connecting) return connecting;
     connecting = (async () => {
       const choice = options?.transport || 'auto';
@@ -266,6 +268,116 @@
       }
     })().finally(() => { connecting = null; });
     return connecting;
+  }
+  async function evmLinkSigner(options) {
+    if (linkSignerLease || connecting) throw failure('A wallet connection or link approval is already in progress.', 'LINK_IN_PROGRESS');
+    if (transport !== 'solana' || !provider || accounts.length !== 1) throw failure('Sign in with your Solana wallet before linking an EVM wallet.', 'SOLANA_REQUIRED');
+    const choice = options?.transport || 'auto';
+    if (!['auto', 'injected', 'walletconnect'].includes(choice)) throw failure('Unknown EVM wallet connection method.', 'INVALID_TRANSPORT');
+    const kind = choice === 'auto' ? injected() ? 'injected' : 'walletconnect' : choice;
+    const owner = provider;
+    const ownerAccount = accounts[0];
+    const ownerGeneration = generation;
+    const ownerLifecycle = lifecycle;
+    const lease = {};
+    linkSignerLease = lease;
+    let source = null;
+    let released = false;
+    let releasePromise = null;
+    let hadSession = true;
+    let cancelled = false;
+    let proofAddress = null;
+    let eventAccounts = null;
+    let updatedNamespaces = null;
+    let revision = 0;
+    let signing = false;
+    const proofBindings = [];
+    function listen(target, event, callback) {
+      if (typeof target.on !== 'function') return;
+      target.on(event, callback);
+      proofBindings.push([target, event, callback]);
+    }
+    function valid() {
+      if (released || cancelled || provider !== owner || transport !== 'solana' || accounts[0] !== ownerAccount
+        || generation !== ownerGeneration || lifecycle !== ownerLifecycle) throw failure('Your wallet changed during linking. Start the link again.', 4900);
+      if (proofAddress && kind === 'walletconnect' && normalize(source.accounts)[0]?.toLowerCase() !== proofAddress) throw failure('Your EVM wallet changed during linking. Start the link again.', 4900);
+    }
+    function sessionPermits(address, namespaces) {
+      return Object.entries(namespaces).filter(([name]) => name === 'eip155' || name.startsWith('eip155:'))
+        .some(([, namespace]) => Array.isArray(namespace.methods) && namespace.methods.includes('personal_sign')
+          && Array.isArray(namespace.accounts) && namespace.accounts.some(account => typeof account === 'string' && account.split(':').pop().toLowerCase() === address));
+    }
+    async function release() {
+      if (releasePromise) return releasePromise;
+      released = true;
+      for (const [target, event, callback] of proofBindings) {
+        if (typeof target.removeListener === 'function') target.removeListener(event, callback);
+        else target.off?.(event, callback);
+      }
+      proofBindings.length = 0;
+      releasePromise = (async () => {
+        try {
+          // Preserve preexisting sessions and any provider selected after this
+          // proof. Only this lease's new, isolated mobile session is closed.
+          if (kind === 'walletconnect' && !hadSession && source?.session && source !== provider) await source.disconnect?.();
+        } catch (_) {
+          if (source === remote) remote = null;
+        } finally {
+          if (linkSignerLease === lease) linkSignerLease = null;
+        }
+      })();
+      return releasePromise;
+    }
+    try {
+      source = kind === 'injected' ? injected() : await getRemote();
+      valid();
+      if (!source) throw failure('Open OTT in your EVM wallet’s browser, or install a browser wallet to link it.', 'WALLET_UNAVAILABLE');
+      if (source === owner) throw failure('Choose a separate EVM provider for wallet linking.', 'WRONG_WALLET_CHAIN');
+      hadSession = kind !== 'walletconnect' || !!source.session;
+      listen(source, 'accountsChanged', value => {
+        revision++;
+        eventAccounts = normalize(value);
+        if (!eventAccounts.length || proofAddress && eventAccounts[0].toLowerCase() !== proofAddress) cancelled = true;
+      });
+      listen(source, 'chainChanged', () => { revision++; if (proofAddress) cancelled = true; });
+      listen(source, 'disconnect', () => { revision++; cancelled = true; });
+      listen(source, 'session_delete', () => { revision++; cancelled = true; });
+      listen(source, 'session_update', value => {
+        revision++;
+        const namespaces = value?.params?.namespaces || value?.namespaces || source.session?.namespaces;
+        if (!namespaces) { cancelled = true; return; }
+        updatedNamespaces = namespaces;
+        if (proofAddress && !sessionPermits(proofAddress, namespaces)) cancelled = true;
+      });
+      const result = kind === 'injected' ? await source.request({ method: 'eth_requestAccounts' }) : await source.connect();
+      valid();
+      const selected = normalize(kind === 'injected' ? result : source.accounts);
+      if (!selected.length) throw failure('The EVM wallet did not share an account.', 4900);
+      proofAddress = selected[0].toLowerCase();
+      if (eventAccounts && eventAccounts[0]?.toLowerCase() !== proofAddress) throw failure('Your EVM wallet changed while connecting. Start the link again.', 4900);
+      if (updatedNamespaces && !sessionPermits(proofAddress, updatedNamespaces)) throw failure('The EVM wallet no longer permits this link approval.', 4900);
+      valid();
+      return Object.freeze({ address: proofAddress, release, async sign(message) {
+        valid();
+        if (signing) throw failure('An EVM link approval is already in progress.', 'LINK_IN_PROGRESS');
+        if (typeof message !== 'string' || !message.length) throw failure('The wallet link message is invalid.', 'INVALID_LINK_MESSAGE');
+        const bytes = new TextEncoder().encode(message);
+        if (bytes.length > 4096) throw failure('The wallet link message is too long.', 'INVALID_LINK_MESSAGE');
+        const hex = '0x' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        const signingRevision = revision;
+        signing = true;
+        try {
+          const signature = await source.request({ method: 'personal_sign', params: [hex, proofAddress] });
+          valid();
+          if (revision !== signingRevision) throw failure('Your EVM wallet changed during approval. Start the link again.', 4900);
+          if (typeof signature !== 'string' || !/^0x[\da-f]{130}$/i.test(signature)) throw failure('The EVM wallet returned an invalid link signature.', 'INVALID_LINK_SIGNATURE');
+          return signature;
+        } finally { signing = false; }
+      } });
+    } catch (error) {
+      await release();
+      throw error;
+    }
   }
   async function request(args) {
     const selected = provider;
@@ -314,7 +426,7 @@
   }
   function off(event, callback) { listeners.get(event)?.delete(callback); }
   window.OTTWallet = {
-    configure, restore, connect, request, disconnect, on, off, remoteAvailable,
+    configure, restore, connect, request, disconnect, on, off, remoteAvailable, evmLinkSigner,
     solanaAvailable: () => !!solana(),
     available: () => !!injected() || remoteAvailable(),
     getProvider: () => provider,
