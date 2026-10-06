@@ -288,6 +288,7 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
     console.log('\nproduction REST batches verify and unlink real fixture pairs');
     const values = new Map(), expiry = new Map(), commands = [];
+    let readWindow = null;
     const redis = http.createServer((req, res) => {
       let text = ''; req.on('data', chunk => { text += chunk; });
       req.on('end', () => {
@@ -295,7 +296,21 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
         assert.equal(req.headers.authorization, 'Bearer fixture-token');
         const cmd = JSON.parse(text); commands.push(cmd);
         const expire = key => { if (expiry.has(key) && now >= expiry.get(key)) { values.delete(key); expiry.delete(key); } };
-        if (cmd[0] === 'GET') { expire(cmd[1]); return reply(values.get(cmd[1]) ?? null); }
+        if (cmd[0] === 'GET') {
+          expire(cmd[1]);
+          const value = values.get(cmd[1]) ?? null;
+          if (readWindow && cmd[1] === readWindow.forwardKey && !readWindow.forward) {
+            readWindow.forward = { reply, value };
+            if (readWindow.revision) readWindow.ready();
+            return;
+          }
+          if (readWindow && cmd[1] === readWindow.revisionKey && !readWindow.revision) {
+            readWindow.revision = { reply, value };
+            if (readWindow.forward) readWindow.ready();
+            return;
+          }
+          return reply(value);
+        }
         if (cmd[0] === 'SET') {
           expire(cmd[1]); if (cmd.includes('NX') && values.has(cmd[1])) return reply(null);
           values.set(cmd[1], cmd[2]); const ex = cmd.indexOf('EX');
@@ -340,6 +355,47 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
       r = await call(proof(durable.token, dc1, S[9], E[9]));
       check('REST persistent revision invalidates proofs across active sessions', r.status, 409);
       ok('REST linking persists no bearer session token in link records or revision', [...values.entries()].filter(([key]) => key.includes('wallet-link:')).every(([, value]) => !value.includes(durable.token)));
+
+      console.log('\nREST index reads straddling a winning atomic verification');
+      const interleavedSession = await login(S[11]);
+      const interleavedChallenge = (await challenge(interleavedSession.token, E[11])).body;
+      const interleavedProof = proof(interleavedSession.token, interleavedChallenge, S[11], E[11]);
+      let ready;
+      const bothReadsHeld = new Promise(resolve => { ready = resolve; });
+      readWindow = {
+        forwardKey: 'links-test:' + links.keys.solana(S[11].address),
+        revisionKey: 'links-test:' + links.keys.revision(S[11].address), ready,
+      };
+      const delayedVerification = call(interleavedProof);
+      let readTimer;
+      try {
+        await Promise.race([bothReadsHeld, new Promise((_, reject) => {
+          readTimer = setTimeout(() => reject(new Error('REST interleaving reads were not reached')), 4000);
+        })]);
+      } finally { clearTimeout(readTimer); }
+      const winningVerification = await call(interleavedProof);
+      check('the competing verifier atomically links while the earlier index reads are held', winningVerification.status, 200);
+      const held = readWindow;
+      readWindow = null;
+      check('the held forward read predates the winning write', held.forward.value, null);
+      const freshRevision = values.get(held.revisionKey);
+      check('the revision read observes the winning write', JSON.parse(freshRevision).evmAddress, E[11].address);
+      held.forward.reply(held.forward.value);
+      held.revision.reply(freshRevision);
+      check('a consumed proof rejects a mixed index snapshot as replay', (await delayedVerification).status, 401);
+      check('the interleaved replay leaves the winning indexes consistent',
+        values.get(held.forwardKey), values.get('links-test:' + links.keys.evm(E[11].address)));
+
+      const corruptChallenge = (await challenge(interleavedSession.token, E[11])).body;
+      const originalForward = values.get(held.forwardKey);
+      values.set(held.forwardKey, 'false');
+      r = await call(proof(interleavedSession.token, corruptChallenge, S[11], E[11]));
+      check('an unconsumed proof with a corrupt REST index still fails closed', r.status, 503);
+      ok('corrupt-index rejection does not consume or authorize the pending proof',
+        values.has('links-test:' + links.keys.challenge(corruptChallenge.challengeId)));
+      check('corrupt-index rejection does not alter the reverse ownership index',
+        values.get('links-test:' + links.keys.evm(E[11].address)), originalForward);
+      values.set(held.forwardKey, originalForward);
     } finally { redis.closeAllConnections(); await new Promise(resolve => redis.close(resolve)); }
   } finally { Date.now = realNow; }
   console.log('\nall ' + checks + ' wallet-link checks passed');

@@ -113,7 +113,17 @@ async function verify(store, { sessionKey, session, sessionHash, body, checkFron
   for (let attempt = 0; attempt < 3; attempt++) {
     assertLive(session);
     if (Date.now() >= record.expiresAt) throw fail(401, 'wallet link challenge is invalid or expired');
-    const pair = await targetPair(store, session.address, body.evmAddress);
+    let pair;
+    try {
+      pair = await targetPair(store, session.address, body.evmAddress);
+    } catch (error) {
+      // Index GETs can straddle another verification's atomic write. If that
+      // write consumed this proof, reject the replay before reporting a mixed
+      // snapshot as corruption. An unconsumed proof still fails closed.
+      if (!same(await store.get(sessionKey), session)) throw fail(401, 'session is invalid or expired');
+      if (!same(await store.get(key), record)) throw fail(401, 'wallet link challenge is invalid or expired');
+      throw error;
+    }
     if ((pair.revision?.revision || 0) !== record.linkRevision) throw fail(409, 'wallet links changed; reload and sign again');
     const link = pair.forward || { version: 1, solanaAddress: session.address, evmAddress: body.evmAddress,
       chainId: CHAIN_ID, linkedAt: new Date().toISOString() };

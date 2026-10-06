@@ -59,7 +59,7 @@ Physical Phantom/EVM approval on a customer's device remains a manual check;
 no live wallet signatures, payments or supplier orders were performed here.
 
 The complete backend fixture command passed all 24 suites, including 85 new
-wallet-link checks. The browser regression suite and targeted follow-up checks
+wallet-link checks (93 including the concurrent REST response regression). The browser regression suite and targeted follow-up checks
 passed locally; release CI verifies all 221 browser cases on the final revision.
 
 Protocol references: [Phantom SIWS](https://github.com/phantom/sign-in-with-solana#message-construction)
