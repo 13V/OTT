@@ -75,7 +75,8 @@
   const dearest = (cfg) => packagesOf(cfg).reduce((m, p) => (m && perGb(m) >= perGb(p) ? m : p), null);
   // The cheapest package to just buy, in dollars — "from $0.99" is a shelf price a small holder can
   // actually afford, not a unit price nobody redeems at exactly.
-  const packageByCode = (cfg, code) => packagesOf(cfg).find((p) => p.code === code || p.packageCode === code) || null;
+  const packageByCode = (cfg, code) => typeof code === 'string' && code
+    ? packagesOf(cfg).find((p) => p.code === code || p.packageCode === code) || null : null;
   const packageLabel = (p) => p.name + ' · ' + (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days';
   // Every place the catalogue sells, once each, in the order esim.json lists them — the same order
   // the picker's place <select> lists them in. `flag` is nadanada's own and empty for a region (a
@@ -204,6 +205,12 @@
   const SIGNIN_REUSE_MS = 8 * 60 * 1000;
   let lastRead = null; // { addr, message, signature, at }
   let walletGeneration = 0;
+  // Only an unconfirmed submission's public slot/plan, in this page's memory.
+  // No signature or installation details are saved, and this is never browser storage.
+  const unconfirmedOrders = new Map();
+  const submissionKey = (addr, week) => addr.toLowerCase() + ':' + week;
+  const submissionSeen = (standing, attempt) => (standing.orders || []).some(order =>
+    Number(order.n) === attempt.n && Number(order.week) === attempt.week);
   const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
   const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
   async function signIn(addr, want) {
@@ -241,7 +248,15 @@
     try { j = await res.json(); } catch (e) { j = null; }
     if (body && generation !== walletGeneration) throw new Error('Your wallet changed. Reconnect to view this account.');
     if (!j) throw new Error('redeem API answered HTTP ' + res.status);
-    if (!j.ok) throw new Error(j.error || 'redeem API refused (HTTP ' + res.status + ')');
+    if (!j.ok) {
+      const error = new Error(j.error || 'redeem API refused (HTTP ' + res.status + ')');
+      // Validation/auth/slot refusals happen before provider dispatch. A server or
+      // gateway failure can follow a payment, so it must keep its unconfirmed state.
+      const beforeDispatch = ['data redemption is not enabled yet', 'data config unavailable', 'package has no price', 'allowances unavailable'];
+      error.requestDeclined = [400, 401, 403, 409, 422].includes(res.status)
+        || res.status === 503 && beforeDispatch.includes(j.error);
+      throw error;
+    }
     return j;
   }
 
@@ -578,6 +593,10 @@
     try { standing = await api('GET', './api/redeem?address=' + addr); }
     catch (e) { apiError = errText(e); }
 
+    if (standing && String(standing.address || '').toLowerCase() !== addr) {
+      standing = null; apiError = 'The account response belongs to another wallet.';
+    }
+
     if ((ctx.isCurrent && !ctx.isCurrent()) || currentAccount(ctx)?.toLowerCase() !== addr || !panel.isConnected) return;
 
     clear(body);
@@ -595,6 +614,11 @@
   function paintWallet(ctx, cfg, addr, panel, body, sources, freshOrder) {
     const { h, notice } = ctx;
     const { standing, apiError, allow, fileRow } = sources;
+    if (standing) {
+      const key = submissionKey(addr, Number(standing.week));
+      const attempt = unconfirmedOrders.get(key);
+      if (attempt && submissionSeen(standing, attempt)) unconfirmedOrders.delete(key);
+    }
 
     if (!standing && !allow) {
       body.appendChild(notice('Could not read this wallet’s standing: ' + apiError, 'warn'));
@@ -668,8 +692,8 @@
       && standing.remainingUsd > 0 && poolUsd < standing.remainingUsd;
     if (shortfall) {
       body.appendChild(notice('The data pool holds ' + fmtMoney(poolUsd) + ' just now, less than the '
-        + fmtMoney(standing.remainingUsd) + ' you have left this week. Smaller plans will go through; the pool is topped up '
-        + 'from the treasury once a day, so the rest should clear shortly.', 'warn'));
+        + fmtMoney(standing.remainingUsd) + ' you have left this week. Some packages may be unavailable until the pool is funded. '
+        + 'Check current availability before redeeming.', 'warn'));
     }
 
     if (!Number.isFinite(tokens)) {
@@ -688,7 +712,10 @@
       return;
     }
 
-    body.appendChild(dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd: stale ? NaN : remainingUsd, weekEnd: stale ? NaN : weekEnd }));
+    const tiles = dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd: stale ? NaN : remainingUsd, weekEnd: stale ? NaN : weekEnd });
+    const details = inApp() ? h('details', { class: 'data-account-details' },
+      h('summary', {}, 'Credit and holdings details'), tiles) : tiles;
+    if (!inApp() || !standing) body.appendChild(details);
 
     if (!standing) {
       body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
@@ -702,6 +729,7 @@
       body.appendChild(notice('No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
     }
     body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
+    if (inApp()) body.appendChild(details);
     if (stale) return;
     body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel, freshOrder));
   }
@@ -759,7 +787,8 @@
   function redeemForm(ctx, cfg, addr, standing, allow, panel, freshOrder) {
     const { h, notice } = ctx;
     const app = inApp();
-    let busy = false;
+    const runKey = submissionKey(addr, Number(standing.week));
+    let busy = !!unconfirmedOrders.get(runKey);
     const progressOrder = freshOrder || [...standing.orders || [], ...standing.history || []].find((order) => order.pending);
     const progressSim = progressOrder && groupIntoSims(cfg, standing).find((group) => group.bundles.some((order) => order.transactionId === progressOrder.transactionId))?.sim;
     let progress = app ? orderProgress(ctx, progressOrder ? progressOrder.pending ? 2 : 3 : 0, progressOrder, progressSim) : null;
@@ -831,40 +860,89 @@
           (Number(p.gb) || 1) + ' GB · ' + (Number(p.days) || 7) + ' days — ' + fmtPrice(p.priceUsd)));
       }
       const preferred = here.find((p) => p.code === selectedPackageCode);
-      selectSize(preferred ? preferred.code : (here.length ? here[0].code : ''));
+      const attempt = unconfirmedOrders.get(runKey);
+      const code = attempt?.packageCode || (preferred ? preferred.code : (here.length ? here[0].code : ''));
+      if (busy) {
+        packageInput.value = code;
+        for (const control of sizes.children) { control.disabled = true; control.classList.toggle('active', control.dataset.code === code); }
+        paintButton();
+      } else selectSize(code);
     }
     placeSelect.addEventListener('change', paintSizes);
     const selected = packageByCode(cfg, selectedPackageCode);
-    if (selected) placeSelect.value = selected.slug;
+    const pendingPackage = packageByCode(cfg, unconfirmedOrders.get(runKey)?.packageCode);
+    if (pendingPackage || selected) placeSelect.value = (pendingPackage || selected).slug;
     paintSizes();
+    if (busy) { placeSelect.disabled = true; paintRecovery(); }
 
-    async function doRedeem() {
-      if (busy) return;
+    function paintRecovery(message = 'The order result is unconfirmed. Check the existing order before trying again.') {
+      clear(result);
+      setProgress(2, { unconfirmed: true });
+      if (progress) {
+        progress.dataset.phase = 'checking';
+        progress.querySelector('[data-step="issuing"] span:last-child').textContent = 'Check order';
+        progress.querySelector('.data-order-progress-note').textContent = 'Checking the existing order. No new purchase is being made.';
+      }
+      const status = h('p', { role: 'status' }, message);
+      const check = h('button', { type: 'button', class: 'btn btn-primary', onclick: async () => {
+        check.disabled = true;
+        try {
+          const fresh = await api('GET', './api/redeem?address=' + addr);
+          if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
+          if (String(fresh.address || '').toLowerCase() !== addr) throw new Error('The account response belongs to another wallet.');
+          const attempt = unconfirmedOrders.get(runKey);
+          if (attempt && submissionSeen(fresh, attempt)) {
+            unconfirmedOrders.delete(runKey);
+            repaintFrom(ctx, cfg, addr, allow, fresh, panel);
+            panel.querySelector('.data-reveal')?.focus();
+            return;
+          }
+          status.textContent = 'No accepted order is visible yet. Check again in a moment. A retry keeps the same package and order; your wallet will approve it again.';
+          const retry = h('button', { type: 'button', class: 'btn', onclick: () => doRedeem(true) }, 'Retry same order');
+          retry.disabled = !attempt || attempt.week !== weekOf(Math.floor(Date.now() / 1000));
+          result.querySelector('.data-recovery-actions').replaceChildren(check, retry);
+        } catch {
+          if (status.isConnected) status.textContent = 'The order status could not be checked. Keep this order and try the check again when your connection returns.';
+        } finally { if (check.isConnected) check.disabled = false; }
+      } }, 'Check existing order');
+      result.appendChild(h('div', { class: 'notice warn data-order-recovery' }, status,
+        h('div', { class: 'data-actions data-recovery-actions' }, check)));
+    }
+
+    async function doRedeem(retrySame = false) {
+      if (busy && !retrySame) return;
       const pkg = picked();
       if (!pkg) return;
+      const original = unconfirmedOrders.get(runKey);
+      if (retrySame && (!original || original.packageCode !== pkg.code || original.week !== weekOf(Math.floor(Date.now() / 1000)))) return;
       if (!walletAvailable()) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
       hint.textContent = ''; hint.classList.remove('err');
       busy = true;
       btn.disabled = true;
-      if (app) {
-        placeSelect.disabled = true;
-        for (const control of sizes.children) control.disabled = true;
-      }
+      placeSelect.disabled = true;
+      for (const control of sizes.children) control.disabled = true;
       clear(result);
       // n names the slot this redeem means to fill — the count of orders the panel was painted
       // from — so a picture that has gone stale is refused rather than risking two eSIMs for one
       // balance. It is settled before the signature because the signature names it: what the
       // holder approves in their wallet is this plan, in this slot, and nothing else.
-      const n = (standing.orders || []).length;
+      const n = retrySame ? original.n : (standing.orders || []).length;
+      let submitted = false;
       // A redemption always prompts — its signature is spent on this one order and never reused.
       result.appendChild(notice('Approve the order in your wallet — it names the plan and costs nothing to sign.', 'plain'));
       setProgress(1);
       try {
         const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n });
+        if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
         clear(result);
         setProgress(2);
         result.appendChild(notice('Ordering your eSIM… the pool pays our network partner over Lightning and waits for the profile; usually ten to twenty seconds.', 'plain'));
+        submitted = true;
+        unconfirmedOrders.set(runKey, { week: Number(standing.week), n, packageCode: pkg.code });
         const out = await api('POST', './api/redeem', { address: addr, message, signature, packageCode: pkg.code, n });
+        if (!out.order || out.order.packageCode !== pkg.code) throw new Error('The order response could not be confirmed.');
+        unconfirmedOrders.delete(runKey);
+        if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
         clear(result);
         // A preview of the eSIM this bundle just landed on — built the same way the repainted
         // panel below will build it, from `out.sims` (nadanada's fresher-than-`standing` picture) —
@@ -890,12 +968,17 @@
           repaintFrom(ctx, cfg, addr, allow, fallback, panel, out.order);
         }
       } catch (e) {
+        if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
         const msg = errText(e);
-        busy = false;
-        if (app) {
-          placeSelect.disabled = false;
-          for (const control of sizes.children) control.disabled = false;
+        if ((submitted && !e.requestDeclined) || (retrySame && !submitted)) {
+          busy = true;
+          paintRecovery(retrySame && !submitted ? 'The retry was not approved. The earlier order is still unconfirmed; check it before trying again.' : undefined);
+          return;
         }
+        unconfirmedOrders.delete(runKey);
+        busy = false;
+        placeSelect.disabled = false;
+        for (const control of sizes.children) control.disabled = false;
         setProgress(0);
         // A stale picture of the wallet's own orders is the one failure worth recovering from
         // without being asked twice: the panel is about to be rebuilt from scratch, so the message

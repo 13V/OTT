@@ -256,6 +256,10 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-live-account .dashboard-panel { width: 100%; padding: 20px; border-radius: 20px; }
 .om-live-account .data-qr { max-width: 180px; }
 .om-live-account code { overflow-wrap: anywhere; }
+.om-live-account .data-account-details { margin: 20px 0; border-block: 1px solid var(--om-line); }
+.om-live-account .data-account-details > summary { min-height: 48px; padding: 14px 0; font-weight: 600; cursor: pointer; }
+.om-live-account .data-account-details[open] { padding-bottom: 16px; }
+.om-live-account .data-order-recovery .data-actions { flex-wrap: wrap; margin-top: 14px; }
 .om-button, .om-small-button, .om-secondary-button, .om-install-button, .om-size-button, .om-platform-button, .om-step-progress button, .om-nav > a { transition: background-color 150ms ease,transform 150ms ease,box-shadow 150ms ease; }
 .om-button:active:not(:disabled), .om-size-button:active { transform: translateY(1px); }
 @media (hover: hover) {
