@@ -277,14 +277,20 @@
     const standing = await api('GET', './api/redeem?address=' + address.toLowerCase());
     if (String(standing.address || '').toLowerCase() !== address.toLowerCase()) throw new Error('The account response belongs to another wallet.');
     const nowWeek = weekOf(Math.floor(Date.now() / 1000));
-    const stale = standing.stale !== false || Number(standing.week) !== nowWeek || !(Number(standing.weekEnd) > Date.now() / 1000);
+    const stale = standing.stale !== false || Number(standing.week) !== nowWeek || !Number.isFinite(Number(standing.weekEnd))
+      || !(Number(standing.weekEnd) > Date.now() / 1000)
+      || (standing.allowancesWeek !== undefined && Number(standing.allowancesWeek) !== nowWeek);
     const amount = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
     return { address: standing.address, stale,
+      week: Number(standing.week),
       remainingUsd: stale ? null : amount(standing.remainingUsd),
       allocatedUsd: stale ? null : amount(standing.allowanceUsd),
       usedUsd: stale ? null : amount(standing.redeemedUsd),
       weekEnd: stale ? null : Number(standing.weekEnd),
-      orderCount: (standing.orders || []).length + (standing.history || []).length };
+      orderCount: (standing.orders || []).length + (standing.history || []).length,
+      sims: (Array.isArray(standing.sims) ? standing.sims : []).slice(0, 200).filter(sim => sim && typeof sim.slug === 'string')
+        .map(sim => ({ slug: sim.slug.slice(0, 80), iccid: typeof sim.iccid === 'string' ? sim.iccid.slice(0, 80) : '',
+          createdAt: typeof sim.createdAt === 'string' ? sim.createdAt.slice(0, 40) : null })) };
   }
 
   // ============================================================================ the page
@@ -861,7 +867,7 @@
       const info = plist.find((p) => p.slug === placeSelect.value);
       const name = info ? info.name : 'this place';
       placeNote.textContent = simSlugs.has(placeSelect.value)
-        ? 'Adds to your eSIM for ' + name + ' — nothing to install again.'
+        ? 'The provider will top up a compatible eSIM for ' + name + ' where possible, or issue a new eSIM.'
         : 'Issues a new eSIM for ' + name + ', ready to install.';
     }
     // Changing the place repaints the size row for that place and picks the smallest size, the
@@ -1230,6 +1236,8 @@
       androidInstallUrl ? h('a', { class: 'btn btn-sm', href: androidInstallUrl, target: '_blank', rel: 'noopener' }, 'Install on Android') : null,
     ].filter(Boolean);
     let setup = null;
+    const topup = inApp() && sim.slug && window.OTTMobileApp?.reviewDestination
+      ? h('button', { class: 'btn btn-sm data-topup', onclick: event => window.OTTMobileApp.reviewDestination(ctx, cfg, sim.slug, event.currentTarget) }, 'Review more data for ' + placeName) : null;
     const allBundlesPending = bundles.length > 0 && bundles.every((order) => order.pending);
     if (inApp() && !allBundlesPending && hasInstallDetails(sim) && typeof window.OTTMobileApp?.openSetup === 'function') {
       setup = h('button', { class: 'btn btn-primary data-setup', onclick: () => window.OTTMobileApp.openSetup(ctx, sim, setup, placeName) }, 'Set up this eSIM');
@@ -1240,6 +1248,7 @@
         h('span', { class: 'cc-sym' }, title),
         sim.iccid ? h('span', { class: 'small mono' }, 'ICCID ' + sim.iccid) : null),
       setup,
+      topup,
       qrSrc ? h('img', { class: 'data-qr', src: qrSrc, alt: 'eSIM QR code for ' + placeName, width: '180', height: '180' }) : null,
       install.length ? h('div', { class: 'data-install' }, install) : null,
       h('div', { class: 'data-ac-row' }, code, copy),

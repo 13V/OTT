@@ -13,6 +13,7 @@
     download: ['M12 3v12', 'm7 10 5 5 5-5', 'M4 16v5h16v-5'],
     check: ['m5 12 4 4L19 6'],
     close: ['m6 6 12 12', 'M6 18 18 6'],
+    bookmark: ['M6 3h12v18l-6-4-6 4z'],
   };
   let preview = false;
   let demoSpent = 5;
@@ -26,6 +27,41 @@
   const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
   const launched = cfg => cfg && ['coin', 'curve', 'treasury'].every(key => /^0x[0-9a-fA-F]{40}$/.test(cfg[key] || '') && !/^0x0{40}$/i.test(cfg[key]));
   const go = screen => { location.hash = screen === 'home' ? '#/app' : '#/app/' + screen; };
+
+  function holderAddress(ctx) {
+    const account = ctx.currentAccount();
+    if (ctx.accountChain?.() !== 'solana') return /^0x[0-9a-fA-F]{40}$/.test(account || '') ? account.toLowerCase() : null;
+    const login = window.OTTSolanaLogin?.state();
+    return login?.account.address === account ? login.linkedWallet?.address || null : null;
+  }
+  function confirmedBudget(state) {
+    return state && !state.stale && Number.isFinite(state.remainingUsd) && state.remainingUsd >= 0
+      && Number.isFinite(state.weekEnd) && state.weekEnd * 1000 > Date.now() ? state.remainingUsd : null;
+  }
+  function linkWalletDialog(h, ctx, source) {
+    let sheet;
+    const status = h('p', { class: 'om-inline-note', role: 'status', 'aria-live': 'polite' }, 'Ready when you are. Both approvals are needed.');
+    const start = async (transport, button) => {
+      const buttons = sheet.querySelectorAll('.om-link-start');
+      buttons.forEach(item => { item.disabled = true; });
+      try {
+        await window.OTTSolanaLogin.linkWallet({ transport, isCurrent: () => sheet.isConnected && ctx.isCurrent(),
+          progress: message => { if (status.isConnected) status.textContent = message; } });
+        ctx.toast('Wallets linked', 'Your Solana login can show the holder wallet’s existing credit.');
+      } catch (error) {
+        if (status.isConnected) status.textContent = error.message || 'Could not link wallets. Try again.';
+      } finally { buttons.forEach(item => { if (item.isConnected) item.disabled = false; }); }
+    };
+    const browser = action(h, 'Link with browser wallet', event => void start('injected', event.currentTarget), 'om-button om-link-start');
+    const mobile = window.OTTWallet?.state().remoteAvailable
+      ? action(h, 'Link with mobile wallet', event => void start('walletconnect', event.currentTarget), 'om-secondary-button om-link-start') : null;
+    sheet = dialog(h, 'Link your holder wallet', h('div', { class: 'om-guide-copy' },
+      h('p', {}, 'See your holder credit while signed in with Solana.'),
+      h('ol', { class: 'om-link-steps' }, h('li', {}, 'Approve the link in Phantom.'), h('li', {}, 'Approve the same link in your Robinhood Chain wallet.')),
+      h('p', { class: 'om-muted' }, 'These message approvals do not move funds.'), status, browser, mobile,
+      h('details', { class: 'om-link-details' }, h('summary', {}, 'What linking allows'),
+        h('p', {}, 'Link one Robinhood Chain wallet to this Solana account. A linked wallet keeps its existing allowance; linking creates no extra credit. Use the holder wallet itself to redeem packages or reveal private installation details.'))), source);
+  }
 
   function icon(name) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -82,6 +118,7 @@
       try {
         const account = await ctx.connect();
         if (account) { preview = false; if (ctx.isCurrent()) ctx.refresh(); }
+        return account;
       } catch (error) { ctx.toast('Could not connect', error.message || 'Try again in your wallet.', 'error'); }
       finally { if (source.isConnected) source.disabled = false; }
       return;
@@ -105,7 +142,7 @@
         h('p', {}, 'Open OTT in Phantom’s browser on your phone, or use the Phantom browser extension on desktop.'),
         h('p', {}, 'Approve the sign-in message to verify your wallet. Signing in does not move funds.'),
         h('a', { class: 'om-button', href: 'https://phantom.com/download', target: '_blank', rel: 'noopener noreferrer' }, 'Get Phantom'),
-        h('p', { class: 'om-muted' }, 'Holder credit currently requires a Robinhood Chain OTT wallet. Wallet linking is not available yet.')), source);
+        h('p', { class: 'om-muted' }, 'After signing in, link your Robinhood Chain holder wallet in Wallet settings to view its credit.')), source);
       return;
     }
     source.disabled = true;
@@ -119,6 +156,7 @@
     const account = ctx.currentAccount();
     const solana = ctx.accountChain?.() === 'solana';
     const verified = window.OTTSolanaLogin?.state()?.account.address === account;
+    const linked = verified && window.OTTSolanaLogin.state().linkedWallet;
     const copy = action(h, 'Copy address', async () => {
       try { await navigator.clipboard.writeText(account); copy.textContent = 'Address copied'; }
       catch { copy.textContent = 'Select the address above to copy it'; }
@@ -133,9 +171,22 @@
     sheet = dialog(h, 'Your wallet', h('div', { class: 'om-guide-copy' },
       h('p', { class: 'om-wallet-address' }, account),
       h('p', {}, solana ? (verified ? 'Signed in with Solana. ' : 'Your Solana wallet is connected. Approve a sign-in message to verify ownership. ')
-        + 'Holder credit currently requires a Robinhood Chain OTT wallet. Wallet linking is not available yet.'
+        + (linked ? 'Your linked holder wallet supplies the existing weekly credit shown in OTT.' : 'Link a Robinhood Chain holder wallet to view its existing credit.')
         : 'Your EVM wallet on Robinhood Chain is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
       h('div', { class: 'om-wallet-actions' }, copy, disconnect,
+        linked ? h('p', { class: 'om-wallet-address' }, 'Holder wallet: ' + linked.address) : null,
+        solana && verified && !linked ? action(h, 'Link holder wallet', event => { sheet.close(); linkWalletDialog(h, ctx, event.currentTarget); }, 'om-secondary-button') : null,
+        linked ? action(h, 'Unlink holder wallet', async event => {
+          const button = event.currentTarget; button.disabled = true;
+          try { await window.OTTSolanaLogin.unlinkWallet(); ctx.toast('Holder wallet unlinked', 'Its credit and eSIMs stay with that wallet.'); }
+          catch (error) { ctx.toast('Could not unlink', error.message, 'error'); if (button.isConnected) button.disabled = false; }
+        }, 'om-secondary-button') : null,
+        solana && verified ? action(h, 'Refresh link status', async event => {
+          const button = event.currentTarget; button.disabled = true;
+          try { await window.OTTSolanaLogin.refreshLink(); if (ctx.isCurrent()) { sheet.close(); ctx.refresh(); } }
+          catch (error) { ctx.toast('Could not refresh link', error.message, 'error'); }
+          finally { if (button.isConnected) button.disabled = false; }
+        }, 'om-secondary-button') : null,
         solana && !verified && !window.OTTSolanaLogin?.pending(account) ? action(h, 'Sign in with Solana', event => { sheet.close(); void solanaWallet(ctx, event.currentTarget); }, 'om-secondary-button') : null,
         action(h, solana ? 'Use Robinhood wallet' : 'Sign in with Solana', event => {
           sheet.close();
@@ -268,24 +319,52 @@
     const account = ctx.currentAccount();
     const solana = !!account && ctx.accountChain?.() === 'solana';
     const verified = solana && window.OTTSolanaLogin?.state()?.account.address === account;
+    const holder = holderAddress(ctx);
     const signing = solana && window.OTTSolanaLogin?.pending(account);
     const primary = preview ? action(h, ['Find a data plan', icon('arrow')], () => go('plans'))
-      : solana ? action(h, [signing ? 'Signing in…' : verified ? 'Browse plans' : 'Sign in with Solana', icon('arrow')], event => verified ? go('plans') : solanaWallet(ctx, event.currentTarget))
+      : solana ? action(h, [signing ? 'Signing in…' : verified ? holder ? 'Browse plans' : 'Link a holder wallet' : 'Sign in with Solana', icon('arrow')], event => verified ? holder ? go('plans') : linkWalletDialog(h, ctx, event.currentTarget) : solanaWallet(ctx, event.currentTarget))
       : active ? action(h, [account ? 'View My data' : 'Connect wallet', icon('arrow')], event => account ? go('esims') : wallet(ctx, event.currentTarget))
         : action(h, ['Try the app preview', icon('arrow')], () => enterPreview(ctx));
     primary.disabled = !!signing;
     const content = h('div', { class: 'om-pass-content' }, chip(h),
         h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : solana ? 'SOLANA ACCOUNT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
-          : solana && verified ? h('p', { class: 'om-balance' }, '$0.00')
+          : solana && verified && !holder ? h('h2', { class: 'om-pass-title' }, 'Link for holder credit.')
+          : solana && holder ? h('h2', { class: 'om-pass-title' }, active ? 'Reading your credit…' : 'Linked for launch.')
           : solana ? h('h2', { class: 'om-pass-title' }, 'Finish signing in.')
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.'
-          : solana ? verified ? 'Holder credit requires a Robinhood Chain OTT wallet. Wallet linking is not available yet.' : signing ? 'Finish approval in Phantom. OTT will verify your signature.' : 'Approve the sign-in message in Phantom to verify this account.'
+          : solana ? verified ? holder ? 'Existing credit from your linked Robinhood Chain holder wallet.' : 'Link a Robinhood Chain holder wallet in Wallet settings to view its credit.' : signing ? 'Finish approval in Phantom. OTT will verify your signature.' : 'Approve the sign-in message in Phantom to verify this account.'
             : active ? 'Check your weekly credit and eSIMs.' : 'Choose a plan and explore eSIM setup with a sample account.'),
         preview || solana || (active && account) ? h('div', { class: 'om-pass-action' }, primary) : null);
     const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : solana ? 'Solana account' : active ? 'Weekly credit' : 'App preview invitation', 'aria-live': 'polite' }, content);
-    const realAccount = !preview && !solana && active && account;
+    const realAccount = !preview && active && holder;
+    const shortcuts = h('section', { class: 'om-holder-shortcuts', 'aria-label': 'Plans for your account' });
+    function paintShortcuts(state) {
+      const budget = preview ? Math.max(0, 20 - demoSpent) : confirmedBudget(state);
+      const fits = budget === null ? [] : window.OTTHolderTools.fitPlans(cfg, budget);
+      const saved = window.OTTHolderTools.savedPlaces(cfg);
+      const seen = new Set();
+      const choices = [...fits.filter(pkg => saved.includes(pkg.slug)), ...fits].filter(pkg => {
+        if (seen.has(pkg.slug)) return false; seen.add(pkg.slug); return true;
+      }).slice(0, 3);
+      const sims = window.OTTHolderTools.publicSims(state?.sims, cfg);
+      shortcuts.replaceChildren(...[
+        budget !== null ? h('div', {}, h('h2', {}, preview ? 'Plans for your sample credit' : 'Plans within your credit'),
+          h('p', { class: 'om-muted' }, choices.length ? 'Start with a plan your ' + (preview ? 'sample' : 'confirmed') + ' balance can cover.' : 'No packages fit this balance. You can still browse all plans.'),
+          h('div', { class: 'om-shortcut-list' }, choices.map(pkg => action(h,
+            [countryFlag(h, pkg), h('span', {}, pkg.name, h('small', {}, pkg.gb + ' GB · ' + money(pkg.priceUsd))), icon('arrow')],
+            () => { selectedSlug = pkg.slug; selectedCode = pkg.code; go('plans'); }, 'om-shortcut-button')))) : null,
+        sims.length ? h('div', {}, h('h2', {}, 'Add data for a destination'),
+          h('p', { class: 'om-muted' }, 'Review a package for a place you’ve used before. The provider decides whether an existing eSIM can be topped up.'),
+          h('div', { class: 'om-shortcut-list' }, sims.map(sim => {
+            const pkg = cfg.packages.find(item => item.slug === sim.slug);
+            return action(h, [countryFlag(h, pkg), h('span', {}, pkg.name), icon('arrow')], () => {
+              selectedSlug = sim.slug; selectedCode = ''; go('plans');
+            }, 'om-shortcut-button');
+          }))) : null].filter(Boolean));
+    }
+    if (preview) paintShortcuts(null);
     if (realAccount) {
       credit.setAttribute('aria-busy', 'true');
       content.querySelector('.om-pass-title').textContent = 'Reading your credit…';
@@ -293,15 +372,16 @@
       primary.textContent = 'View My data';
       const update = async () => {
         let state = null;
-        try { state = await window.WhateverData.loadAccount(account); } catch { /* Live financial data never falls back to a cached sample. */ }
-        if (!ctx.isCurrent() || !credit.isConnected || ctx.currentAccount()?.toLowerCase() !== account.toLowerCase()) return;
+        try { state = await window.WhateverData.loadAccount(holder); } catch { /* Live financial data never falls back to a cached sample. */ }
+        if (!ctx.isCurrent() || !credit.isConnected || holderAddress(ctx) !== holder) return;
+        paintShortcuts(state);
         credit.setAttribute('aria-busy', 'false');
         const title = content.querySelector('.om-pass-title, .om-balance');
         const note = content.querySelector('.om-pass-note');
         if (!state || (!state.stale && state.remainingUsd === null)) {
           title.className = 'om-pass-title'; title.textContent = 'Credit unavailable';
           note.textContent = 'We couldn’t load your current balance. Go online and try again.';
-        } else if (state.stale) {
+        } else if (state.stale || confirmedBudget(state) === null) {
           title.className = 'om-pass-title'; title.textContent = 'Awaiting allocation';
           note.textContent = 'This week’s credit hasn’t been published yet. Check back after the weekly update.';
         } else {
@@ -355,7 +435,7 @@
             event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button'),
           !account ? action(h, 'Sign in with Solana', event => solanaWallet(ctx, event.currentTarget), 'om-text-button') : null)) : null,
         realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
-        h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))));
+        h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))), shortcuts);
     return result;
   }
 
@@ -373,10 +453,24 @@
       sheet.close(); go('esims');
     });
     addPreview.disabled = pkg.priceUsd > 20 - demoSpent;
-    const continueLive = action(h, 'Continue in My data', () => {
+    const continueLive = action(h, 'Continue to eSIMs', () => {
       window.WhateverData.selectPackage(pkg.code);
-      sheet.close(); go('esims');
+      sheet.close();
+      if (location.hash === '#/app/esims' && ctx.isCurrent()) ctx.refresh();
+      else go('esims');
     });
+    const switchHolder = async event => {
+      const expected = holderAddress(ctx), source = event.currentTarget;
+      window.WhateverData.selectPackage(pkg.code);
+      sheet.close();
+      const connected = await wallet(ctx, source);
+      if (!connected || window.OTTWallet?.state().chain !== 'evm') return;
+      if (expected && connected.toLowerCase() !== expected) {
+        ctx.toast('Choose your linked holder wallet', 'Switch to ' + expected.slice(0, 6) + '…' + expected.slice(-4) + ' to use its credit.');
+        return;
+      }
+      go('esims');
+    };
     const content = h('div', { class: 'om-guide-copy' },
       h('div', { class: 'om-review-size' }, h('strong', {}, pkg.gb + ' GB'), h('span', {}, pkg.days + ' days')),
       h('dl', { class: 'om-detail-list' },
@@ -385,12 +479,13 @@
       h('p', {}, 'Check that your phone supports eSIMs and is unlocked before redeeming. You’ll need an internet connection for setup.'),
       action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-review-device-check'),
       preview ? h('div', { class: 'om-inline-note' }, 'Preview only. Adding this package changes the sample account. It does not issue an eSIM or request a wallet signature.')
-        : solana ? h('div', { class: 'om-inline-note' }, 'Holder credit requires a Robinhood Chain OTT wallet. Solana wallet linking is not available yet.')
+        : solana ? h('div', { class: 'om-inline-note' }, holderAddress(ctx) ? 'This linked holder wallet owns the credit. Switch to that Robinhood Chain wallet to approve a redemption.' : 'Link your Robinhood Chain holder wallet in Wallet settings to view its credit. Redemptions require that holder wallet’s approval.')
           : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Weekly credit and redemption are not available yet.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
-      preview ? addPreview : solana ? action(h, 'Use Robinhood wallet', event => { sheet.close(); void wallet(ctx, event.currentTarget); })
+      preview ? addPreview : solana ? action(h, 'Use Robinhood wallet', event => void switchHolder(event))
         : launched(cfg) ? continueLive : action(h, 'See the setup guide', () => { sheet.close(); go('help'); }),
       preview && addPreview.disabled ? h('p', { class: 'om-form-message' }, 'This sample account needs more credit for that package. Choose a smaller plan or restart the preview.') : null,
       h('p', { class: 'om-muted' }, 'Package validity and the weekly credit reset follow separate rules. The activation window depends on the provider.'));
+    content.appendChild(h('p', { class: 'om-muted' }, 'If you already have an eSIM for this destination, the provider will top it up when compatible. Otherwise, it may issue a new eSIM with new installation details.'));
     sheet = dialog(h, pkg.name + ' data plan', content, source);
   }
 
@@ -400,19 +495,60 @@
     if (!places.some(place => place.slug === selectedSlug)) selectedSlug = places[0]?.slug || '';
     const feature = h('section', { class: 'om-plan-feature', 'aria-label': 'Choose coverage' });
     const options = h('section', { class: 'om-plan-options', 'aria-label': 'Choose a data package' });
+    const holder = !preview && launched(cfg) && holderAddress(ctx);
+    let budget = preview ? Math.max(0, 20 - demoSpent) : null;
+    let budgetEnd = Infinity;
+    const budgetNote = h('p', { class: 'om-plan-budget', role: 'status' }, preview ? 'Sample credit: ' + money(budget) : 'Browse every package. Confirmed holder credit is required to filter by balance.');
+    const fit = h('input', { type: 'checkbox', id: 'om-fits-credit' });
+    fit.disabled = budget === null;
+    fit.addEventListener('change', () => paintPackages());
+    const filters = h('div', { class: 'om-plan-filters' + (!preview && !holder ? ' is-inactive' : '') }, budgetNote,
+      h('label', { for: 'om-fits-credit' }, fit, preview ? 'Fits my sample credit' : 'Fits my credit'));
+    if (!preview && !launched(cfg)) filters.hidden = true;
     const coverage = action(h, '', event => chooseCoverage(event.currentTarget), 'om-coverage-button');
     coverage.setAttribute('aria-haspopup', 'dialog');
 
     function paintPackages(focusCode) {
-      const packages = cfg.packages.filter(pkg => pkg.slug === selectedSlug).sort((a, b) => a.gb - b.gb);
-      if (!packages.length) return;
+      if (budget !== null && budgetEnd <= Date.now()) { budget = null; fit.checked = false; fit.disabled = true; budgetNote.textContent = 'Credit has expired. Refresh your account for the new allocation.'; }
+      const allPackages = cfg.packages.filter(pkg => pkg.slug === selectedSlug).sort((a, b) => a.gb - b.gb);
+      const packages = fit.checked && budget !== null ? window.OTTHolderTools.fitPlans(cfg, budget, selectedSlug) : allPackages;
+      const place = allPackages[0];
+      if (!place) return;
+      const saved = window.OTTHolderTools.savedPlaces(cfg);
+      const save = action(h, [icon('bookmark'), saved.includes(selectedSlug) ? 'Saved' : 'Save'], () => {
+        try {
+          const result = window.OTTHolderTools.toggleSaved(cfg, selectedSlug);
+          if (!result.persisted) ctx.toast('Saved for this visit', 'Browser storage is unavailable.');
+        } catch (error) { ctx.toast('Could not save destination', error.message); }
+        paintPackages();
+        feature.querySelector('.om-save-destination')?.focus();
+      }, 'om-secondary-button om-save-destination');
+      save.setAttribute('aria-label', saved.includes(selectedSlug) ? 'Remove saved destination' : 'Save destination');
+      save.setAttribute('aria-pressed', String(saved.includes(selectedSlug)));
+      coverage.replaceChildren(countryFlag(h, place), h('span', { class: 'om-coverage-name' }, place.name),
+        h('span', { class: 'om-coverage-chevron', 'aria-hidden': 'true' }, '⌄'));
+      coverage.setAttribute('aria-label', 'Choose coverage. ' + place.name);
+      feature.replaceChildren(...[h('div', { class: 'om-coverage-heading' }, coverage, save), saved.length ? h('div', { class: 'om-saved-places', role: 'group', 'aria-label': 'Saved destinations' },
+        saved.map(slug => {
+          const destination = places.find(item => item.slug === slug);
+          const button = action(h, destination.name, () => {
+            selectedSlug = slug; selectedCode = ''; paintPackages();
+            feature.querySelector('.om-saved-place[aria-pressed="true"]')?.focus();
+          }, 'om-saved-place');
+          button.setAttribute('aria-pressed', String(slug === selectedSlug)); return button;
+        })) : null].filter(Boolean));
+      illustration.replaceChildren(world(h, place.slug === 'japan' ? 'japan' : place.slug === 'united-states' ? 'home' : 'travel', 'plans'));
+      if (!packages.length) {
+        budgetNote.hidden = false;
+        options.replaceChildren(filters, h('div', { class: 'om-empty-plans' }, h('h2', {}, 'No packages fit this balance.'),
+          h('p', {}, 'Choose another destination or view every package.'), action(h, 'Browse all packages', () => { fit.checked = false; paintPackages(); }, 'om-secondary-button')));
+        return;
+      }
       if (!packages.some(pkg => pkg.code === selectedCode)) selectedCode = (packages.find(pkg => pkg.gb === 5) || packages[0]).code;
       const pkg = packages.find(item => item.code === selectedCode);
-      coverage.replaceChildren(countryFlag(h, pkg), h('span', { class: 'om-coverage-name' }, pkg.name),
-        h('span', { class: 'om-coverage-chevron', 'aria-hidden': 'true' }, '⌄'));
-      coverage.setAttribute('aria-label', 'Choose coverage. ' + pkg.name);
-      feature.replaceChildren(coverage);
-      illustration.replaceChildren(world(h, pkg.slug === 'japan' ? 'japan' : pkg.slug === 'united-states' ? 'home' : 'travel', 'plans'));
+      const budgetLabel = budget !== null ? h('p', { class: 'om-package-budget' },
+        preview ? 'Sample credit ' : 'Your remaining credit ', h('strong', {}, money(budget))) : null;
+      budgetNote.hidden = budget !== null;
       const sizes = h('div', { class: 'om-package-sizes', role: 'group', 'aria-label': 'Package size' }, packages.map(item => {
         const button = action(h, [h('strong', {}, item.gb + ' GB'), h('span', {}, item.days + ' days'),
           h('span', { class: 'om-option-price' }, h('span', {}, money(item.priceUsd)), ' ', h('span', {}, 'data credit'))], () => { selectedCode = item.code; paintPackages(item.code); },
@@ -422,15 +558,15 @@
         button.dataset.packageCode = item.code;
         return button;
       }));
-      options.replaceChildren(sizes,
+      options.replaceChildren(...[filters, budgetLabel, sizes,
         h('article', { class: 'om-selected-package om-data-pass', 'aria-label': pkg.name + ' selected package' },
           h('div', { class: 'om-pass-content' }, chip(h), h('span', { class: 'om-kicker' }, pkg.name),
             h('h2', { class: 'om-package-amount' }, pkg.gb + ' GB'),
             h('p', { class: 'om-package-days' }, pkg.days + ' days'),
             h('p', { class: 'om-package-price' }, money(pkg.priceUsd), h('small', {}, ' data credit')),
-            h('p', { class: 'om-pass-note' }, preview ? 'Sample package' : !launched(cfg) ? 'Catalogue preview' : 'Available package'),
+            preview ? null : h('p', { class: 'om-pass-note' }, !launched(cfg) ? 'Catalogue preview' : 'Available package'),
             action(h, ['Review package', icon('arrow')], event => reviewPackage(h, ctx, cfg, pkg, event.currentTarget), 'om-button om-package-review'))),
-        h('p', { class: 'om-plan-disclaimer' }, 'Use data credit for this package. Package validity is separate from the weekly credit reset.'));
+        h('p', { class: 'om-plan-disclaimer' }, 'Use data credit for this package. Package validity is separate from the weekly credit reset.')].filter(Boolean));
       if (focusCode) [...sizes.querySelectorAll('button')].find(button => button.dataset.packageCode === focusCode)?.focus();
     }
 
@@ -460,6 +596,17 @@
     }
     const illustration = h('div', { class: 'om-plan-illustration' });
     paintPackages();
+    if (holder) queueMicrotask(async () => {
+      let state = null;
+      try { state = await window.WhateverData.loadAccount(holder); } catch { /* No estimate replaces unavailable credit. */ }
+      if (!ctx.isCurrent() || !options.isConnected || holderAddress(ctx) !== holder) return;
+      budget = confirmedBudget(state);
+      budgetEnd = budget === null ? Infinity : state.weekEnd * 1000;
+      fit.disabled = budget === null;
+      budgetNote.textContent = budget === null ? 'Current credit is unavailable. Browse all packages or refresh your account.' : 'Confirmed remaining credit: ' + money(budget);
+      if (budget === null) fit.checked = false;
+      paintPackages();
+    });
     return h('div', { class: 'om-plans-grid' }, feature, options, illustration);
   }
 
@@ -486,9 +633,11 @@
           action(h, 'Find another plan', () => go('plans'), 'om-text-button')), world(h, 'kit'));
     }
     if (ctx.accountChain?.() === 'solana') {
+      const holder = holderAddress(ctx);
       return h('div', { class: 'om-kit-layout' }, h('section', { class: 'om-panel' },
         h('h2', {}, 'Your Solana account'),
-        h('p', {}, 'There are no eSIMs or holder credits linked to this Solana account. Holder redemption currently requires a Robinhood Chain OTT wallet.'),
+        h('p', {}, holder ? 'Your linked holder wallet supplies your credit. Use that Robinhood Chain wallet to approve a redemption or reveal private eSIM installation details.' : 'There are no eSIMs or holder credits linked to this Solana account. Link your Robinhood Chain holder wallet in Wallet settings to view its credit.'),
+        holder ? action(h, 'Use Robinhood wallet', event => void wallet(ctx, event.currentTarget)) : null,
         h('a', { class: 'om-button', href: '#/app/plans' }, 'Browse plans'),
         action(h, 'Wallet settings', event => walletSettings(h, ctx, event.currentTarget), 'om-secondary-button')), world(h, 'kit'));
     }
@@ -560,7 +709,7 @@
         h('details', {}, h('summary', {}, 'Can I set it up on the same phone?'), h('p', {}, 'Use the provider’s installation link if one is available. Otherwise, use manual details or display the QR on another screen. Supported iPhones can also add an eSIM from a QR shown in Safari.')),
         h('details', {}, h('summary', {}, 'Does weekly credit become cash?'), h('p', {}, 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.')),
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
-        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home for an EVM wallet on Robinhood Chain, or Sign in with Solana for Phantom. Solana sign-in requests a message signature to verify ownership and does not move funds. Open OTT in Phantom’s browser on mobile or use its desktop extension. Solana accounts do not yet receive holder credit; wallet linking is not available. You can disconnect in Wallet settings. EVM mobile wallets can also connect through WalletConnect when enabled.')),
+        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home for an EVM wallet on Robinhood Chain, or Sign in with Solana for Phantom. Sign-in verifies ownership without moving funds. After signing in with Solana, use Wallet settings to link one holder wallet with a fresh approval from both wallets. You can then view that wallet’s existing credit; linking creates no extra allowance. Redemptions and installation details still require approval from the holder wallet. You can unlink or disconnect in Wallet settings. EVM mobile wallets can connect through WalletConnect when enabled.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
   }
 
@@ -683,6 +832,14 @@
 
   window.OTTMobileApp = {
     render, openSetup,
+    reviewDestination(ctx, cfg, slug, source) {
+      if (!ctx.isCurrent() || !source.isConnected) return;
+      const packages = cfg.packages.filter(pkg => pkg.slug === slug).sort((a, b) => a.priceUsd - b.priceUsd);
+      const pkg = packages[0];
+      if (!pkg) return;
+      selectedSlug = slug; selectedCode = pkg.code;
+      reviewPackage(ctx.h, ctx, cfg, pkg, source);
+    },
     dispose: () => document.querySelectorAll('.om-dialog').forEach(sheet => { sheet.close(); sheet.remove(); }),
   };
 })();
