@@ -15,6 +15,7 @@
   let transport = null;
   let accounts = [];
   let generation = 0;
+  let accountRevision = 0;
   let lifecycle = 0;
   let bindings = [];
   let loadingSdk = null;
@@ -52,6 +53,7 @@
   }
   function clearCurrent(reason) {
     generation++;
+    accountRevision++;
     lifecycle++;
     detach();
     provider = null;
@@ -72,6 +74,7 @@
     listen('accountsChanged', (value) => {
       if (provider !== source) return;
       generation++;
+      accountRevision++;
       accounts = normalize(value);
       if (!accounts.length) {
         remember('disconnected');
@@ -105,6 +108,7 @@
         .flatMap(([, namespace]) => namespace.accounts || []).map((account) => typeof account === 'string' ? account.split(':').pop() : null));
       const retained = accounts.filter((account) => approved.some((a) => a.toLowerCase() === account.toLowerCase()));
       generation++;
+      accountRevision++;
       accounts = retained;
       // Even unchanged accounts may have lost signing permissions. Invalidate
       // private reads and let the next user action check the updated session.
@@ -198,11 +202,18 @@
       // Bind before the prompt so that revocations during connection clear state.
       bind(source, kind);
       const op = lifecycle;
+      const openingAccounts = accountRevision;
       try {
         const result = kind === 'injected' ? await source.request({ method: 'eth_requestAccounts' }) : await source.connect();
         if (provider !== source || op !== lifecycle) throw failure('Wallet connection changed. Please connect again.', 4900);
         const next = normalize(kind === 'injected' ? result : source.accounts);
         if (!next.length) throw failure('The wallet did not share an account.', 4900);
+        // Sharing the requested account may emit accountsChanged normally. A
+        // different event-selected account must not be overwritten by an older
+        // approval result. Network events alone do not change this selection.
+        if (accountRevision !== openingAccounts && accounts.join(',').toLowerCase() !== next.join(',').toLowerCase()) {
+          throw failure('Your wallet changed while connecting. Check the connected account and try again.', 4900);
+        }
         accounts = next;
         remember(kind);
         return accounts.slice();

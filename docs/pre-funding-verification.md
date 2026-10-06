@@ -187,6 +187,10 @@ Follow [the operator guide](operator-phone-test.md). Keep public
 
 ## Remaining before public launch
 
+The [customer account audit](customer-account-audit.md) records the live visitor
+walkthrough, cryptographically signed local API journey, account-race fixes,
+body limits, signature timing and remaining real-wallet verification.
+
 Token, curve and treasury addresses are still blank. The allocation code remains
 proportional to eligible holdings. The proposed $50 entry allowance and 40 GB
 weekly maximum are not implemented or validated. They must not be advertised as

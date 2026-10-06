@@ -213,13 +213,23 @@
     Number(order.n) === attempt.n && Number(order.week) === attempt.week);
   const readIsFresh = (addr) => !!(lastRead && lastRead.addr === addr && Date.now() - lastRead.at < SIGNIN_REUSE_MS);
   const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
-  async function signIn(addr, want) {
+  async function signIn(addr, want, ctx) {
     // Validate the backend destination before asking the holder to sign anything.
     window.OTTClientConfig?.apiUrl('./api/redeem');
+    const generation = walletGeneration;
     await window.OTTEnsureChain?.();
+    if (generation !== walletGeneration) {
+      // Switching networks refreshes the account and removes old private data.
+      // Ask for a deliberate action on that refreshed screen before signing.
+      const selected = window.OTTWallet?.state?.().accounts[0];
+      if (ctx?.currentAccount?.()?.toLowerCase() === addr.toLowerCase()
+        && (!window.OTTWallet || selected?.toLowerCase() === addr.toLowerCase())) {
+        ctx.toast?.('Wallet connection updated', 'Review your refreshed account and try your action again.');
+      }
+      throw new Error('Your wallet connection changed. Review your refreshed account and try again.');
+    }
     const w = want || { action: 'read' };
     if (w.action === 'read' && readIsFresh(addr)) return { message: lastRead.message, signature: lastRead.signature };
-    const generation = walletGeneration;
     const message = signInMessage(addr, w);
     const signature = await (window.OTTWallet || window.ethereum).request({ method: 'personal_sign', params: [hexOfUtf8(message), addr] });
     if (generation !== walletGeneration) throw new Error('Your wallet changed while confirming. Reconnect and try again.');
@@ -932,7 +942,7 @@
       result.appendChild(notice('Approve the order in your wallet — it names the plan and costs nothing to sign.', 'plain'));
       setProgress(1);
       try {
-        const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n });
+        const { message, signature } = await signIn(addr, { action: 'redeem', packageCode: pkg.code, n }, ctx);
         if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
         clear(result);
         setProgress(2);
@@ -1059,7 +1069,7 @@
       btn.disabled = true;
       hint.textContent = ''; hint.classList.remove('err');
       try {
-        const { message, signature } = await signIn(addr);
+        const { message, signature } = await signIn(addr, undefined, ctx);
         const out = await api('POST', './api/redeem', { address: addr, message, signature });
         const fresh = groupIntoSims(cfg, out);
         clear(cards);

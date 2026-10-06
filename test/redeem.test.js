@@ -263,6 +263,30 @@ async function main() {
   check('an oversized streamed body is 400, not a throw', r.status, 400);
   checkThat('and the connection is closed, so a reused socket is never handed a corrupted stream', r.headers.connection === 'close', JSON.stringify(r.headers));
 
+  console.log('\nall hosted request body shapes enforce the same byte limit');
+  const bodyLimit = 16 * 1024;
+  const exactBody = { ...signed(RICH, null), padding: '' };
+  exactBody.padding = 'A'.repeat(bodyLimit - Buffer.byteLength(JSON.stringify(exactBody), 'utf8'));
+  for (const [label, rawBody] of [['parsed object', exactBody], ['JSON string', JSON.stringify(exactBody)]]) {
+    r = await call(redeem, { method: 'POST', url: '/api/redeem', rawBody });
+    check('a valid signed read at the byte limit works as a ' + label, r.status, 200);
+  }
+  const oversizedBody = { ...exactBody, padding: exactBody.padding + 'A' };
+  const utf8Body = { ...signed(RICH, null), padding: 'ü'.repeat(8500) };
+  checkThat('the multibyte fixture fits by character count but exceeds the byte limit', JSON.stringify(utf8Body).length < bodyLimit && Buffer.byteLength(JSON.stringify(utf8Body), 'utf8') > bodyLimit);
+  const recoverBeforeBodyLimits = eip191.recoverAddress;
+  let oversizedVerificationCalls = 0;
+  eip191.recoverAddress = (...args) => { oversizedVerificationCalls++; return recoverBeforeBodyLimits(...args); };
+  try {
+    for (const [label, oversized] of [['one byte over', oversizedBody], ['multibyte', utf8Body]]) {
+      for (const [shape, rawBody] of [['parsed object', oversized], ['JSON string', JSON.stringify(oversized)]]) {
+        r = await call(redeem, { method: 'POST', url: '/api/redeem', rawBody });
+        check('a ' + label + ' signed ' + shape + ' is refused', [r.status, r.body.ok], [400, false]);
+      }
+    }
+    check('oversized hosted bodies reach no signature verification', oversizedVerificationCalls, 0);
+  } finally { eip191.recoverAddress = recoverBeforeBodyLimits; }
+
   console.log('\nwho may redeem');
   r = await POST(signed(RICH, 'EU-35_1_7', { signature: '0x' + 'ab'.repeat(65) }));
   check('a garbage signature is 401', r.status, 401);
@@ -273,6 +297,33 @@ async function main() {
   checkThat('and says so', /expired|again/i.test(r.body.error), r.body.error);
   r = await POST(signed(RICH, 'EU-35_1_7', { ts: now() + 11 * 60 }));
   check('a sign-in from the future is 401 too', r.status, 401);
+
+  console.log('\nsign-in tolerates brief clock skew without extending its age limit');
+  const clockBeforeSkew = Date.now;
+  const skewNow = Math.floor(clockBeforeSkew() / 1000);
+  Date.now = () => skewNow * 1000;
+  try {
+    const skewedRead = signed(RICH, null, { ts: skewNow + 30 });
+    r = await POST(skewedRead);
+    check('a read exactly 30 seconds ahead is accepted', r.status, 200);
+    r = await POST(signed(RICH, null, { ts: skewNow + 31 }));
+    check('a read 31 seconds ahead is refused', r.status, 401);
+    r = await POST(signed(RICH, null, { ts: skewNow + 600 }));
+    check('a read ten minutes ahead cannot start a long replay window', r.status, 401);
+    r = await POST(signed(RICH, null, { ts: skewNow - 600 }));
+    check('a read exactly ten minutes old is accepted', r.status, 200);
+    r = await POST(signed(RICH, null, { ts: skewNow - 601 }));
+    check('a read older than ten minutes is refused', r.status, 401);
+    Date.now = () => (skewNow + 630) * 1000;
+    r = await POST(skewedRead);
+    check('the allowed skewed read can be replayed only through its ten-minute age limit', r.status, 200);
+    Date.now = () => (skewNow + 631) * 1000;
+    r = await POST(skewedRead);
+    check('the same skewed signature expires immediately after that limit', r.status, 401);
+    Date.now = () => (skewNow + 1199) * 1000;
+    r = await POST(skewedRead);
+    check('a skewed read has no near-twenty-minute replay lifetime', r.status, 401);
+  } finally { Date.now = clockBeforeSkew; redeem._resetCaches(); }
   // Each accepted POST below spends $0.62 of RICH's $5.30, so the ledger is wiped between them.
   r = await POST(signed(RICH, 'EU-35_1_7', { ts: now() - 9 * 60 }));
   check('nine minutes old is still fine', r.status, 200);

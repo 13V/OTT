@@ -74,6 +74,8 @@ const { redactError, orderSecrets } = require('./_lib/redact');
 
 const MESSAGE_HEAD = 'OT+T';
 const SIGNIN_WINDOW_S = 10 * 60;
+// Allow brief client clock drift without giving a future timestamp another ten minutes.
+const SIGNIN_FUTURE_SKEW_S = 30;
 const MAX_ORDERS = 200;
 const HISTORY_WEEKS = 3;
 const FETCH_TIMEOUT_MS = 5000;
@@ -329,7 +331,8 @@ function checkMessage(message, address, nowS, want) {
   }
   const issued = field('Issued');
   if (!/^\d{1,12}$/.test(String(issued))) return 'sign-in message has no timestamp';
-  if (Math.abs(Number(issued) - nowS) > SIGNIN_WINDOW_S) return 'sign-in expired, sign again';
+  const age = nowS - Number(issued);
+  if (age > SIGNIN_WINDOW_S || age < -SIGNIN_FUTURE_SKEW_S) return 'sign-in expired, sign again';
   // The slot restarts at zero each Monday. A signature from the last ten minutes of the old
   // week must not mint that slot again in the new one; the authenticated timestamp binds it.
   if (want.action === 'redeem' && weekOf(Number(issued)) !== weekOf(nowS)) return 'redemption was signed for another week; sign again';
@@ -338,15 +341,20 @@ function checkMessage(message, address, nowS, want) {
 
 /** req.body is an object on Vercel (when the content-type said JSON), a string on some hosts, and absent on bare Node. */
 async function readBody(req) {
+  const checkSize = (size) => {
+    if (size > MAX_BODY_BYTES) { const e = new Error('body too large'); e.tooLarge = true; throw e; }
+  };
   if (req.body !== undefined && req.body !== null) {
-    if (typeof req.body === 'object') return req.body;
-    return JSON.parse(String(req.body));
+    const parsed = typeof req.body === 'object';
+    const text = parsed ? JSON.stringify(req.body) : String(req.body);
+    checkSize(Buffer.byteLength(text, 'utf8'));
+    return parsed ? req.body : JSON.parse(text);
   }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) { const e = new Error('body too large'); e.tooLarge = true; throw e; }
+    checkSize(size);
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString('utf8');
@@ -484,8 +492,8 @@ module.exports = async (req, res) => {
 
     let body;
     try { body = await readBody(req); } catch (e) {
-      // An oversized body means the request stream was abandoned mid-read (see readBody() above):
-      // the socket must not be offered back for HTTP/1.1 keep-alive, or whatever request happens
+      // An oversized streamed body is abandoned mid-read (see readBody() above), so close the
+      // socket rather than offer it back for HTTP/1.1 keep-alive, or whatever request happens
       // to reuse the connection next can be answered out of a corrupted stream (observed directly
       // as an ECONNRESET, or as several seconds' stall while a client's pool waits on it).
       if (e && e.tooLarge) res.setHeader('connection', 'close');
