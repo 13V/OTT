@@ -139,6 +139,24 @@ module.exports = {
     return { sats, usd: Math.round(usd * 100) / 100, usdPerSat: rate };
   },
 
+  /** Read-only default-account BTC evidence. null means no BTC wallet, not an empty one.
+   * Kept separate from balance(), whose shared report also supports USD-only accounts.
+   * Dollar value here is BTC only; no wallet identifier is returned to readiness reports.
+   */
+  async btcBalance() {
+    const d = await gql('query { me { defaultAccount { wallets { id walletCurrency balance } } } }');
+    const wallets = walletsOf(d).filter(wallet => wallet?.walletCurrency === 'BTC');
+    if (!wallets.length) return null;
+    const btc = wallets[0], sats = Number(btc.balance);
+    if (wallets.length !== 1 || typeof btc.id !== 'string' || !btc.id.trim() ||
+        !['number', 'string'].includes(typeof btc.balance) ||
+        (typeof btc.balance === 'string' && !/^(0|[1-9][0-9]*)$/.test(btc.balance)) ||
+        !Number.isSafeInteger(sats) || sats < 0) throw new Error('Blink BTC wallet balance is unavailable');
+    const rate = await usdPerSat();
+    if (!Number.isFinite(rate) || rate <= 0) throw new Error('Blink BTC price is unavailable');
+    return { sats, usd: Math.round(sats * rate * 100) / 100, usdPerSat: rate, walletCurrency: 'BTC' };
+  },
+
   /** An invoice on our BTC wallet, for the funding leg to pay into. */
   async invoice({ sats, memo, expiresInMinutes = 120 }) {
     const input = { walletId: await walletId(), amount: Math.round(Number(sats)), expiresIn: expiresInMinutes };

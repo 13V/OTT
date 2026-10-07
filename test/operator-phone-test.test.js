@@ -21,6 +21,7 @@ const rec = { transactionId: 'operator-' + options.runId, packageCode: p.sku, sl
 const issued = { ...rec, step: 'done', pending: false, iccid: '8944000000000000001', ac: 'LPA:1$rsp.example.com$test-code',
   smdpAddress: 'rsp.example.com', matchingId: 'test-code', completedAt: new Date().toISOString() };
 const payer = { usdPerSat: async () => 0.001, balance: async () => ({ sats: 3000, usdPerSat: 0.001 }),
+  btcBalance: async () => ({ walletCurrency: 'BTC', sats: 3000, usdPerSat: 0.001 }),
   feeProbe: async () => ({ feeSats: 10 }) };
 let checks = 0;
 function check(name, fn) { fn(); checks++; console.log('ok ' + name); }
@@ -290,7 +291,7 @@ async function main() {
     const noAction = () => { throw new Error('unexpected payment or checkout'); };
     const report = await runTest({ ...options, purchase: false, preflight: true }, { store: readonly,
       catalogueLookup: async () => ({ sku: p.sku, priceUsd: 1.99 }), order: noAction,
-      payer: { ...payer, balance: async () => ({ sats: 0, usdPerSat: 0.001 }), pay: noAction, invoice: noAction, feeProbe: noAction } });
+      payer: { ...payer, btcBalance: async () => ({ walletCurrency: 'BTC', sats: 0, usdPerSat: 0.001 }), pay: noAction, invoice: noAction, feeProbe: noAction } });
     assert.equal(report.mode, 'preflight'); assert.equal(report.wallet.status, 'needs-funding');
     assert.equal(report.storage, 'read-access-verified'); assert.equal(report.paymentTested, false);
     assert.equal(report.readiness.status, 'installation-ready'); assert.equal(report.readiness.paymentReady, false);
@@ -304,9 +305,61 @@ async function main() {
     assert.equal(report.readiness.status, 'setup-required'); assert.equal(report.readiness.readOnlyPrerequisitesPassed, false);
     assert.equal(report.readiness.requiredActions.length, 2);
   });
+  await checkAsync('preflight requires explicit BTC evidence instead of falling back to a zero generic balance', async () => {
+    let genericReads = 0;
+    const unverified = { ...payer, btcBalance: undefined, balance: async () => { genericReads++; return { sats: 0, usdPerSat: 0.001 }; } };
+    await assert.rejects(runTest({ ...options, purchase: false, preflight: true }, {
+      store: { get: async () => null }, catalogueLookup: async () => ({}), payer: unverified }), /Explicit BTC wallet/);
+    assert.equal(genericReads, 0);
+    await assert.rejects(runTest({ ...options, purchase: false, preflight: true }, {
+      store: { get: async () => null }, catalogueLookup: async () => ({}),
+      payer: { ...payer, btcBalance: async () => ({ sats: 0, usdPerSat: 0.001 }) } }), /BTC balance or price/);
+  });
+  await checkAsync('actual Blink adapter refuses funding readiness for a USD-only account without mutations', async () => {
+    const blink = require('../site/api/_lib/payers/blink'), fake = await require('./support/fake-blink').start();
+    const names = ['BLINK_API_URL', 'BLINK_API_KEY', 'BLINK_WALLET_ID'];
+    const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    let writes = 0;
+    const noAction = () => { writes++; throw new Error('unexpected financial mutation'); };
+    try {
+      process.env.BLINK_API_URL = fake.base + '/graphql'; process.env.BLINK_API_KEY = fake.apiKey; delete process.env.BLINK_WALLET_ID;
+      fake.state.wallets = [{ id: 'private-usd-wallet', walletCurrency: 'USD', balance: 5000 }];
+      const report = await runTest({ ...options, purchase: false, preflight: true }, {
+        store: { get: async () => null, set: noAction, compareSet: noAction, compareDel: noAction },
+        catalogueLookup: async () => ({ sku: p.sku, priceUsd: p.catalogueUsd }), order: noAction, payer: blink });
+      assert.deepEqual(report.wallet, { status: 'btc-wallet-required' });
+      assert.equal(report.readiness.status, 'setup-required'); assert.equal(report.readiness.readOnlyPrerequisitesPassed, false);
+      assert.equal(report.readiness.paymentReady, false); assert.match(report.readiness.requiredActions.join(' '), /USD-only/);
+      assert.equal(writes, 0); assert.equal(fake.calls('wallets'), 1);
+      assert.equal(fake.calls('price') + fake.calls('pay') + fake.calls('invoice') + fake.calls('feeProbe'), 0);
+      for (const secret of [fake.apiKey, 'private-usd-wallet']) assert.ok(!JSON.stringify(report).includes(secret));
+    } finally {
+      for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+      blink._reset(); await fake.close();
+    }
+  });
+  await checkAsync('actual empty Blink BTC wallet verifies the funding prerequisite while excluding USD holdings', async () => {
+    const blink = require('../site/api/_lib/payers/blink'), fake = await require('./support/fake-blink').start();
+    const names = ['BLINK_API_URL', 'BLINK_API_KEY', 'BLINK_WALLET_ID'];
+    const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    try {
+      process.env.BLINK_API_URL = fake.base + '/graphql'; process.env.BLINK_API_KEY = fake.apiKey; delete process.env.BLINK_WALLET_ID;
+      fake.state.wallets = [{ id: 'private-btc-wallet', walletCurrency: 'BTC', balance: 0 }, { id: 'private-usd-wallet', walletCurrency: 'USD', balance: 5000 }];
+      const report = await runTest({ ...options, purchase: false, preflight: true }, {
+        store: { get: async () => null }, catalogueLookup: async () => ({ sku: p.sku, priceUsd: p.catalogueUsd }), payer: blink });
+      assert.equal(report.wallet.status, 'needs-funding'); assert.equal(report.wallet.walletCurrency, 'BTC');
+      assert.equal(report.wallet.sats, 0); assert.equal(report.wallet.btcUsd, 0);
+      assert.equal(report.readiness.readOnlyPrerequisitesPassed, true); assert.equal(report.readiness.paymentReady, false);
+      assert.equal(fake.calls('pay') + fake.calls('invoice') + fake.calls('feeProbe'), 0);
+      for (const secret of [fake.apiKey, 'private-btc-wallet', 'private-usd-wallet']) assert.ok(!JSON.stringify(report).includes(secret));
+    } finally {
+      for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+      blink._reset(); await fake.close();
+    }
+  });
   await checkAsync('preflight distinguishes insufficient principal, a present balance and an oversized wallet', async () => {
     for (const [sats, status] of [[1, 'insufficient-principal'], [1989, 'insufficient-principal'], [1990, 'balance-present'], [3000, 'balance-present'], [5000, 'over-cap']]) {
-      const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({}), payer: { ...payer, balance: async () => ({ sats, usdPerSat: 0.001 }) } });
+      const report = await runTest({ ...options, purchase: false, preflight: true }, { catalogueLookup: async () => ({}), payer: { ...payer, btcBalance: async () => ({ walletCurrency: 'BTC', sats, usdPerSat: 0.001 }) } });
       assert.equal(report.wallet.status, status); assert.equal(report.wallet.feeLimitEnforced, false);
     }
   });
@@ -318,7 +371,7 @@ async function main() {
       order: () => { invoices++; throw new Error('unexpected invoice'); } };
     for (const [sats, status, passed] of [[0, 'needs-funding', true], [1, 'insufficient-principal', false], [1990, 'invoice-required', true], [5000, 'over-cap', false]]) {
       const report = await runTest({ ...options, purchase: false, preflight: true }, { ...base, payer: { ...payer,
-        balance: async () => ({ sats, usdPerSat: 0.001 }), pay: () => { payments++; }, feeProbe: () => { fees++; } } });
+        btcBalance: async () => ({ walletCurrency: 'BTC', sats, usdPerSat: 0.001 }), pay: () => { payments++; }, feeProbe: () => { fees++; } } });
       assert.equal(report.readiness.status, status); assert.equal(report.readiness.readOnlyPrerequisitesPassed, passed);
       assert.equal(report.readiness.paymentReady, false); assert.equal(report.storedPaymentState, null);
       assert.ok(report.readiness.requiredActions.length);

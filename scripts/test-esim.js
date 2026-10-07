@@ -108,6 +108,7 @@ function preflightReadiness(wallet, hasStore, record, paymentState) {
   const requiredActions = [];
   if (!hasStore) requiredActions.push('Configure the standard read/write Upstash credentials, then rerun this read-only preflight.');
   if (wallet.status === 'credential-required') requiredActions.push('Complete private Blink credential setup for the dedicated default BTC wallet, then rerun this read-only preflight.');
+  if (wallet.status === 'btc-wallet-required') requiredActions.push('Confirm an accessible default-account BTC wallet in the dedicated Blink account, then rerun this read-only preflight. Do not fund a USD-only account for this test.');
   let status;
   if (record) {
     if (record.step === 'done') {
@@ -126,7 +127,7 @@ function preflightReadiness(wallet, hasStore, record, paymentState) {
       status = record.step === 'invoiced' && ['not-sent', 'failed'].includes(paymentState) ? 'existing-invoice-review-required' : 'existing-run-review-required';
       requiredActions.push('Review the stored run and original invoice/payment state before resuming the same run ID and caps. Do not create a second run.');
     }
-  } else if (!hasStore || wallet.status === 'credential-required') status = 'setup-required';
+  } else if (!hasStore || ['credential-required', 'btc-wallet-required'].includes(wallet.status)) status = 'setup-required';
   else {
     status = wallet.status === 'balance-present' ? 'invoice-required' : wallet.status;
     if (status === 'needs-funding') requiredActions.push('Confirm the wallet is dedicated and the credential scopes are correct; review a conversion quote within the approved total funding budget and obtain funding approval.');
@@ -147,11 +148,16 @@ async function preflight(p, deps, record) {
   const reviewed = await deps.catalogueLookup(p);
   let wallet = { status: 'credential-required' };
   if (deps.payer) {
-    const balance = await deps.payer.balance();
-    if (!Number.isSafeInteger(balance.sats) || balance.sats < 0 || !Number.isFinite(balance.usdPerSat) || balance.usdPerSat <= 0) throw new Error('BTC balance or price is unavailable.');
-    const btcUsd = balance.sats * balance.usdPerSat;
-    wallet = { status: btcUsd > p.maxWalletUsd ? 'over-cap' : !balance.sats ? 'needs-funding' : btcUsd < p.catalogueUsd ? 'insufficient-principal' : 'balance-present',
-      sats: balance.sats, btcUsd, feeEstimateAvailable: typeof deps.payer.feeProbe === 'function', feeLimitEnforced: false };
+    if (typeof deps.payer.btcBalance !== 'function') throw new Error('Explicit BTC wallet balance verification is unavailable.');
+    const balance = await deps.payer.btcBalance();
+    if (balance === null) wallet = { status: 'btc-wallet-required' };
+    else {
+      if (balance?.walletCurrency !== 'BTC' || !Number.isSafeInteger(balance.sats) || balance.sats < 0 ||
+          !Number.isFinite(balance.usdPerSat) || balance.usdPerSat <= 0) throw new Error('BTC balance or price is unavailable.');
+      const btcUsd = balance.sats * balance.usdPerSat;
+      wallet = { status: btcUsd > p.maxWalletUsd ? 'over-cap' : !balance.sats ? 'needs-funding' : btcUsd < p.catalogueUsd ? 'insufficient-principal' : 'balance-present',
+        walletCurrency: 'BTC', sats: balance.sats, btcUsd, feeEstimateAvailable: typeof deps.payer.feeProbe === 'function', feeLimitEnforced: false };
+    }
   }
   const storedPaymentState = record?.paymentState == null ? null : PAYMENT_STATES.has(record.paymentState) ? record.paymentState : 'unknown';
   return { mode: 'preflight', plan: p, livePackage: reviewed, storedStage: record?.step || null,

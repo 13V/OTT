@@ -55,6 +55,7 @@ async function main() {
 
   console.log('auth — every operation but the two public ones needs X-API-KEY');
   await rejects('pay() with no key set at all fails locally, before any request', payer.pay({ paymentRequest: 'lnfake1x' }), /BLINK_API_KEY is not set/);
+  await rejects('explicit BTC balance evidence also requires authentication before any request', payer.btcBalance(), /BLINK_API_KEY is not set/);
   check('...and the fake never even saw it', fake.calls('wallets') + fake.calls('pay'), 0);
   process.env.BLINK_API_KEY = 'the-wrong-key';
   await rejects('balance() with a key the fake does not recognise surfaces Blink\'s own refusal, not a generic HTTP error', payer.balance(), /Blink: Not authorized/);
@@ -77,6 +78,29 @@ async function main() {
   fake.state.wallets = [{ id: 'wallet-btc-0001', walletCurrency: 'BTC', balance: 333 }, { id: 'wallet-usd-0001', walletCurrency: 'USD', balance: 1 }];
   check('the dollar figure rounds to the cent (333 sats at $0.0008 plus one cent is $0.2764, not $0.28 without rounding)', (await payer.balance()).usd, 0.28);
   fake.state.wallets = originalWallets;
+
+  console.log('\nbtcBalance() — explicit read-only BTC wallet evidence');
+  check('BTC evidence excludes the separate USD wallet and does not reveal wallet identifiers', await payer.btcBalance(),
+    { sats: 1000000, usd: 800, usdPerSat: 0.0008, walletCurrency: 'BTC' });
+  fake.state.wallets = [{ id: 'wallet-btc-0001', walletCurrency: 'BTC', balance: 0 }, { id: 'wallet-usd-0001', walletCurrency: 'USD', balance: 5000 }];
+  check('an empty BTC wallet is positively distinguished from an absent one', await payer.btcBalance(),
+    { sats: 0, usd: 0, usdPerSat: 0.0008, walletCurrency: 'BTC' });
+  fake.state.wallets = [{ id: 'wallet-usd-0001', walletCurrency: 'USD', balance: 5000 }];
+  const priceCalls = fake.calls('price');
+  check('a USD-only account has no BTC evidence even after an earlier BTC lookup', await payer.btcBalance(), null);
+  check('absent BTC evidence does not need a price request', fake.calls('price') - priceCalls, 0);
+  for (const balance of [null, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, '', '01']) {
+    fake.state.wallets = [{ id: 'wallet-btc-0001', walletCurrency: 'BTC', balance }];
+    await rejects('invalid BTC balance cannot count as an empty verified wallet: ' + JSON.stringify(balance), payer.btcBalance(), /BTC wallet balance is unavailable/);
+  }
+  fake.state.wallets = [{ id: '', walletCurrency: 'BTC', balance: 0 }];
+  await rejects('missing BTC wallet identity refuses evidence', payer.btcBalance(), /BTC wallet balance is unavailable/);
+  fake.state.wallets = [{ id: 'btc-one', walletCurrency: 'BTC', balance: 0 }, { id: 'btc-two', walletCurrency: 'BTC', balance: 0 }];
+  await rejects('ambiguous multiple BTC wallets refuse evidence', payer.btcBalance(), /BTC wallet balance is unavailable/);
+  fake.state.wallets = originalWallets;
+  const originalPrice = fake.state.price; fake.state.price = { base: 0, offset: 2 };
+  await rejects('a nonpositive price cannot establish BTC funding readiness', payer.btcBalance(), /BTC price is unavailable/);
+  fake.state.price = originalPrice;
 
   console.log('\nwalletId() — cached across pay()/invoice()/sent(), cleared by _reset()');
   payer._reset();
