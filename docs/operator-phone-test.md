@@ -2,6 +2,8 @@
 
 Start with the [first funded phone test runbook](phone-test-quickstart.md) for the prepared
 package, local setup and funding sequence. This document describes the detailed safeguards.
+The requested [local Solana wallet workflow](solana-test-wallet.md) now prepares an encrypted
+unfunded wallet and checks public balances; it has no signing or payment execution command.
 
 OTT is not launched. Public redemption stays disabled. A private operator test can check supplier
 payment, eSIM issuance and data on an actual phone without inventing token addresses or holder

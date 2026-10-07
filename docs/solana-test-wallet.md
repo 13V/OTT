@@ -1,0 +1,120 @@
+# Local Solana test wallet
+
+Prepared 7 October 2026. The operator requested a dedicated local wallet for the small
+eSIM test. This workflow creates a fresh **unfunded** keypair and checks public chain data.
+It has no payment execution mode. It does not register a financial account, buy an eSIM,
+or enable public redemptions.
+
+## Create and check
+
+Run in PowerShell in this repository:
+
+```powershell
+npm run solana:wallet:create
+npm run solana:preflight
+```
+
+Creation prints only the public address and encrypted file location. The private key is
+encrypted with Windows DPAPI for the current Windows user and stored in
+`%USERPROFILE%\.codex\private\ott-phone-test\solana-wallet.json`, outside OneDrive and Git.
+Its file permissions allow only that user and SYSTEM. Creation refuses to replace an
+existing wallet and rejects junctions. Keep this file and the Windows profile intact:
+the file alone is not a portable recovery backup. This is an isolated test wallet.
+
+Preflight validates that file's metadata and permissions **without decrypting its key**.
+It reads only the [official Solana mainnet RPC](https://solana.com/docs/references/clusters):
+mainnet genesis, mint data, confirmed SOL balance and native USDC token accounts. It pins
+[Circle's native Solana USDC mint](https://developers.circle.com/stablecoins/usdc-contract-addresses),
+`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, and verifies six decimals on chain.
+Frozen, delegated or externally closable accounts are unavailable for the proposed payment,
+and their balances still count toward the wallet cap.
+
+An unfunded wallet should report zero SOL and zero USDC. There is no on-chain account
+creation transaction during setup. A successful read-only preflight does not establish
+payment readiness. An unavailable or inconsistent RPC response fails the command.
+
+Optional import is available with `npm run solana:wallet:import` **before** fresh creation.
+The local prompt hides a dedicated wallet's 64-byte base58 key or Solana CLI JSON array,
+encrypts it before passing it to Node, and verifies the matching public address. It refuses
+mnemonics, 32-byte seeds and replacement of an existing file. Never paste keys into chat,
+command arguments, environment variables or the repository. The wallet whose key was
+previously shared in chat is exposed; this workflow does not reuse it.
+
+## Payment preparation and its limits
+
+The candidate package remains Australia, 1 GB, 7 days, SKU `fixed_1GB_7D_AU`, listed at
+$1.99 during the latest catalogue check. The proposed invoice limit is **$2.50** and total
+test budget is **$4 including gas and funding costs**. Obtain a current quote before
+funding. SOL is required for native transaction fees and potentially token-account rent;
+USDC alone is not proof of sufficient funds. No SOL amount or total cost is quoted yet.
+
+The payment helper uses six-decimal integer amounts, caps native USDC at 4 tokens, and
+requires a fresh SOL/USD quote before a proposed wallet-value calculation. A balance cap
+does not prove total historical funding cost. Transaction fees, any associated token
+account creation/rent, conversion costs and the transaction itself still need verification.
+The CLI cannot sign, send, simulate, airdrop or increase limits. It does not unlock the
+real wallet during creation of a review plan.
+
+[Nadanada's OpenAPI](https://nadanada.me/api/v2/openapi.json) currently documents only
+Lightning and Stripe for automated eSIM purchase. Its MixPay assets route is marked
+development-only. The website advertises USDC, but general MixPay asset availability
+does not verify the original supplier order's Solana payment instructions or fulfilment.
+The public MixPay asset response also claimed 18 decimals for Solana USDC during the
+check; the helper rejects this conflict and uses the verified native mint's six decimals.
+
+Private quote inspection is available only for evidence saved under
+`%USERPROFILE%\.codex\private\ott-phone-test\solana-quotes`:
+
+```powershell
+npm run solana:plan -- --quote-file "$env:USERPROFILE\.codex\private\ott-phone-test\solana-quotes\quote.json"
+```
+
+Do not invent a quote or generic processor order to satisfy this command. The strict
+format is defined by `validateMerchantQuote` in `scripts/solana-test-payment.js`; no
+real merchant quote is prepared yet. It binds supplier/processor IDs, mainnet/native
+mint/six decimals, integer amount, destination owner and optional token account, fresh
+receipt/expiry times and reference keys. Unknown fields, including unsupported memo
+instructions, are rejected. The CLI prints a hashed order fingerprint and public review
+fields, omitting the private order ID and checkout URL.
+
+Every imported quote remains **user-supplied and unauthenticated**. Every plan reports
+`paymentReady: false`, `sendAvailable: false`, and blockers for unverified merchant route,
+unavailable transaction construction and unquoted gas. It never creates an unsigned
+transaction or claims that the purchase is ready.
+
+## Before implementing a funded transfer
+
+Verify original Nadanada package/order binding, processor payee/order identifiers, exact
+Solana asset, destination, amount, all memo/reference instructions and both order and
+instruction deadlines. A bare address or arbitrary transaction request is insufficient.
+Keep the same supplier order throughout recovery and reserve any send before broadcast
+so a timeout cannot trigger a second payment. Confirm processor terminal success with
+matching merchant/amount/currency, then confirm the supplier issued the intended eSIM.
+A transaction signature, redirect or callback alone is not completion. See
+[MixPay's security guidance](https://mixpay.me/developers/guides/security-guidelines) and
+[payment lifecycle](https://mixpay.me/developers/api/payments/payment-lifecycle).
+
+These gates require further implementation and live instruction verification. The existing
+[Lightning operator runbook](phone-test-quickstart.md) remains a separate working payer
+path once its private credentials, conversion route and funded test are verified. Passing
+local Solana fixtures does not validate either live supplier settlement or phone connectivity.
+
+## Verification
+
+On 7 October, fresh encrypted wallet creation and live read-only mainnet preflight passed.
+The verified native USDC mint used six decimals; the new wallet held zero SOL and zero
+USDC, and preflight did not unlock its key. The public address and readiness snapshot are
+kept locally in the private operator directory rather than committed to the repository.
+No live signing, funding, purchase or eSIM issuance occurred.
+
+```powershell
+npm run test:solana-credentials
+npm run test:solana-payment
+npm run test:solana-wallet
+```
+
+The credential suite uses temporary generated fixture keys and real Windows DPAPI/ACL
+checks. Payment and CLI fixtures cover exact amounts, wrong network/mint/decimals,
+account ownership/state, stale quotes, limits, redaction and refusal to unlock/sign/send.
+Linux CI also checks unsupported-platform refusal; Windows CI runs the full credential
+suite. Fixture signatures are plain test messages, never blockchain transactions.

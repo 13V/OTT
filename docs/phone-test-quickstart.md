@@ -3,6 +3,10 @@
 Prepared 7 October 2026. This runbook prepares a private operator test. Funding, conversion
 and purchase are separate user decisions; no money has moved during preparation.
 
+The requested fresh local Solana wallet now has its own [setup and read-only preflight](solana-test-wallet.md).
+Direct USDC supplier payment remains disabled. The instructions below describe the existing
+Lightning payer, which still requires Blink credentials and a verified funding route.
+
 ## The test we have prepared
 
 | Item | Value |
@@ -26,7 +30,8 @@ It does not validate the proposed OTT burn membership or holder allocation.
    payer spends Lightning BTC. It does not spend USDC or SOL directly.
 2. If USDC on Solana is your source, use a fresh Phantom wallet. A private key previously
    shared in chat must be treated as exposed; do not fund that wallet or share a replacement
-   private key. The operator workflow needs a Blink API key, not a Solana private key.
+   private key. This Lightning operator workflow needs a Blink API key. The separate local
+   Solana preparation creates its own fresh encrypted wallet without receiving a chat key.
 3. Create a short-lived `OTT phone test` API key yourself in the
    [Blink dashboard](https://dashboard.blink.sv). Read and Write are needed for this test;
    Receive is needed only if generating a funding invoice through the API. Confirm that the
