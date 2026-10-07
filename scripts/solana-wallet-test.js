@@ -25,8 +25,9 @@ function parse(argv) {
 function dependencies() {
   const wallet = require('./solana-test-wallet-credentials');
   const payment = require('./solana-test-payment');
+  const transfer = require('./solana-test-transfer');
   return {
-    wallet, payment, rpc: payment.createReadOnlyRpc(),
+    wallet, payment, transfer, rpc: transfer.createTransferReadOnlyRpc(),
     walletFileExists: () => fs.existsSync(wallet.FILE),
     privatePath,
     readQuoteFile: file => {
@@ -63,20 +64,23 @@ async function run(opts, deps) {
   }
   const quoteFile = privateQuoteFile(opts.quoteFile, deps.privatePath);
   const quote = deps.readQuoteFile(quoteFile);
-  const plan = await deps.payment.prepareTransferPlan({ walletAddress: info.address, quote, rpc: deps.rpc });
+  const plan = await deps.transfer.prepareUnsignedUsdcTransfer({ walletAddress: info.address, quote, rpc: deps.rpc });
   // The full quote can be an order-access credential. Print a fingerprint and public review data.
   return { mode: 'plan', address: info.address, keyUnlocked: false,
     orderFingerprint: crypto.createHash('sha256').update(quote.orderId).digest('hex').slice(0, 12),
     amountBaseUnits: quote.amountBaseUnits, recipientOwner: quote.recipientOwner,
     recipientTokenAccount: quote.recipientTokenAccount, expiresAt: quote.expiresAt,
+    sourceTokenAccount: plan.intent.sourceTokenAccount, destinationTokenAccount: plan.intent.destinationTokenAccount,
+    messageHash: plan.messageHash, intentHash: plan.intentHash,
+    unsignedTransactionBuilt: true, signed: false, gas: plan.gas, funding: plan.funding,
     blockers: plan.blockers, paymentReady: false, sendAvailable: false,
-    note: 'This imported quote is unverified merchant evidence. No transaction was built, signed or sent. Keep the original supplier order and verify its live processor instructions and fulfilment path before enabling payment.' };
+    note: 'An unsigned transaction was constructed and its fee/rent requirements read from RPC. This imported quote remains unverified merchant evidence. No key was unlocked and nothing was signed or sent. Funding is premature until payment and recovery execution are reviewed.' };
 }
 
 async function main(argv = process.argv.slice(2), deps) {
   const opts = parse(argv);
   if (opts.help) {
-    console.log('Local Solana test wallet preparation (no sign/send mode)\n  --create       create a fresh encrypted, unfunded wallet on Windows\n  --preflight    read its SOL and native USDC balances without unlocking its key\n  --plan --quote-file <private JSON>    inspect an unverified supplier-bound quote\nUse only a dedicated test wallet. Never put a private key in chat, argv, environment variables or OneDrive.');
+    console.log('Local Solana test wallet preparation (no sign/send mode)\n  --create       create a fresh encrypted, unfunded wallet on Windows\n  --preflight    read its SOL and native USDC balances without unlocking its key\n  --plan --quote-file <private JSON>    construct an unsigned transfer and quote RPC fees/rent\nHold funding until execution and owner recovery are implemented and reviewed. Never put a private key in chat, argv, environment variables or OneDrive.');
     return;
   }
   const result = await run(opts, deps || dependencies());

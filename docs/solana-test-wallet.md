@@ -5,6 +5,12 @@ eSIM test. This workflow creates a fresh **unfunded** keypair and checks public 
 It has no payment execution mode. It does not register a financial account, buy an eSIM,
 or enable public redemptions.
 
+**Hold funding the local wallet.** Receipt of a deposit is possible, but there is no reviewed
+command to pay the supplier or return unused funds. The current code constructs unsigned
+transactions, quotes live message fees/rent and protects future reservation records. Signing,
+broadcasting, owner recovery and supplier settlement still require implementation/review.
+The user's Phantom return public address is recorded privately and does not authorize a payment.
+
 ## Create and check
 
 Run in PowerShell in this repository:
@@ -61,7 +67,8 @@ requires a fresh SOL/USD quote before a proposed wallet-value calculation. A bal
 does not prove total historical funding cost. Transaction fees, any associated token
 account creation/rent, conversion costs and the transaction itself still need verification.
 The CLI cannot sign, send, simulate, airdrop or increase limits. It does not unlock the
-real wallet during creation of a review plan.
+real wallet during creation of an unsigned transaction review. SOL estimates and rent
+examples must not be treated as an approved funding amount.
 
 [Nadanada's OpenAPI](https://nadanada.me/api/v2/openapi.json) currently documents only
 Lightning and Stripe for automated eSIM purchase. Its MixPay assets route is marked
@@ -88,10 +95,30 @@ receipt/expiry times and reference keys. Unknown fields, including unsupported m
 instructions, are rejected. The CLI prints a hashed order fingerprint and public review
 fields, omitting the private order ID and checkout URL.
 
-Every imported quote remains **user-supplied and unauthenticated**. Every plan reports
-`paymentReady: false`, `sendAvailable: false`, and blockers for unverified merchant route,
-unavailable transaction construction and unquoted gas. It never creates an unsigned
-transaction or claims that the purchase is ready.
+Every imported quote remains **user-supplied and unauthenticated**. The SDK now constructs
+an actual unsigned native-USDC transaction with six-decimal `TransferChecked`, exactly one
+wallet signer, ordered readonly references and idempotent token-account creation. Public
+RPC reads quote its serialized message fee, current token-account rent and fee-payer reserve.
+Confirmed balances are rechecked at a later context to refuse deposits exceeding the wallet
+cap, and the blockhash is checked again after the final inventory read.
+
+Every plan still reports `paymentReady: false`, `sendAvailable: false`, and blockers for
+unverified merchant route and unsigned review only. Missing funds and fresh SOL/USD valuation
+are separate funding blockers. The CLI prints hashes and public cost review fields, omitting
+private order/checkout data and raw unsigned wire bytes. Passing a funding balance check
+does not establish execution or supplier settlement readiness.
+
+The private journal foundation reserves a wallet exclusively, preserving its original
+supplied order, destination, amount, owner return address and cost limits. It does not
+authenticate merchant instructions or establish human approval. Canonical message
+reconstruction and fixture signature verification reject changed transactions. Reservation
+and signed records are published exclusively rather than overwritten, and timeout/expiry
+never automatically releases a reservation. This module has no real signer or broadcast
+path; it is preparation for future execution and reconciliation.
+Status observations are supplied by the caller and cannot prove settlement or release a
+reservation. A completed merchant payment cannot yet transition into owner recovery. Windows
+hardlink publication protects competing processes; power-loss durability of directory metadata
+has not been established. These remain gates before enabling execution or accepting funding.
 
 ## Before implementing a funded transfer
 
@@ -122,10 +149,14 @@ No live signing, funding, purchase or eSIM issuance occurred.
 npm run test:solana-credentials
 npm run test:solana-payment
 npm run test:solana-wallet
+npm run test:solana-transfer
+npm run test:solana-journal
 ```
 
 The credential suite uses temporary generated fixture keys and real Windows DPAPI/ACL
 checks. Payment and CLI fixtures cover exact amounts, wrong network/mint/decimals,
 account ownership/state, stale quotes, limits, redaction and refusal to unlock/sign/send.
 Linux CI also checks unsupported-platform refusal; Windows CI runs the full credential
-suite. Fixture signatures are plain test messages, never blockchain transactions.
+and private journal suites. Wallet-credential signatures are plain fixture messages;
+journal fixtures verify generated-key signatures on unsigned fixture transactions. No
+real wallet key or on-chain transaction is signed or submitted by these tests.

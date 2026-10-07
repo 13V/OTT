@@ -6,9 +6,35 @@ and purchase are separate user decisions; no money has moved during preparation.
 The requested fresh local Solana wallet now has its own [setup and read-only preflight](solana-test-wallet.md).
 Direct USDC supplier payment remains disabled. The instructions below describe the existing
 Lightning payer, which still requires Blink credentials and a verified funding route.
+**Do not deposit into the local Solana wallet yet:** unsigned construction and private
+reservation safeguards are prepared; payment and owner recovery execution are not available.
 The original supplier website checkout now confirms a direct **2 USDC on Solana** quote
 for the Australian package. That separate manual checkout needs fresh instructions and
 SOL fees before payment; it does not verify OTT's automated payer or supplier settlement.
+
+## Separate manual Phantom test
+
+This avoids depositing into the unfinished local wallet. Unspent USDC stays in the user's
+Phantom wallet. It tests the supplier checkout, issuance and phone connectivity, while OTT's
+automated payment and redemption workflow remain untested.
+
+1. Confirm the physical phone supports eSIM, is carrier unlocked and will be tested in
+   Australia. Use a wallet whose private key has never been shared in chat.
+2. Reopen the original Nadanada order and verify Australia, 1 GB, 7 days, then its linked
+   MixPay checkout. Refresh expired instructions on that same checkout. Do not create a
+   replacement order merely because payment status is pending.
+3. Select **USDC (Solana)**. Review the live amount, native USDC network, exact destination,
+   timer and all required references. The earlier 2 USDC quote is only an observation;
+   neither its address nor screenshot is reusable payment authorization.
+4. The user reviews and signs the specific transfer in Phantom, including its final SOL
+   network fee. Keep the total test cost within the agreed $4 limit. There is no operator
+   signing command for this route and no need to transfer the remaining wallet balance.
+5. Keep both original tabs open until MixPay shows the correct payment settled and Nadanada
+   issues the intended eSIM. A signature or redirect alone is insufficient. If status is
+   uncertain, preserve the same order and transaction and investigate before any retry.
+6. Keep the activation QR and manual setup credentials private. Install on Wi-Fi, follow
+   the supplier's roaming/APN instructions, select the eSIM for mobile data, then disable
+   Wi-Fi and load a webpage in Australia. Record pass/fail without publishing activation data.
 
 ## The test we have prepared
 
