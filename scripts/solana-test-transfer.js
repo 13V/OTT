@@ -176,6 +176,12 @@ function checkedWalletInventory(entries, owner) {
   return { decimals: 6, totalBaseUnits: total.toString(), availableBaseUnits: available.toString(),
     amount: digits.slice(0, -6) + '.' + digits.slice(-6), accounts };
 }
+function checkedFeePayer(account) {
+  if (account === null) return 0n;
+  if (account.owner !== SYSTEM_PROGRAM || account.executable !== false || account.space !== 0 ||
+      !Array.isArray(account.data) || account.data[0] !== '' || account.data[1] !== 'base64') throw new Error('Fee payer must be a plain system wallet account.');
+  return rpcInteger(account.lamports, 'Fee payer SOL');
+}
 function solValue(lamports, priceQuote, now) {
   if (!priceQuote) return null;
   exactFields(priceQuote, ['usdPerSol', 'receivedAt'], 'SOL price quote');
@@ -203,12 +209,10 @@ async function prepareUnsignedUsdcTransfer({ walletAddress, quote, sourceTokenAc
     return result.value;
   };
   const feePayer = await readAccount(walletAddress);
-  if (feePayer && (feePayer.owner !== SYSTEM_PROGRAM || feePayer.executable !== false || feePayer.space !== 0 ||
-      !Array.isArray(feePayer.data) || feePayer.data[0] !== '' || feePayer.data[1] !== 'base64')) throw new Error('Fee payer must be a plain system wallet account.');
   const initialSol = integer(wallet.sol.lamports, 'Wallet SOL');
-  const currentSol = feePayer ? rpcInteger(feePayer.lamports, 'Fee payer SOL') : 0n;
-  const availableSol = currentSol < initialSol ? currentSol : initialSol;
-  const capSol = currentSol > initialSol ? currentSol : initialSol;
+  const currentSol = checkedFeePayer(feePayer);
+  let availableSol = currentSol < initialSol ? currentSol : initialSol;
+  let capSol = currentSol > initialSol ? currentSol : initialSol;
   const candidates = wallet.usdc.accounts.filter(account => account.eligible && integer(account.amountBaseUnits, 'Account balance') >= amount);
   candidates.sort((a, b) => a.address === sourceAta ? -1 : b.address === sourceAta ? 1 : a.address.localeCompare(b.address));
   let source = sourceTokenAccount ? address(sourceTokenAccount, 'Reviewed source account') : candidates[0]?.address || sourceAta;
@@ -253,7 +257,16 @@ async function prepareUnsignedUsdcTransfer({ walletAddress, quote, sourceTokenAc
   const finalSource = finalInventory.accounts.find(account => account.address === source);
   const finalSourceAmount = finalSource?.eligible ? integer(finalSource.amountBaseUnits, 'Final source USDC') : 0n;
   const sourceAmount = observedSourceAmount < finalSourceAmount ? observedSourceAmount : finalSourceAmount;
-  const reviewedWallet = { ...wallet, confirmedSlot: slot, usdc: { ...finalInventory, capObservedBaseUnits: capUsdc.toString() } };
+  const finalTokenSlot = slot;
+  const finalFeePayer = await readAccount(walletAddress);
+  const finalSol = checkedFeePayer(finalFeePayer);
+  if (finalSol < availableSol) availableSol = finalSol;
+  if (finalSol > capSol) capSol = finalSol;
+  const solDigits = finalSol.toString().padStart(10, '0');
+  const reviewedWallet = { ...wallet, confirmedSlot: slot,
+    usdc: { ...finalInventory, confirmedSlot: finalTokenSlot, capObservedBaseUnits: capUsdc.toString() },
+    sol: { lamports: finalSol.toString(), amount: solDigits.slice(0, -9) + '.' + solDigits.slice(-9),
+      confirmedSlot: slot, capObservedLamports: capSol.toString() } };
   const currentHeight = rpcInteger(await rpc('getBlockHeight', [{ commitment: 'confirmed', minContextSlot: slot }]), 'Current block height');
   if (currentHeight >= lastValidBlockHeight) throw new Error('Unsigned transaction blockhash expired during review.');
   checkedAt = currentTime(now);
@@ -267,7 +280,7 @@ async function prepareUnsignedUsdcTransfer({ walletAddress, quote, sourceTokenAc
   if (walletSolUsd !== null && capUsdc + walletSolUsd > WALLET_CAP_USD_MICROS) throw new Error('USDC plus valued SOL exceeds the $4 wallet funding cap.');
   if (minimumSolUsd !== null && amount + minimumSolUsd > WALLET_CAP_USD_MICROS) throw new Error('Invoice plus minimum SOL funding exceeds the $4 test budget.');
   const fundingBlockers = [];
-  if (!feePayer) fundingBlockers.push('fee-payer-missing');
+  if (!feePayer || !finalFeePayer) fundingBlockers.push('fee-payer-missing');
   if (sourceAmount < amount) fundingBlockers.push(integer(finalInventory.availableBaseUnits, 'Available USDC') >= amount ? 'usdc-source-fragmented' : 'insufficient-available-usdc');
   if (availableSol < requiredSol) fundingBlockers.push('insufficient-sol-for-fee-rent-and-reserve');
   if (walletSolUsd === null) fundingBlockers.push('sol-usd-unquoted');

@@ -100,7 +100,9 @@ an actual unsigned native-USDC transaction with six-decimal `TransferChecked`, e
 wallet signer, ordered readonly references and idempotent token-account creation. Public
 RPC reads quote its serialized message fee, current token-account rent and fee-payer reserve.
 Confirmed balances are rechecked at a later context to refuse deposits exceeding the wallet
-cap, and the blockhash is checked again after the final inventory read.
+cap. The fee payer is reread after the final token inventory; available SOL uses the lowest
+observed balance and the funding cap uses the highest. The blockhash is checked again after
+those reads. Any future execution must independently recheck balances before signing.
 
 Every plan still reports `paymentReady: false`, `sendAvailable: false`, and blockers for
 unverified merchant route and unsigned review only. Missing funds and fresh SOL/USD valuation

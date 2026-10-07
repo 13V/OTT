@@ -27,8 +27,9 @@ function account(owner, amount = '2200000', extra = {}) {
 }
 function fixture({ genesis = MAINNET_GENESIS, sol = 3000000, source = account(WALLET), destination = account(RECIPIENT, '0'),
   accounts = null, finalAccounts = null, payerOwner = '11111111111111111111111111111111', mintDecimals = 6, fee = 5000,
-  rent = 1488440, reserve = 650240, height = 900, lastHeight = 1000, blockhash = BLOCKHASH, staleFee = false } = {}) {
-  const calls = []; let slot = 100, inventoryReads = 0;
+  rent = 1488440, reserve = 650240, height = 900, lastHeight = 1000, blockhash = BLOCKHASH, staleFee = false,
+  earlierSol = sol, finalSol = sol, finalPayerOwner = payerOwner } = {}) {
+  const calls = []; let slot = 100, inventoryReads = 0, payerReads = 0;
   const rpc = async (method, params = []) => {
     calls.push({ method, params });
     if (method === 'getGenesisHash') return genesis;
@@ -40,8 +41,12 @@ function fixture({ genesis = MAINNET_GENESIS, sol = 3000000, source = account(WA
       inventoryReads++;
       return response(inventoryReads > 1 && finalAccounts !== null ? finalAccounts : accounts || (source ? [{ pubkey: sourceAta, account: source }] : []));
     }
-    if (method === 'getAccountInfo' && params[0] === WALLET) return response(sol > 0 ? { owner: payerOwner, executable: false,
-      lamports: sol, space: 0, data: ['', 'base64'] } : null);
+    if (method === 'getAccountInfo' && params[0] === WALLET) {
+      payerReads++;
+      const amount = payerReads > 1 ? finalSol : earlierSol;
+      return response(amount > 0 ? { owner: payerReads > 1 ? finalPayerOwner : payerOwner, executable: false,
+        lamports: amount, space: 0, data: ['', 'base64'] } : null);
+    }
     if (method === 'getAccountInfo' && params[0] === sourceAta) return response(source);
     if (method === 'getAccountInfo' && params[0] === destinationAta) return response(destination);
     if (method === 'getAccountInfo' && params[0] === AUXILIARY) return response(destination);
@@ -227,6 +232,42 @@ async function check(name, fn) { await fn(); checks++; console.log('ok ' + name)
       return f.rpc(method, params);
     };
     await assert.rejects(prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now, rpc, solUsdQuote: price }), /blockhash expired/);
+  });
+  await check('late SOL deposits are reread after final token inventory and cannot weaken the USD cap', async () => {
+    const late = fixture({ finalSol: 1000000000 });
+    await assert.rejects(prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now, rpc: late.rpc, solUsdQuote: price }), /\$4 wallet funding cap/);
+    await assert.rejects(prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ earlierSol: 1000000000, finalSol: 3000000 }).rpc, solUsdQuote: price }), /\$4 wallet funding cap/);
+    const inventories = late.calls.filter(call => call.method === 'getTokenAccountsByOwner');
+    const payerReads = late.calls.filter(call => call.method === 'getAccountInfo' && call.params[0] === WALLET);
+    assert.equal(payerReads.length, 2);
+    assert.ok(payerReads[1].params[1].minContextSlot > inventories[1].params[2].minContextSlot);
+    assert.ok(late.calls.findIndex(call => call === payerReads[1]) > late.calls.findIndex(call => call === inventories[1]));
+    assert.ok(late.calls.findIndex(call => call.method === 'getBlockHeight') > late.calls.findIndex(call => call === payerReads[1]));
+    const allowed = await prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ finalSol: 4000000 }).rpc, solUsdQuote: price });
+    assert.equal(allowed.wallet.sol.lamports, '4000000'); assert.equal(allowed.wallet.sol.amount, '0.004000000');
+    assert.equal(allowed.wallet.sol.capObservedLamports, '4000000'); assert.equal(allowed.gas.availableSolLamports, '3000000');
+    assert.equal(allowed.wallet.sol.confirmedSlot, allowed.wallet.confirmedSlot);
+    assert.ok(allowed.wallet.sol.confirmedSlot > allowed.wallet.usdc.confirmedSlot); assert.equal(allowed.fundingReady, true);
+  });
+  await check('late SOL drains use the minimum observed funds and validate the final fee payer state', async () => {
+    const drained = await prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ finalSol: 10000 }).rpc, solUsdQuote: price });
+    assert.equal(drained.wallet.sol.lamports, '10000'); assert.equal(drained.wallet.sol.amount, '0.000010000');
+    assert.equal(drained.wallet.sol.capObservedLamports, '3000000'); assert.equal(drained.gas.availableSolLamports, '10000');
+    assert.equal(drained.funding.additionalSolLamports, '2133680'); assert.equal(drained.fundingReady, false);
+    assert.ok(drained.blockers.includes('insufficient-sol-for-fee-rent-and-reserve')); assert.equal(drained.sendAvailable, false);
+    const restored = await prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ earlierSol: 10000, finalSol: 3000000 }).rpc, solUsdQuote: price });
+    assert.equal(restored.wallet.sol.lamports, '3000000'); assert.equal(restored.gas.availableSolLamports, '10000');
+    assert.equal(restored.fundingReady, false);
+    const emptied = await prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ finalSol: 0 }).rpc, solUsdQuote: price });
+    assert.equal(emptied.wallet.sol.lamports, '0'); assert.equal(emptied.fundingReady, false);
+    assert.ok(emptied.blockers.includes('fee-payer-missing'));
+    await assert.rejects(prepareUnsignedUsdcTransfer({ walletAddress: WALLET, quote, now,
+      rpc: fixture({ finalPayerOwner: TOKEN_PROGRAM }).rpc, solUsdQuote: price }), /plain system wallet/);
   });
   await check('RPC transport pins official HTTPS and cannot simulate, sign or send', async () => {
     let reads = 0;
