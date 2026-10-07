@@ -43,7 +43,15 @@ previously shared in chat is exposed; this workflow does not reuse it.
 ## Payment preparation and its limits
 
 The candidate package remains Australia, 1 GB, 7 days, SKU `fixed_1GB_7D_AU`, listed at
-$1.99 during the latest catalogue check. The proposed invoice limit is **$2.50** and total
+$1.99 during the latest catalogue check. Its supplier-created MixPay checkout was also
+opened on 7 October: the payee was Nadanada, the note matched that original Australian
+package/order, and selecting **USDC (Solana)** quoted **2 USDC**, with zero paid. The
+deposit instructions displayed a roughly 20-minute countdown. This is an observed website
+quote, not a reusable payment instruction: refresh and recheck it before any transfer.
+
+2.2 USDC covers the observed 2 USDC checkout amount; separate SOL is still needed for
+chain fees and potentially token-account creation. Funding and total costs are not quoted
+yet. The proposed invoice limit is **$2.50** and total
 test budget is **$4 including gas and funding costs**. Obtain a current quote before
 funding. SOL is required for native transaction fees and potentially token-account rent;
 USDC alone is not proof of sufficient funds. No SOL amount or total cost is quoted yet.
@@ -58,7 +66,9 @@ real wallet during creation of a review plan.
 [Nadanada's OpenAPI](https://nadanada.me/api/v2/openapi.json) currently documents only
 Lightning and Stripe for automated eSIM purchase. Its MixPay assets route is marked
 development-only. The website advertises USDC, but general MixPay asset availability
-does not verify the original supplier order's Solana payment instructions or fulfilment.
+does not establish automated fulfilment. The original website checkout now confirms a
+direct USDC-on-Solana option for this manual test, while automated merchant instruction
+authentication, transaction construction and post-payment supplier settlement are unverified.
 The public MixPay asset response also claimed 18 decimals for Solana USDC during the
 check; the helper rejects this conflict and uses the verified native mint's six decimals.
 
@@ -70,8 +80,9 @@ npm run solana:plan -- --quote-file "$env:USERPROFILE\.codex\private\ott-phone-t
 ```
 
 Do not invent a quote or generic processor order to satisfy this command. The strict
-format is defined by `validateMerchantQuote` in `scripts/solana-test-payment.js`; no
-real merchant quote is prepared yet. It binds supplier/processor IDs, mainnet/native
+format is defined by `validateMerchantQuote` in `scripts/solana-test-payment.js`; the
+observed website instructions have not been converted into that full authenticated
+processor/order record. It binds supplier/processor IDs, mainnet/native
 mint/six decimals, integer amount, destination owner and optional token account, fresh
 receipt/expiry times and reference keys. Unknown fields, including unsupported memo
 instructions, are rejected. The CLI prints a hashed order fingerprint and public review

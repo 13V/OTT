@@ -18,6 +18,11 @@ Nadanada's [website](https://nadanada.me/for-ai-agents) advertises USDC through 
 [supports native SOL and USDC on Solana](https://mixpay.me/blog/mixpay-supports-solana-sol), and its
 public payment-assets endpoint listed both during the read-only check. Merchant-specific assets
 and amount limits still need checking against an actual checkout before sending funds.
+On 7 October, the original supplier-created MixPay checkout matched the Australian 1 GB /
+7 day order and quoted 2 USDC with **USDC (Solana)** selected, showing zero paid and a
+short deposit deadline. This confirms the website option for the manual test. Keep its
+order identifiers and deposit instructions private, refresh them before payment, and
+separately account for SOL fees; automated fulfilment is still unverified.
 
 Nadanada's [public API reference](https://nadanada.me/api/v2/documentation) and its linked OpenAPI
 schema currently list only `lightning` and `stripe` for automated eSIM purchase and top-up.

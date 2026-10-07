@@ -6,6 +6,9 @@ and purchase are separate user decisions; no money has moved during preparation.
 The requested fresh local Solana wallet now has its own [setup and read-only preflight](solana-test-wallet.md).
 Direct USDC supplier payment remains disabled. The instructions below describe the existing
 Lightning payer, which still requires Blink credentials and a verified funding route.
+The original supplier website checkout now confirms a direct **2 USDC on Solana** quote
+for the Australian package. That separate manual checkout needs fresh instructions and
+SOL fees before payment; it does not verify OTT's automated payer or supplier settlement.
 
 ## The test we have prepared
 
