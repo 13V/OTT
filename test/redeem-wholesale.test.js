@@ -4,8 +4,8 @@
  * /api/redeem, end to end, through the real wholesale provider — the fake wholesale
  * (test/support/fake-wholesale.js), the mock Lightning payer, the in-memory store, and, exactly as
  * test/redeem.test.js does for the mock provider, a node:http file server standing in for the
- * deployment's own config and allowances and _lib/secp256k1 + _lib/eip191 standing in for a
- * wallet's personal_sign.
+ * deployment's own config and allowances and node:crypto ed25519 keys standing in for a wallet's
+ * signMessage.
  *
  * test/redeem.test.js checks the endpoint's own logic (who may redeem, how much, idempotence, the
  * week boundary, a stale allowances file) against the mock provider, which never fails and never
@@ -17,11 +17,11 @@
  *   node test/redeem-wholesale.test.js
  */
 const http = require('node:http');
+const crypto = require('node:crypto');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
-const secp = require(path.join(API, '_lib', 'secp256k1.js'));
-const eip191 = require(path.join(API, '_lib', 'eip191.js'));
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
 const week = require(path.join(API, '_lib', 'week.js'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
@@ -39,17 +39,23 @@ const checkThat = (what, cond, detail) => { checks++; if (cond) console.log(`  o
 // caches its response for a minute (redeem.js's CACHE_TTL_MS), so a wallet added to the map after
 // the first fetch would not be seen until the cache expired. One wallet per scenario that needs a
 // clean ledger, per the mock-provider suite's own convention.
-const RICH = secp.newPrivateKey();   // $9.00 allowance this week: Europe, then Germany, then out of credit
-const BROKE = secp.newPrivateKey();  // $2.99 allowance, for a wallet whose wallet-of-record cannot pay
-const SLOW = secp.newPrivateKey();   // $2.99 allowance, for a profile slower than the function waits
-const STALE = secp.newPrivateKey();  // $2.00 allowance, for a config whose price wholesale disagrees with
-const MOCKW = secp.newPrivateKey();  // $9.00 allowance, to prove the mock provider still works untouched
-const HOSTILE = secp.newPrivateKey(); // $2.99, for the day wholesale sends links that are not links
-const FIND_RACE = secp.newPrivateKey(); // $9.00, a different plan appears after the standing read
-const ORDER_RACE = secp.newPrivateKey(); // $9.00, a competing plan is returned while order() waits
-const SLUG_RACE = secp.newPrivateKey(); // $9.00, same supplier SKU returns a top-up in another place
-const ALIAS = secp.newPrivateKey(); // $9.00, reviewed public code differs from the supplier SKU
-const addr = (k) => secp.addressOf(k).toLowerCase();
+// A Solana wallet: an ed25519 key, its base58 address, and signMessage's answer.
+function newWallet() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const address = S.encodeBase58(new Uint8Array(publicKey.export({ format: 'der', type: 'spki' }).subarray(12)));
+  return { address, sign: (text) => S.encodeBase58(new Uint8Array(crypto.sign(null, Buffer.from(text, 'utf8'), privateKey))) };
+}
+const RICH = newWallet();   // $9.00 allowance this week: Europe, then Germany, then out of credit
+const BROKE = newWallet();  // $2.99 allowance, for a wallet whose wallet-of-record cannot pay
+const SLOW = newWallet();   // $2.99 allowance, for a profile slower than the function waits
+const STALE = newWallet();  // $2.00 allowance, for a config whose price wholesale disagrees with
+const MOCKW = newWallet();  // $9.00 allowance, to prove the mock provider still works untouched
+const HOSTILE = newWallet(); // $2.99, for the day wholesale sends links that are not links
+const FIND_RACE = newWallet(); // $9.00, a different plan appears after the standing read
+const ORDER_RACE = newWallet(); // $9.00, a competing plan is returned while order() waits
+const SLUG_RACE = newWallet(); // $9.00, same supplier SKU returns a top-up in another place
+const ALIAS = newWallet(); // $9.00, reviewed public code differs from the supplier SKU
+const addr = (k) => k.address;
 
 // The current week, computed the same way redeem.js computes it (site/api/_lib/week.js), so the
 // allowances fixture below is unconditionally "this week" whenever this file happens to run.
@@ -69,13 +75,14 @@ const message = (address, want, ts) => [
 function signed(key, packageCode, n = 0) {
   const address = addr(key);
   const msg = message(address, packageCode == null ? { action: 'read' } : { action: 'redeem', packageCode, n });
-  const body = { address, message: msg, signature: eip191.sign(key, msg) };
+  const body = { address, message: msg, signature: key.sign(msg) };
   if (packageCode != null) { body.packageCode = packageCode; body.n = n; }
   return body;
 }
 
-const COIN = '0x1111111111111111111111111111111111111111';
-const CURVE = '0x2222222222222222222222222222222222222222';
+const COIN = newWallet().address;
+const TREASURY = newWallet().address;
+const BURN_ACCOUNT = newWallet().address;
 // The fake wholesale's default catalogue (test/support/fake-wholesale.js) prices exactly these two
 // bundles, at exactly these dollar amounts, so the config below is what the fake will agree with.
 const PACKAGES = [
@@ -86,7 +93,10 @@ const PACKAGES = [
 // for it — the "our config is out of date" case a real deployment could hit between catalogue
 // refreshes.
 const STALE_PACKAGES = [Object.assign({}, PACKAGES[0], { priceUsd: 1.50 }), PACKAGES[1]];
-const BASE_CONFIG = { coin: COIN, curve: CURVE, treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', taxBps: 1000, budgetBps: 10000, provider: 'wholesale' };
+const BASE_CONFIG = {
+  chain: 'solana', coin: COIN, tokenProgram: S.PROGRAMS.token2022, treasury: TREASURY, budgetBps: 10000, provider: 'wholesale',
+  membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } },
+};
 const NORMAL_CONFIG = Object.assign({}, BASE_CONFIG, { packages: PACKAGES });
 const STALE_CONFIG = Object.assign({}, BASE_CONFIG, { packages: STALE_PACKAGES });
 const ALIAS_CODE = 'reviewed-germany-plan';
@@ -98,24 +108,24 @@ const ALIAS_CONFIG = Object.assign({}, BASE_CONFIG, {
 const CHEAPER_CONFIG = Object.assign({}, BASE_CONFIG, {
   packages: PACKAGES.map((p) => Object.assign({}, p, { priceUsd: Math.round(p.priceUsd * 50) / 100 })),
 });
-// The contract shape: written by the indexer, for one specific week, each wallet's standing FOR
-// THAT WEEK ONLY — tokens (base units), its share of the circulating supply, and the dollars that
-// share is worth of this week's budget.
+// The contract shape (docs/membership.md): written by the ledger keeper, for one specific week,
+// each sharing member's standing FOR THAT WEEK ONLY — tokens (base units at 6 decimals), its share
+// of the members' snapshot holdings, and the dollars of this week's budget that are its credit.
 const allowances = {
-  asOf: 1789600000, block: 64200000, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
-  snapshotBlock: 64100000, coin: COIN, curve: CURVE, budgetUsd: 1000, budgetSource: 'test fixture',
-  circulating: '1000000000000000000000000', decimals: 18, holders: 5,
+  asOf: 1789600000, slot: 458000000, chain: 'solana', week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  coin: COIN, tokenProgram: S.PROGRAMS.token2022, decimals: 6, treasury: TREASURY, budgetUsd: 1000, budgetSource: 'test fixture',
+  holders: 10, memberTokens: '6896000000',
   wallets: {
-    [addr(RICH)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
-    [addr(BROKE)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
-    [addr(SLOW)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
-    [addr(STALE)]: { tokens: '200000000000000000000', share: 0.02, allowanceUsd: 2.0 },
-    [addr(MOCKW)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
-    [addr(HOSTILE)]: { tokens: '299000000000000000000', share: 0.0299, allowanceUsd: 2.99 },
-    [addr(FIND_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
-    [addr(ORDER_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
-    [addr(SLUG_RACE)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
-    [addr(ALIAS)]: { tokens: '900000000000000000000', share: 0.09, allowanceUsd: 9.0 },
+    [addr(RICH)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
+    [addr(BROKE)]: { tokens: '299000000', share: 0.0434, allowanceUsd: 2.99, member: true },
+    [addr(SLOW)]: { tokens: '299000000', share: 0.0434, allowanceUsd: 2.99, member: true },
+    [addr(STALE)]: { tokens: '200000000', share: 0.029, allowanceUsd: 2.0, member: true },
+    [addr(MOCKW)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
+    [addr(HOSTILE)]: { tokens: '299000000', share: 0.0434, allowanceUsd: 2.99, member: true },
+    [addr(FIND_RACE)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
+    [addr(ORDER_RACE)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
+    [addr(SLUG_RACE)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
+    [addr(ALIAS)]: { tokens: '900000000', share: 0.1305, allowanceUsd: 9.0, member: true },
   },
 };
 const FILES = {
@@ -299,11 +309,13 @@ async function main() {
   // provider that never checked, is cleaned on the way out rather than trusted because it is ours.
   console.log('\na hostile record already in the store is still not served');
   const store = require(path.join(API, '_lib', 'store.js')).store();
-  const planted = await store.get('sim:' + addr(HOSTILE));
+  // wholesale keys a wallet's SIM record by its address, lowercased.
+  const simKey = 'sim:' + addr(HOSTILE).toLowerCase();
+  const planted = await store.get(simKey);
   const onlyIccid = Object.keys(planted.cards)[0];
   planted.cards[onlyIccid].appleInstallUrl = 'javascript:alert(1)';
   planted.cards[onlyIccid].qrCodeUrl = 'javascript:alert(2)';
-  await store.set('sim:' + addr(HOSTILE), planted);
+  await store.set(simKey, planted);
   const served = (await POST(signed(HOSTILE))).body.sims || [];
   check('a record poisoned in the database is served with its links emptied',
     served.map((x) => [x.qrCodeUrl, x.appleInstallUrl]), [['', '']]);

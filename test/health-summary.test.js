@@ -7,9 +7,12 @@ const { summary } = require('../scripts/health-summary');
 const { weekOf } = require('../site/api/_lib/week');
 const { catalogueFingerprint } = require('../site/api/_lib/catalogue');
 const now = Date.now();
-const config = { coin: '0x' + '1'.repeat(40), curve: '0x' + '2'.repeat(40), treasury: '0x' + '3'.repeat(40), provider: 'wholesale',
+const S = require('../site/solana.js');
+const membership = { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: 'HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } };
+const config = { chain: 'solana', coin: 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump', tokenProgram: S.PROGRAMS.token2022, treasury: 'GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR',
+  membership, provider: 'wholesale',
   catalogueAt: '2026-10-05', packages: [{ code: 'fixed_1GB_7D_AU', slug: 'australia', name: 'Australia', kind: 'country', regions: 'AU', gb: 1, days: 7, priceUsd: 1.99 }] };
-const healthy = { ok: true, asOf: Math.floor(now / 1000), config: { ...config, packages: 1, catalogueFingerprint: catalogueFingerprint(config), launched: true }, redemption: { enabled: true, ready: true },
+const healthy = { ok: true, asOf: Math.floor(now / 1000), config: { ...config, membership: { configured: true, ...membership }, packages: 1, catalogueFingerprint: catalogueFingerprint(config), launched: true }, redemption: { enabled: true, ready: true },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
   wiring: { provider: 'wholesale', payer: 'blink', store: 'upstash' },
   allowances: { week: weekOf(Math.floor(now / 1000)), stale: false }, pool: { usd: 100, sats: 100000 } };
@@ -25,6 +28,7 @@ for (const dependency of Object.keys(healthy.ready)) {
 assert.match(summary({ ...healthy, redemption: { enabled: false, ready: false } }, config, now), /Redemption enabled/);
 assert.match(summary({ ...healthy, pool: { usd: 0, sats: 0 } }, config, now), /Funded Lightning wallet/);
 assert.match(summary({ ...healthy, asOf: healthy.asOf - 181 }, config, now), /Backend status response/);
+assert.match(summary({ ...healthy, config: { ...healthy.config, coin: config.treasury } }, config, now), /Backend token addresses/);
 assert.notEqual(summary({ ok: true }, config, now), '');
 assert.equal(summary({ ...healthy, error: 'private-token-value', ready: { ...healthy.ready, payer: false } }, config, now).includes('private-token-value'), false);
 const script = path.resolve(__dirname, '../scripts/health-summary.js');

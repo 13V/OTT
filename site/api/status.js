@@ -51,6 +51,7 @@ const { redemptionsEnabled } = require('./_lib/redemption-policy');
 const { catalogueReady, catalogueFingerprint } = require('./_lib/catalogue');
 const { redactError } = require('./_lib/redact');
 const rules = require('./_lib/membership');
+const S = require('../solana.js');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -139,27 +140,37 @@ const messageOf = (e) => (e && e.message) || String(e || 'failed');
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers on the config.
 // ---------------------------------------------------------------------------------------------
-const isAddress = (a) => typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a);
+// A launch address is a canonical base58 Solana address, and not the all-zero key (the system
+// program's), which is what an unset Pubkey looks like.
+const isLaunchAddress = (a) => S.isAddress(a) && a !== S.PROGRAMS.system;
+
+/** The same "launched" redeem.js applies: chain, mint, its token program, treasury and the incinerator's account. */
+function launched(config) {
+  const m = config && config.membership;
+  return !!config && config.chain === 'solana' && isLaunchAddress(config.coin) && S.TOKEN_PROGRAMS.includes(config.tokenProgram)
+    && isLaunchAddress(config.treasury) && !!m && typeof m === 'object' && !Array.isArray(m) && isLaunchAddress(m.burnAccount);
+}
+const text = (value) => (typeof value === 'string' ? value : '');
 
 function summariseConfig(config) {
   const packages = Array.isArray(config.packages) ? config.packages : [];
   const places = new Set(packages.map((p) => p && p.slug).filter(Boolean)).size;
   return {
-    launched: isAddress(config.coin) && isAddress(config.curve),
-    coin: String(config.coin || ''),
-    curve: String(config.curve || ''),
-    treasury: String(config.treasury || ''),
+    chain: text(config.chain),
+    launched: launched(config),
+    coin: text(config.coin),
+    tokenProgram: text(config.tokenProgram),
+    treasury: text(config.treasury),
     provider: String(config.provider || ''),
     packages: packages.length,
     places,
     catalogueAt: String(config.catalogueAt || ''),
     catalogueFingerprint: catalogueFingerprint(config),
-    // Trading's rebate (rebateBps) is retired; budgetBps is its replacement, the share of last
-    // week's tax that becomes this week's data budget. It defaults to 10000 (all of it) when the
-    // config is silent on it, exactly as the indexer treats a missing value, so this reports what
-    // is actually in effect rather than a bare zero that would read as "no budget at all".
+    // budgetBps is the share of last week's collected creator fees that becomes this week's data
+    // budget. It defaults to 10000 (all of it) when the config is silent on it, exactly as the
+    // indexer treats a missing value, so this reports what is actually in effect rather than a
+    // bare zero that would read as "no budget at all".
     budgetBps: Number.isFinite(Number(config.budgetBps)) ? Number(config.budgetBps) : 10000,
-    taxBps: Number.isFinite(Number(config.taxBps)) ? Number(config.taxBps) : 0,
     membership: membershipSummary(config),
   };
 }
@@ -172,7 +183,7 @@ function membershipSummary(config) {
   let m;
   try { m = rules.membershipConfig(config); } catch (e) { return { configured: false, error: 'the membership block in esim.json is invalid' }; }
   if (!m) return { configured: false };
-  return { configured: true, burnTokens: m.burnTokens, burnAddress: m.burnAddress, capMultiple: m.capMultiple, welcome: m.welcome };
+  return { configured: true, burnUsd: m.burnUsd, burnOwner: m.burnOwner, burnAccount: m.burnAccount, capMultiple: m.capMultiple, welcome: m.welcome };
 }
 
 // What is actually selected, by env var, right now — as opposed to what esim.json merely says.
@@ -270,6 +281,14 @@ async function checkProvider() {
  * refused (see redeem.js). `week` is the current week, computed here once and shared with the rest
  * of computeStatus() so this check and the top-level `allowances` field never disagree.
  */
+/** The ledger's join amount for the current week, { week, burnTokens }, or null. */
+function requirementOf(allowances, week) {
+  const req = allowances && allowances.membership && allowances.membership.requirement;
+  if (!req || typeof req !== 'object' || Number(req.week) !== week || Number(allowances.week) !== week) return null;
+  const burnTokens = String(req.burnTokens || '');
+  return /^\d{1,30}$/.test(burnTokens) ? { week, burnTokens } : null;
+}
+
 async function checkAllowances(week) {
   try {
     const allowances = await withTimeout(readAllowances(), CHECK_TIMEOUT_MS, 'allowances');
@@ -278,7 +297,8 @@ async function checkAllowances(week) {
     const holders = Number.isFinite(Number(allowances && allowances.holders)) ? Number(allowances.holders) : wallets;
     const budgetUsd = Number(allowances && allowances.budgetUsd) || 0;
     const stale = !Number.isFinite(fileWeek) || fileWeek !== week;
-    const info = { week: Number.isFinite(fileWeek) ? fileWeek : null, currentWeek: week, stale, budgetUsd, holders };
+    const members = allowances && allowances.members && typeof allowances.members === 'object' && !Array.isArray(allowances.members) ? Object.keys(allowances.members).length : 0;
+    const info = { week: Number.isFinite(fileWeek) ? fileWeek : null, currentWeek: week, stale, budgetUsd, holders, members, requirement: requirementOf(allowances, week) };
     if (stale) {
       const detail = 'allowance file is for week ' + (Number.isFinite(fileWeek) ? fileWeek : 'unknown') + ', not the current week ' + week + ' — not published yet';
       return { ok: false, detail, info };
@@ -328,7 +348,7 @@ async function computeStatus() {
   const summary = summariseConfig(config);
   const ready = { config: configOk, provider: checks.provider.ok, payer: checks.payer.ok, store: checks.store.ok, allowances: checks.allowances.ok };
   const enabled = redemptionsEnabled();
-  const redemptionReady = enabled && summary.launched && isAddress(config.treasury) && summary.packages > 0
+  const redemptionReady = enabled && summary.launched && summary.packages > 0
     && Object.values(ready).every(Boolean)
     && providerName === 'wholesale' && payerName === 'blink' && storeName === 'upstash'
     && !!pool && pool.sats > 0 && pool.usd > 0

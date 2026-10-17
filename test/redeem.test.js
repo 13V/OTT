@@ -5,9 +5,9 @@
  *
  * site/api/redeem.js is a Vercel function that talks to three things: the deployment's own
  * static files (config + allowances), a wallet's signature, and an eSIM provider. All three are
- * stood in for here — a node:http server for the files, _lib/secp256k1 + _lib/eip191 for the
- * wallet (the same code path a browser's personal_sign produces bytes for), and the mock
- * provider — so what is checked is the function's own logic: who may redeem, how much, that
+ * stood in for here — a node:http server for the files, node:crypto ed25519 keys for the wallet
+ * (the same bytes a wallet's signMessage produces: a signature over the message's UTF-8, base58),
+ * and the mock provider — so what is checked is the function's own logic: who may redeem, how much, that
  * asking twice never mints twice, and — the new part — that a wallet's allowance is this week's
  * share of the file's budget and nothing more: it does not carry over, its ids do not collide
  * with last week's, and a file that is not for the current week spends nothing at all.
@@ -20,11 +20,12 @@
  *   node test/redeem.test.js
  */
 const http = require('node:http');
+const crypto = require('node:crypto');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
-const secp = require(path.join(API, '_lib', 'secp256k1.js'));
-const eip191 = require(path.join(API, '_lib', 'eip191.js'));
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
+const solanaAuth = require(path.join(API, '_lib', 'solana-auth.js'));
 const mock = require(path.join(API, '_lib', 'providers', 'mock.js'));
 const week = require(path.join(API, '_lib', 'week.js'));
 
@@ -44,44 +45,60 @@ function checkThat(what, cond, detail) {
 const CUR = week.weekOf(Math.floor(Date.now() / 1000));
 const STALE_WEEK = CUR - 1;
 
+// A Solana wallet: an ed25519 key, its base58 address, and signMessage's answer — the signature
+// over the message's exact UTF-8 bytes, base58.
+function newWallet() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const address = S.encodeBase58(new Uint8Array(publicKey.export({ format: 'der', type: 'spki' }).subarray(12)));
+  return { address, sign: (text) => S.encodeBase58(new Uint8Array(crypto.sign(null, Buffer.from(text, 'utf8'), privateKey))) };
+}
 // Four wallets, so each scenario starts from a clean ledger without reaching into the mock.
-const RICH = secp.newPrivateKey();       // $5.30 allowance this week
-const POOR = secp.newPrivateKey();       // holds no OTT: not in the wallets map at all
-const OTHER = secp.newPrivateKey();      // signs for RICH's address
-const HISTORIAN = secp.newPrivateKey();  // $2.00 this week, plus orders in each of the last 4 weeks
-const addr = (k) => secp.addressOf(k).toLowerCase();
+const RICH = newWallet();       // $5.30 allowance this week
+const POOR = newWallet();       // holds no OTT: not in the wallets map at all
+const OTHER = newWallet();      // signs for RICH's address
+const HISTORIAN = newWallet();  // $2.00 this week, plus orders in each of the last 4 weeks
+const addr = (k) => k.address;
 
-const COIN = '0x1111111111111111111111111111111111111111';
-const CURVE = '0x2222222222222222222222222222222222222222';
+const COIN = newWallet().address;
+const TREASURY = newWallet().address;
+const BURN_ACCOUNT = newWallet().address;
+const TOKEN_2022 = S.PROGRAMS.token2022;
 // Two real catalogue entries at their 14 Sep 2026 wholesale prices, so the arithmetic below is
 // the arithmetic the deployment will do: $5.30 buys the dear one, then the cheap one, then nothing.
 const PACKAGES = [
   { code: 'GL-120_1_7', packageCode: 'PHS30M6EZ', name: 'Worldwide', gb: 1, days: 7, priceUsd: 4.6, regions: '120+ countries' },
   { code: 'EU-35_1_7', packageCode: 'P2CYMUS93', name: 'Europe', gb: 1, days: 7, priceUsd: 0.62, regions: '35 countries' },
 ];
+// A launched Solana config: the chain, the mint, the program that owns it, the treasury, and the
+// incinerator's token account in the membership block.
 const config = (coin) => ({
-  coin, curve: coin ? CURVE : '', treasury: '', pair: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
-  taxBps: 1000, budgetBps: 10000, provider: 'mock', packages: PACKAGES,
+  chain: 'solana', coin, tokenProgram: coin ? TOKEN_2022 : '', treasury: coin ? TREASURY : '', budgetBps: 10000, provider: 'mock', packages: PACKAGES,
+  membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: coin ? BURN_ACCOUNT : '', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } },
 });
-// site/data/allowances.json's contract shape: written by the indexer, for one specific week, with
-// each wallet's standing FOR THAT WEEK ONLY. RICH and HISTORIAN hold tokens; POOR is simply absent
-// from `wallets`, exactly as a wallet holding zero OTT would be.
+// site/data/allowances.json's contract shape (docs/membership.md): written by the ledger keeper,
+// for one specific week, with each sharing member's standing FOR THAT WEEK ONLY. RICH and
+// HISTORIAN are in `wallets`; POOR is simply absent, exactly as a wallet that held no OTT at the
+// snapshot would be.
 const allowances = {
-  asOf: 1789600000, block: 64200000, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
-  snapshotBlock: 64100000, coin: COIN, curve: CURVE, budgetUsd: 1000, budgetSource: 'test fixture',
-  circulating: '1000000000000000000000000', decimals: 18, holders: 2,
+  asOf: 1789600000, slot: 458000000, chain: 'solana', week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, treasury: TREASURY, budgetUsd: 1000, budgetSource: 'test fixture',
+  holders: 2, memberTokens: '1500000000000',
   wallets: {
-    [addr(RICH)]: { tokens: '1000000000000000000000', share: 0.1, allowanceUsd: 5.3 },
-    [addr(HISTORIAN)]: { tokens: '500000000000000000000', share: 0.05, allowanceUsd: 2.0 },
+    [addr(RICH)]: { tokens: '1000000000000', share: 0.6667, allowanceUsd: 5.3, member: true },
+    [addr(HISTORIAN)]: { tokens: '500000000000', share: 0.3333, allowanceUsd: 2.0, member: true },
   },
 };
 // The same file, but stamped for last week — what the site sees the instant the clock rolls past
 // Monday 00:00 UTC and the indexer has not run yet. RICH's numbers are otherwise identical, so any
 // test against this fixture proves the staleness, not a coincidentally-empty wallet.
 const staleAllowances = Object.assign({}, allowances, { week: STALE_WEEK, weekStart: week.weekStart(STALE_WEEK), weekEnd: week.weekEnd(STALE_WEEK) });
+// This week's file, but written for another coin: what the deployment serves between esim.json
+// gaining the launched coin and the keeper's first run against it.
+const otherCoinAllowances = Object.assign({}, allowances, { coin: newWallet().address });
 const FILES = {
   '/data/allowances.json': allowances,
   '/data/allowances-stale.json': staleAllowances,
+  '/data/allowances-other-coin.json': otherCoinAllowances,
   '/config/esim.json': config(COIN),
   '/config/esim-unlaunched.json': config(''),
 };
@@ -120,7 +137,7 @@ function signed(key, packageCode, opts = {}) {
   const n = opts.n === undefined ? 0 : opts.n;
   const want = packageCode == null ? { action: 'read' } : { action: 'redeem', packageCode, n };
   const msg = opts.message !== undefined ? opts.message : message(address, want, opts.ts);
-  const body = { address: opts.sendAddress || address, message: msg, signature: opts.signature || eip191.sign(key, msg) };
+  const body = { address: opts.sendAddress || address, message: msg, signature: opts.signature || key.sign(msg) };
   if (packageCode != null) { body.packageCode = packageCode; body.n = n; }
   return body;
 }
@@ -274,9 +291,9 @@ async function main() {
   const oversizedBody = { ...exactBody, padding: exactBody.padding + 'A' };
   const utf8Body = { ...signed(RICH, null), padding: 'ü'.repeat(8500) };
   checkThat('the multibyte fixture fits by character count but exceeds the byte limit', JSON.stringify(utf8Body).length < bodyLimit && Buffer.byteLength(JSON.stringify(utf8Body), 'utf8') > bodyLimit);
-  const recoverBeforeBodyLimits = eip191.recoverAddress;
+  const verifyBeforeBodyLimits = solanaAuth.verifyMessage;
   let oversizedVerificationCalls = 0;
-  eip191.recoverAddress = (...args) => { oversizedVerificationCalls++; return recoverBeforeBodyLimits(...args); };
+  solanaAuth.verifyMessage = (...args) => { oversizedVerificationCalls++; return verifyBeforeBodyLimits(...args); };
   try {
     for (const [label, oversized] of [['one byte over', oversizedBody], ['multibyte', utf8Body]]) {
       for (const [shape, rawBody] of [['parsed object', oversized], ['JSON string', JSON.stringify(oversized)]]) {
@@ -285,11 +302,13 @@ async function main() {
       }
     }
     check('oversized hosted bodies reach no signature verification', oversizedVerificationCalls, 0);
-  } finally { eip191.recoverAddress = recoverBeforeBodyLimits; }
+  } finally { solanaAuth.verifyMessage = verifyBeforeBodyLimits; }
 
   console.log('\nwho may redeem');
   r = await POST(signed(RICH, 'EU-35_1_7', { signature: '0x' + 'ab'.repeat(65) }));
   check('a garbage signature is 401', r.status, 401);
+  r = await POST(signed(RICH, 'EU-35_1_7', { signature: S.encodeBase58(crypto.randomBytes(64)) }));
+  check('64 random bytes of base58 are not a signature either', r.status, 401);
   r = await POST(signed(OTHER, 'EU-35_1_7', { address: addr(RICH) }));
   check('another key signing for this address is 401', r.status, 401);
   r = await POST(signed(RICH, 'EU-35_1_7', { ts: now() - 11 * 60 }));
@@ -330,14 +349,24 @@ async function main() {
   mock._reset(); redeem._resetCaches();
   r = await POST(signed(RICH, 'MARS_1_7'));
   check('a package that is not in the config is 400', [r.status, r.body.error], [400, 'unknown package']);
-  // Wallets and hardware signers disagree on whether v is 27/28 or 0/1; both must recover.
+  // A signature is the 64 bytes in base58, the way the app sends signMessage's answer; the same
+  // bytes in another encoding, or over the message with one byte changed, are refused.
   const good = signed(RICH, 'EU-35_1_7');
-  const vLow = good.signature.slice(0, 130) + (parseInt(good.signature.slice(130), 16) - 27).toString(16).padStart(2, '0');
-  r = await POST(Object.assign({}, good, { signature: vLow }));
-  check('a signature with v in {0,1} is accepted', r.status, 200);
+  r = await POST(Object.assign({}, good, { signature: Buffer.from(S.decodeBase58(good.signature)).toString('base64') }));
+  check('the same signature in base64 is refused', r.status, 401);
+  r = await POST(Object.assign({}, good, { message: good.message + '\n' }));
+  check('a signature over different bytes is refused', r.status, 401);
+  check('neither minted anything', await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0)), null);
+  // Base58 is case-sensitive: changing the letter case of an address names another key (or no
+  // valid one at all), never the same wallet.
+  const recased = addr(RICH).replace(/[a-z]/g, (c) => c.toUpperCase());
+  r = await POST(Object.assign({}, good, { address: recased }));
+  checkThat('an address with its letter case changed is not the same wallet', r.status === 400 || r.status === 401, JSON.stringify(r));
+  r = await GET(recased);
+  checkThat('nor is it on a public read', r.status === 400 || (r.status === 200 && r.body.allowanceUsd === 0), JSON.stringify(r.body));
+  r = await POST(good);
+  check('the signature as sent, for the address as signed, still works', r.status, 200);
   mock._reset(); redeem._resetCaches();
-  r = await POST(Object.assign({}, good, { address: addr(RICH).toUpperCase().replace('0X', '0x') }));
-  check('a checksummed / upper-case address is the same wallet', r.status, 200);
 
   // ------------------------------------------------------------------------------------------
   // A signature authorises ONE action. It used to authorise the wallet: anything holding a
@@ -534,6 +563,18 @@ async function main() {
   check('nothing was minted', (await mock.find(redeem.transactionIdFor(addr(RICH), CUR, 0))), null);
   process.env.ALLOWANCES_URL = base + '/data/allowances.json';
 
+  console.log('\na ledger about another coin is not this coin\'s ledger');
+  mock._reset(); redeem._resetCaches();
+  process.env.ALLOWANCES_URL = base + '/data/allowances-other-coin.json';
+  r = await GET(addr(RICH));
+  check('it reads as unpublished: stale, nothing to spend, no holding', [r.status, r.body.stale, r.body.allowanceUsd, r.body.tokens, r.body.decimals], [200, true, 0, '0', null]);
+  r = await POST(signed(RICH, 'EU-35_1_7', { n: 0 }));
+  check('and nothing can be spent against it', [r.status, /not been published/.test(r.body.error)], [409, true]);
+  process.env.ALLOWANCES_URL = base + '/data/allowances.json';
+  redeem._resetCaches();
+  r = await GET(addr(RICH));
+  check('this coin\'s ledger reports its decimals with the holding', [r.body.tokens, r.body.decimals, r.body.share], ['1000000000000', 6, 0.6667]);
+
   console.log('\nVercel hands the function a pre-parsed body');
   mock._reset(); redeem._resetCaches();
   r = await call(redeem, { method: 'POST', url: '/api/redeem', rawBody: signed(RICH, 'EU-35_1_7') });
@@ -654,21 +695,37 @@ async function main() {
   mock.find = async (...args) => { invalidLaunchProviderCalls++; return findBeforeInvalidLaunch(...args); };
   mock.order = async (...args) => { invalidLaunchProviderCalls++; return orderBeforeInvalidLaunch(...args); };
   try {
-    for (const field of ['coin', 'curve']) {
-      for (const [label, invalid] of [['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['short', '0x1234'], ['wrapped in an array', [COIN]]]) {
+    const invalidValues = [['an EVM', '0x' + '1'.repeat(40)], ['the all-zero', S.PROGRAMS.system], ['a malformed', 'not-an-address'], ['a short', '1234'],
+      ['an array-wrapped', [COIN]], ['a missing', '']];
+    const withField = (field, value) => {
+      const c = config(COIN);
+      if (field === 'burnAccount') c.membership = Object.assign({}, c.membership, { burnAccount: value });
+      else c[field] = value;
+      return c;
+    };
+    for (const field of ['coin', 'tokenProgram', 'treasury', 'burnAccount']) {
+      for (const [label, invalid] of invalidValues.concat(field === 'tokenProgram' ? [['a non-token-program', COIN]] : [])) {
         const route = '/config/esim-invalid-' + field + '-' + label.replace(/ /g, '-') + '.json';
-        FILES[route] = Object.assign({}, config(COIN), { [field]: invalid });
+        FILES[route] = withField(field, invalid);
         process.env.ESIM_CONFIG_URL = base + route;
         redeem._resetCaches();
         const responses = await Promise.all([GET(addr(RICH)), POST(signed(RICH, null)), POST(signed(RICH, 'EU-35_1_7'))]);
-        check('a ' + label + ' ' + field + ' keeps account, signed read and purchase prelaunch', responses.map((x) => [x.status, x.body.error]), [[409, 'coin not launched yet'], [409, 'coin not launched yet'], [409, 'coin not launched yet']]);
+        check(label + ' ' + field + ' keeps account, signed read and purchase prelaunch', responses.map((x) => [x.status, x.body.error]), [[409, 'coin not launched yet'], [409, 'coin not launched yet'], [409, 'coin not launched yet']]);
       }
+    }
+    for (const [label, changed] of [['no chain', { chain: undefined }], ['another chain', { chain: 'robinhood' }], ['no membership block', { membership: undefined }]]) {
+      const route = '/config/esim-invalid-' + label.replace(/ /g, '-') + '.json';
+      FILES[route] = Object.assign(config(COIN), changed);
+      process.env.ESIM_CONFIG_URL = base + route;
+      redeem._resetCaches();
+      r = await GET(addr(RICH));
+      check('a config with ' + label + ' is prelaunch', [r.status, r.body.error], [409, 'coin not launched yet']);
     }
     check('invalid launch configuration reached no provider lookup or order', invalidLaunchProviderCalls, 0);
     process.env.ESIM_CONFIG_URL = base + '/config/esim.json';
     redeem._resetCaches();
     r = await POST(signed(RICH, null));
-    checkThat('valid launched addresses still permit signed installation retrieval without a treasury field', r.status === 200 && r.body.orders[0].codes && !!r.body.orders[0].ac);
+    checkThat('valid launched addresses still permit signed installation retrieval', r.status === 200 && r.body.orders[0].codes && !!r.body.orders[0].ac);
   } finally {
     mock.find = findBeforeInvalidLaunch; mock.order = orderBeforeInvalidLaunch;
     process.env.ESIM_CONFIG_URL = base + '/config/esim.json';

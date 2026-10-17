@@ -6,14 +6,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend } = require('../scripts/check-launch');
+const { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend, burnAccountCheck } = require('../scripts/check-launch');
+const S = require('../site/solana.js');
 const { weekOf } = require('../site/api/_lib/week');
 const { catalogueFingerprint } = require('../site/api/_lib/catalogue');
 const now = Date.now();
 const bundle = { code: 'fixed_5GB_30D_US', slug: 'united-states', name: 'United States', kind: 'country', regions: 'US', gb: 5, days: 30, priceUsd: 7.99 };
-const esim = { coin: '0x' + '1'.repeat(40), curve: '0x' + '2'.repeat(40), treasury: '0x' + '3'.repeat(40), provider: 'wholesale', catalogueAt: '2026-10-05', packages: [bundle] };
-const config = { app: { walletConnect: { projectId: 'a'.repeat(32) }, apiBaseUrl: 'https://api.example' }, esim, chain: { chainId: 4663, rpc: 'https://rpc.example' } };
-const status = { ok: true, asOf: Math.floor(now / 1000), config: { ...esim, packages: esim.packages.length, catalogueFingerprint: catalogueFingerprint(esim), launched: true },
+// A real pump.fun mint (Token-2022) and the incinerator's token account for it, as read on mainnet
+// (test/fixtures/solana/join-creates-account.json), so the derivation check is a real one.
+const COIN = 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump';
+const BURN_ACCOUNT = 'HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF';
+const TREASURY = 'GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR';
+const membership = burnAccount => ({ burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount, capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } });
+const esim = { chain: 'solana', coin: COIN, tokenProgram: S.PROGRAMS.token2022, treasury: TREASURY, membership: membership(BURN_ACCOUNT), provider: 'wholesale', catalogueAt: '2026-10-05', packages: [bundle] };
+const chain = { chain: 'solana', cluster: 'mainnet-beta', rpcs: ['https://rpc.example', 'https://rpc2.example/path'], browserRpcs: ['https://rpc.example'] };
+const config = { app: { apiBaseUrl: 'https://api.example' }, esim, chain };
+// /api/status's config summary carries the incinerator account inside its membership summary.
+const summary = cfg => ({ chain: cfg.chain, coin: cfg.coin, tokenProgram: cfg.tokenProgram, treasury: cfg.treasury, provider: cfg.provider, catalogueAt: cfg.catalogueAt,
+  membership: { configured: true, ...cfg.membership }, packages: cfg.packages.length, catalogueFingerprint: catalogueFingerprint(cfg) });
+const status = { ok: true, asOf: Math.floor(now / 1000), config: { ...summary(esim), launched: true },
   redemption: { enabled: true, ready: true },
   ready: { config: true, provider: true, payer: true, store: true, allowances: true },
   wiring: { provider: 'wholesale', payer: 'blink', store: 'upstash' },
@@ -25,16 +36,31 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
   assert.equal(apiOrigin('https://api.example/'), 'https://api.example');
   for (const value of ['', 'http://api.example', 'https://user:secret@api.example', 'https://api.example/api', 'https://api.example?token=secret', 'https://api.example#secret', 'https://api.example/..', ' https://api.example', 'https://api.example\\']) assert.equal(apiOrigin(value), '');
   assert.deepEqual(failed(publicChecks(config)), []);
-  assert.equal(publicChecks({ ...config, chain: { ...config.chain, rpc: 'https://rpc.example/network' } }).find(row => row.id === 'chain').ok, true);
-  assert.deepEqual(failed(publicChecks({ ...config, app: { walletConnect: { projectId: '' }, apiBaseUrl: '' }, esim: { ...esim, treasury: '' } })), ['wallet', 'api', 'contracts']);
-  assert.equal(publicChecks({ ...config, esim: { ...esim, coin: '0x' + '0'.repeat(40) } }).find(row => row.id === 'contracts').ok, false);
+  assert.equal(failed(publicChecks(config)).includes('wallet'), false, 'the WalletConnect project is no longer a launch requirement');
+  assert.deepEqual(failed(publicChecks({ ...config, app: { apiBaseUrl: '' }, esim: { ...esim, treasury: '' } })), ['api', 'contracts']);
+  for (const [field, value] of [['coin', S.PROGRAMS.system], ['coin', '0x' + '1'.repeat(40)], ['coin', COIN.toLowerCase()], ['tokenProgram', COIN], ['treasury', ''], ['chain', 'robinhood']]) {
+    assert.equal(publicChecks({ ...config, esim: { ...esim, [field]: value } }).find(row => row.id === 'contracts').ok, false, field + ' ' + value);
+  }
+  assert.equal(publicChecks({ ...config, esim: { ...esim, membership: membership('') } }).find(row => row.id === 'contracts').ok, false);
+  for (const network of [{ ...chain, chain: 'evm' }, { ...chain, cluster: 'devnet' }, { ...chain, rpcs: [] }, { ...chain, rpcs: ['http://rpc.example'] }, { ...chain, browserRpcs: undefined },
+    { ...chain, rpcs: ['https://user:secret@rpc.example'] }, { chainId: 4663, rpc: 'https://rpc.example' }]) {
+    assert.equal(publicChecks({ ...config, chain: network }).find(row => row.id === 'chain').ok, false, JSON.stringify(network));
+  }
+
+  console.log('the incinerator account is re-derived from the coin');
+  assert.equal((await burnAccountCheck(esim)).ok, true);
+  assert.equal((await burnAccountCheck({ ...esim, membership: membership(TREASURY) })).ok, false);
+  assert.equal((await burnAccountCheck({ ...esim, tokenProgram: S.PROGRAMS.token })).ok, false, 'the same mint under the other token program derives another account');
+  assert.equal((await burnAccountCheck({ ...esim, coin: '' })).ok, false);
   for (const packages of [[], [{}], [bundle, bundle], [{ ...bundle, priceUsd: 0 }], [{ ...bundle, priceUsd: Infinity }], [{ ...bundle, days: 0 }], [{ ...bundle, gb: '5' }], [{ ...bundle, name: '' }]]) assert.equal(catalogueReady({ packages }), false);
 
   console.log('a successful HTTP response does not establish live readiness');
   assert.equal(failed(statusChecks({ ok: true }, esim, now)).includes('status'), true);
   assert.deepEqual(failed(statusChecks(status, esim, now)), []);
   assert.equal(failed(statusChecks({ ...status, asOf: status.asOf - 181 }, esim, now)).includes('status'), true);
-  assert.equal(failed(statusChecks({ ...status, config: { ...status.config, coin: '0x' + '4'.repeat(40) } }, esim, now)).includes('contracts-match'), true);
+  assert.equal(failed(statusChecks({ ...status, config: { ...status.config, coin: TREASURY } }, esim, now)).includes('contracts-match'), true);
+  assert.equal(failed(statusChecks({ ...status, config: { ...status.config, membership: { ...status.config.membership, burnAccount: TREASURY } } }, esim, now)).includes('contracts-match'), true);
+  assert.equal(failed(statusChecks({ ...status, config: { ...status.config, chain: '' } }, esim, now)).includes('contracts-match'), true);
   assert.equal(failed(statusChecks({ ...status, ready: { ...status.ready, payer: false } }, esim, now)).includes('backend-payer'), true);
   assert.equal(failed(statusChecks({ ...status, wiring: { provider: 'mock', payer: 'mock', store: 'memory' } }, esim, now)).includes('real-provider'), true);
   assert.equal(failed(statusChecks({ ...status, wiring: { ...status.wiring, provider: 'esimaccess' } }, { ...esim, provider: 'esimaccess' }, now)).includes('real-provider'), true);
@@ -44,10 +70,12 @@ const failed = rows => rows.filter(row => !row.ok).map(row => row.id);
   assert.equal(failed(statusChecks({ ...status, error: 'status computation failed' }, esim, now)).includes('status'), true);
 
   console.log('prelaunch checks separate preparation from wallet funding and token launch');
-  const prelaunchEsim = { ...esim, coin: '', curve: '', treasury: '' };
-  const prelaunchStatus = { ...status, config: { ...prelaunchEsim, packages: 1, catalogueFingerprint: catalogueFingerprint(prelaunchEsim), launched: false }, redemption: { enabled: false, ready: false }, ready: { ...status.ready, payer: false, allowances: false }, allowances: null, pool: null };
+  const prelaunchEsim = { ...esim, coin: '', tokenProgram: '', treasury: '', membership: membership('') };
+  const prelaunchStatus = { ...status, config: { ...summary(prelaunchEsim), launched: false }, redemption: { enabled: false, ready: false }, ready: { ...status.ready, payer: false, allowances: false }, allowances: null, pool: null };
   assert.deepEqual(failed(prelaunchPublicChecks({ ...config, esim: prelaunchEsim })), []);
   assert.equal(failed(prelaunchPublicChecks({ ...config, esim: { ...prelaunchEsim, coin: esim.coin } })).includes('prelaunch-contracts'), true);
+  assert.equal(failed(prelaunchPublicChecks({ ...config, esim: { ...prelaunchEsim, membership: membership(BURN_ACCOUNT) } })).includes('prelaunch-contracts'), true);
+  assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, config: { ...prelaunchStatus.config, tokenProgram: S.PROGRAMS.token2022 } }, prelaunchEsim, now)).includes('prelaunch-contracts-match'), true);
   assert.deepEqual(failed(prelaunchStatusChecks(prelaunchStatus, prelaunchEsim, now)), []);
   assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, redemption: { enabled: true, ready: false } }, prelaunchEsim, now)).includes('redemption-paused'), true);
   assert.equal(failed(prelaunchStatusChecks({ ...prelaunchStatus, ready: { ...prelaunchStatus.ready, provider: false } }, prelaunchEsim, now)).includes('backend-provider'), true);

@@ -6,14 +6,12 @@ const http = require('node:http');
 const net = require('node:net');
 const redeem = require('../site/api/redeem');
 const status = require('../site/api/status');
-const auth = require('../site/api/auth');
 const { allowRequestOrigin } = require('../site/api/_lib/request-origin');
 
 const MAX_BODY_BYTES = 16 * 1024;
 const ROUTES = new Map([
   ['/api/redeem', { handler: redeem, methods: ['GET', 'POST', 'OPTIONS'] }],
   ['/api/status', { handler: status, methods: ['GET', 'OPTIONS'] }],
-  ['/api/auth', { handler: auth, methods: ['POST', 'OPTIONS'] }],
 ]);
 
 function sendError(res, code, message, close = false) {

@@ -6,11 +6,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { weekOf } = require('../site/api/_lib/week');
 const { catalogueReady, catalogueFingerprint } = require('../site/api/_lib/catalogue');
+const S = require('../site/solana.js');
 const FRONTEND = 'https://13v.github.io';
-const address = value => /^0x[\da-f]{40}$/i.test(value || '') && !/^0x0{40}$/i.test(value);
+// A launch address is a canonical base58 Solana address, never the all-zero key an unset one reads as.
+const address = value => S.isAddress(value) && value !== S.PROGRAMS.system;
 const row = (id, label, ok, detail) => ({ id, label, ok: !!ok, detail });
-const tokenKeys = ['coin', 'curve', 'treasury'];
-const unlaunched = esim => tokenKeys.every(key => esim?.[key] === '');
+// The four addresses filled in on launch day (docs/membership.md). The incinerator's account sits
+// in the membership block, in esim.json and in /api/status's config summary alike.
+const launchFields = cfg => ({ coin: cfg?.coin, tokenProgram: cfg?.tokenProgram, treasury: cfg?.treasury, burnAccount: cfg?.membership?.burnAccount });
+const unlaunched = cfg => Object.values(launchFields(cfg)).every(value => value === '');
+const launchedConfig = cfg => cfg?.chain === 'solana' && address(cfg?.coin) && S.TOKEN_PROGRAMS.includes(cfg?.tokenProgram)
+  && address(cfg?.treasury) && address(cfg?.membership?.burnAccount);
 function catalogueMatches(body, esim) {
   const fingerprint = catalogueFingerprint(esim);
   return !!fingerprint && body?.ready?.config === true && body?.config?.packages === esim.packages.length
@@ -24,6 +30,7 @@ function httpsRpc(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; }
   catch (_) { return false; }
 }
+const httpsRpcs = list => Array.isArray(list) && list.length > 0 && list.every(httpsRpc);
 
 function apiOrigin(value) {
   try {
@@ -33,27 +40,25 @@ function apiOrigin(value) {
 }
 
 function publicChecks({ app, esim, chain }) {
-  const projectId = app?.walletConnect?.projectId;
-  const launched = ['coin', 'curve', 'treasury'].every(key => address(esim?.[key]));
   return [
-    row('wallet', 'Mobile wallet project', typeof projectId === 'string' && /^[\da-f]{32}$/i.test(projectId), 'Configure the public Reown project ID.'),
     row('api', 'HTTPS backend origin', !!apiOrigin(app?.apiBaseUrl), 'Configure the real API origin, without a path or credentials.'),
-    row('contracts', 'Token launch addresses', launched, 'Publish the real coin, curve and treasury addresses after launch.'),
-    row('chain', 'Wallet network', Number.isSafeInteger(chain?.chainId) && chain.chainId > 0 && httpsRpc(chain.rpc), 'Use the configured chain ID and HTTPS RPC.'),
+    row('contracts', 'Token launch addresses', launchedConfig(esim), 'Publish the real coin, its token program, the treasury and the incinerator account after launch.'),
+    row('chain', 'Wallet network', chain?.chain === 'solana' && chain.cluster === 'mainnet-beta' && httpsRpcs(chain.rpcs) && httpsRpcs(chain.browserRpcs),
+      'Use Solana mainnet with HTTPS RPC endpoints for the keepers and for browsers.'),
     row('catalogue', 'Data catalogue', catalogueReady(esim), 'Publish valid, uniquely named provider packages with data, duration and price.'),
   ];
 }
 
 function prelaunchPublicChecks(config) {
   return publicChecks(config).map(check => check.id === 'contracts'
-    ? row('prelaunch-contracts', 'Token launch remains pending', unlaunched(config.esim), 'All three token launch addresses must remain blank during prelaunch.') : check)
+    ? row('prelaunch-contracts', 'Token launch remains pending', unlaunched(config.esim), 'All four token launch addresses must remain blank during prelaunch.') : check)
     .concat(row('provider-selection', 'Provider selection', config.esim?.provider === 'wholesale', 'Use the verified nadanada wholesale catalogue.'));
 }
 
 function prelaunchStatusChecks(body, esim, now = Date.now()) {
   return [
     row('status', 'Backend status response', freshStatus(body, now), 'A fresh, valid status response is required; HTTP 200 alone is insufficient.'),
-    row('prelaunch-contracts-match', 'Backend remains prelaunch', unlaunched(body?.config) && body?.config?.launched === false, 'The backend must also keep all three token launch addresses blank.'),
+    row('prelaunch-contracts-match', 'Backend remains prelaunch', unlaunched(body?.config) && body?.config?.launched === false, 'The backend must also keep all four token launch addresses blank.'),
     row('redemption-paused', 'Redemption remains disabled', body?.redemption?.enabled === false && body?.redemption?.ready === false, 'Disable redemption while preparing the service.'),
     row('backend-config', 'Backend catalogue', catalogueMatches(body, esim), 'Deploy the same reviewed catalogue, including provider SKU, coverage, data, duration and price, as the frontend.'),
     row('backend-provider', 'Provider catalogue access', body?.ready?.provider === true && body?.wiring?.provider === 'wholesale', 'The real provider catalogue must answer without placing an order.'),
@@ -63,8 +68,9 @@ function prelaunchStatusChecks(body, esim, now = Date.now()) {
 }
 
 function statusChecks(body, esim, now = Date.now()) {
-  const sameContracts = ['coin', 'curve', 'treasury'].every(key => address(body?.config?.[key])
-    && String(body.config[key]).toLowerCase() === String(esim?.[key] || '').toLowerCase());
+  // Base58 is case-sensitive, so the backend's addresses must match the app's exactly.
+  const backend = launchFields(body?.config), app = launchFields(esim);
+  const sameContracts = launchedConfig(body?.config) && Object.keys(app).every(key => backend[key] === app[key]);
   const currentWeek = weekOf(Math.floor(now / 1000));
   const allocation = body?.allowances;
   const rows = [
@@ -106,6 +112,18 @@ async function probeBackend(origin, esim, fetcher = fetch, prelaunch = false) {
   return rows;
 }
 
+/**
+ * The incinerator account must be the one derived from the coin and its token program; a typo
+ * there sends members' OTT somewhere else. Re-derived here so the launch check says so too.
+ */
+async function burnAccountCheck(esim) {
+  let ok = false;
+  try {
+    ok = launchedConfig(esim) && await S.associatedTokenAddress(S.INCINERATOR, esim.coin, esim.tokenProgram) === esim.membership.burnAccount;
+  } catch (_) { ok = false; }
+  return row('burn-account', 'Incinerator account', ok, 'membership.burnAccount must be the incinerator’s token account for the coin.');
+}
+
 async function main(args = process.argv.slice(2), root = path.resolve(__dirname, '..')) {
   if (args.some(arg => !['--remote', '--json', '--prelaunch', '--help'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Use check:launch with --remote, --json, --prelaunch or --help only.');
   if (args.includes('--help')) {
@@ -119,6 +137,7 @@ async function main(args = process.argv.slice(2), root = path.resolve(__dirname,
   } catch (_) { throw new Error('The public app configuration is missing or invalid JSON.'); }
   const prelaunch = args.includes('--prelaunch');
   const checks = prelaunch ? prelaunchPublicChecks(config) : publicChecks(config);
+  if (!prelaunch) checks.push(await burnAccountCheck(config.esim));
   const configured = checks.every(check => check.ok);
   const remote = args.includes('--remote');
   const origin = apiOrigin(config.app?.apiBaseUrl);
@@ -135,5 +154,5 @@ async function main(args = process.argv.slice(2), root = path.resolve(__dirname,
   return passed ? 0 : 1;
 }
 
-module.exports = { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend, main };
+module.exports = { apiOrigin, catalogueReady, publicChecks, prelaunchPublicChecks, statusChecks, prelaunchStatusChecks, probeBackend, burnAccountCheck, main };
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(() => { console.error('Launch check failed. Check the public configuration and supported flags.'); process.exitCode = 1; });

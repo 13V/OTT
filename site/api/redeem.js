@@ -4,10 +4,11 @@
  *
  * The one server-side piece of the Data page: turn a wallet's standing allowance into a real eSIM.
  *
- * Holding OTT is the subscription. Every week, last week's creator tax becomes this week's data
- * budget, and a wallet's allowance is its share of the circulating supply times that budget —
- * written per-week into site/data/allowances.json by the indexer (scripts/allowances.js), read
- * here over HTTP. Trading earns nothing any more; only holding, only for the week you hold it in.
+ * Membership is the subscription. Every week, 80% of the pump.fun creator fees collected the week
+ * before becomes this week's data budget, and a member's allowance is its capped share of that
+ * budget by the OTT it held at the Monday snapshot — written per-week into
+ * site/data/allowances.json by the indexer (scripts/allowances.js), read here over HTTP. Trading
+ * earns nothing; only membership and holding, only for the week you hold it in.
  * Credit is in dollars, not gigabytes, because the reseller's wholesale price for a gigabyte runs
  * from $0.62 in Europe to $4.60 worldwide and a ledger in gigabytes would let every wallet spend a
  * cheap one on a dear one. A package costs its priceUsd from site/config/esim.json; what a wallet
@@ -16,12 +17,13 @@
  * page reads it) — this exists only because handing out a profile costs money and so needs a
  * signature check and a provider secret, neither of which can live in a browser.
  *
- *   GET  /api/redeem?address=0x…   this wallet's standing for the current week — what it holds,
- *                                  its allowance, what it has redeemed and can still redeem, this
- *                                  week's orders and the last three weeks' — without codes.
+ *   GET  /api/redeem?address=<base58>   this wallet's standing for the current week — what it
+ *                                  holds, its allowance, what it has redeemed and can still redeem,
+ *                                  this week's orders and the last three weeks' — without codes.
  *                                  Balances are public (they are derived from public chain data);
  *                                  an activation code is a one-time thing, and whoever installs it
- *                                  first has the data.
+ *                                  first has the data. A Solana address is case-sensitive base58
+ *                                  and is used exactly as sent.
  *   POST /api/redeem               { address, message, signature }              -> the same, with codes
  *   POST /api/redeem               { address, message, signature, packageCode, n } -> a new order,
  *                                  where n is how many orders the caller has seen THIS WEEK: its
@@ -43,11 +45,12 @@
  * calls indefinitely; a wallet's allowance, being a share of one week's budget, makes 200 orders in
  * a single week implausible on its own, but the cap holds regardless.
  *
- * Sign-in is a personal_sign over a short labelled message, good for ten minutes, which proves
- * control of the wallet without a session, a cookie, or a nonce store — and which names the action
- * it authorises, so it proves rather more than that. A redemption's message carries the plan and
- * the slot; a read's carries neither and cannot redeem. See checkMessage() for why that is the
- * line that matters and binding the site alone would not have been.
+ * Sign-in is the wallet's ed25519 signature (signMessage) over a short labelled message, good for
+ * ten minutes, which proves control of the wallet without a session, a cookie, or a nonce store —
+ * and which names the action it authorises, so it proves rather more than that. A redemption's
+ * message carries the plan and the slot; a read's carries neither and cannot redeem. See
+ * checkMessage() for why that is the line that matters and binding the site alone would not have
+ * been.
  *
  * Idempotence: a redeem names the slot it means to fill this week, `n`. If that slot is already
  * filled with the same package, the existing order comes back and nothing is minted — so a
@@ -55,12 +58,14 @@
  * filled with a different package, the caller's picture is stale and it is told to reload (409). A
  * replayed signature therefore cannot redeem more than the request it was made for.
  *
- * Membership (docs/membership.md): a wallet joins by burning OTT. The standing reports whether it
- * is a member and whether the app may offer the burn right now (`membership.enrolment`). A member
- * claims one welcome eSIM with
- *   POST /api/redeem  { address, message, signature, welcome: true, packageCode, burnTx? }
+ * Membership (docs/membership.md): a wallet joins by sending about $5 of OTT to the incinerator's
+ * token account. The standing reports whether it is a member, this week's join amount, and whether
+ * the app may offer the join right now (`membership.enrolment`). A member claims one welcome eSIM
+ * with
+ *   POST /api/redeem  { address, message, signature, welcome: true, packageCode, joinTx? }
  * under its own fixed id (welcomeIdFor), outside every week, paid from the reserve. Membership is
- * proven by the weekly ledger, or, for a burn newer than the ledger, by that burn's receipt.
+ * proven by the weekly ledger, or, for a join newer than the ledger, by that transaction itself,
+ * read from Solana (_lib/rpc.js) and judged by the same rule the ledger uses.
  *
  * Config is explicitly included in Vercel's function bundles by site/vercel.json and normally
  * read from disk (fast, no fetch). ESIM_CONFIG_URL can select a different reviewed config, and
@@ -72,7 +77,8 @@
 const fs = require('fs');
 const path = require('path');
 const { keccak256Hex } = require('./_lib/keccak');
-const eip191 = require('./_lib/eip191');
+const solanaAuth = require('./_lib/solana-auth');
+const S = require('../solana.js');
 const { provider: chooseProvider } = require('./_lib/providers');
 const { weekOf, weekEnd: weekEndOf } = require('./_lib/week');
 const { allowRequestOrigin, isProduction } = require('./_lib/request-origin');
@@ -187,8 +193,21 @@ async function readTreasury() {
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers.
 // ---------------------------------------------------------------------------------------------
-const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
-const isLaunchAddress = (a) => typeof a === 'string' && isAddress(a) && !/^0x0{40}$/.test(a);
+// A wallet is a canonical base58 Solana address. Launch addresses must also not be the all-zero
+// key (the system program's), which is what an unset Pubkey looks like.
+const isAddress = (a) => S.isAddress(a);
+const isLaunchAddress = (a) => S.isAddress(a) && a !== S.PROGRAMS.system;
+
+/**
+ * The coin counts as launched when esim.json names the chain, the mint, the token program that
+ * owns it, the treasury and the incinerator's token account for it (docs/membership.md). Anything
+ * less, or anything malformed, is prelaunch.
+ */
+function launched(config) {
+  const m = config && config.membership;
+  return !!config && config.chain === 'solana' && isLaunchAddress(config.coin) && S.TOKEN_PROGRAMS.includes(config.tokenProgram)
+    && isLaunchAddress(config.treasury) && !!m && typeof m === 'object' && !Array.isArray(m) && isLaunchAddress(m.burnAccount);
+}
 // Anything that becomes an href or an <img src> on the page is scheme-checked HERE as well as
 // where it was written, so a record stored before the provider checked — or by a provider that
 // never did — cannot put a "javascript:" link on the page that is showing a wallet's codes.
@@ -202,6 +221,10 @@ const round6 = (x) => Math.round(x * 1e6) / 1e6;
  * forever) so that each week's sequence starts fresh at n=0 — the mechanism that makes an
  * allowance which expires at the end of the week actually expire: last week's ids are simply not
  * the ids this week's redemptions are looked up or placed under.
+ *
+ * The formula lowercases its input, as it did for 0x addresses. A base58 address lowercased is
+ * still unique in practice: two wallets would have to differ only in letter case, and keys cannot
+ * be ground to collide like that (docs/membership.md).
  */
 function transactionIdFor(address, week, n) {
   return 'ott-' + keccak256Hex(address.toLowerCase() + ':' + week + ':' + n).slice(2, 34);
@@ -303,9 +326,9 @@ function publicOrder(o, config, { codes = false } = {}) {
 
 /**
  * The sign-in message, checked line by line. Returns a short reason or null. The address in the
- * message must be the one in the request so a signature over one wallet's message cannot be
- * submitted with another wallet's address (recovery would catch it anyway; this gives a better
- * error and costs nothing).
+ * message must be exactly the one in the request so a signature over one wallet's message cannot
+ * be submitted with another wallet's address (the signature check would catch it anyway; this
+ * gives a better error and costs nothing).
  */
 /**
  * The hosts this deployment will accept a signature for. Vercel names the production host and the
@@ -410,10 +433,14 @@ const fail = (res, status, error) => send(res, status, { ok: false, error });
  * remainingUsd) is treated as 0 rather than let a wallet spend a week-old number. `tokens` and
  * `share` are holdings, not spending power, so they are still reported from whatever the file last
  * said even while stale — a wallet can see what it holds; it just cannot spend against it yet.
+ *
+ * A ledger about some other coin (the file written before esim.json's coin changed) counts as not
+ * published at all: it is stale whatever its week, and none of its rows are this wallet's.
  */
 async function standing(prov, config, allowances, address, week, treasury = null, { includeSims = true } = {}) {
-  const stale = Number(allowances.week) !== week;
-  const row = (allowances.wallets && allowances.wallets[address]) || {};
+  const about = ledgerAbout(config, allowances);
+  const stale = !about || Number(allowances.week) !== week;
+  const row = (about && rowOf(allowances.wallets, address)) || {};
   const tokens = String(row.tokens || '0');
   const share = Number(row.share) || 0;
   const allowanceUsd = stale ? 0 : round6(Number(row.allowanceUsd) || 0);
@@ -461,7 +488,9 @@ function standingBody(s, address, allowances, config, codes, membership = { conf
   return {
     ok: true, address,
     week: s.week, weekEnd: s.weekEnd,
-    tokens: s.tokens, share: s.share,
+    // tokens are base units of the coin, at the ledger's decimals (null until the ledger is about
+    // this coin); share is the fraction of the members' snapshot holdings.
+    tokens: s.tokens, share: s.share, decimals: ledgerDecimals(config, allowances),
     allowanceUsd: s.allowanceUsd, redeemedUsd: s.redeemedUsd, remainingUsd: s.remainingUsd,
     stale: s.stale, allowancesWeek: Number.isFinite(fileWeek) ? fileWeek : null,
     // What the pool holds, so the page can say plainly when this week has promised more data than
@@ -477,7 +506,8 @@ function standingBody(s, address, allowances, config, codes, membership = { conf
 }
 
 // ---------------------------------------------------------------------------------------------
-// Membership (docs/membership.md): burn to join, one welcome eSIM, a capped weekly share.
+// Membership (docs/membership.md): join by sending OTT to the incinerator, one welcome eSIM, a
+// capped weekly share.
 // ---------------------------------------------------------------------------------------------
 
 /** esim.json's membership rules, or null when membership is off or its block is malformed. */
@@ -485,30 +515,88 @@ function membershipRules(config) {
   try { return rules.membershipConfig(config); } catch (e) { return null; }
 }
 
+/** True when the weekly ledger is about the configured coin. Base58 is compared exactly. */
+function ledgerAbout(config, allowances) {
+  return !!allowances && typeof allowances === 'object' && isLaunchAddress(allowances.coin) && allowances.coin === config.coin;
+}
+
 /** The ledger's token decimals, but only when the ledger is about the configured coin. */
 function ledgerDecimals(config, allowances) {
-  if (!allowances || String(allowances.coin || '').toLowerCase() !== String(config.coin || '').toLowerCase()) return null;
+  if (!ledgerAbout(config, allowances)) return null;
   const decimals = Number(allowances.decimals);
   return Number.isSafeInteger(decimals) && decimals >= 0 && decimals <= 36 ? decimals : null;
 }
 
+/** The ledger's `membership` block, when the ledger is about the configured coin. */
+function ledgerMembership(config, allowances) {
+  if (ledgerDecimals(config, allowances) === null) return null;
+  const lm = allowances.membership;
+  return lm && typeof lm === 'object' && !Array.isArray(lm) ? lm : null;
+}
+
+// One wallet's row in one of the ledger's maps, or null. Own keys only: an address can never be
+// "__proto__", but the lookup should not depend on that.
+const rowOf = (map, address) => {
+  const row = map && typeof map === 'object' && Object.hasOwn(map, address) ? map[address] : null;
+  return row && typeof row === 'object' && !Array.isArray(row) ? row : null;
+};
+const unitsIn = (value) => (typeof value === 'string' && /^\d{1,40}$/.test(value) ? BigInt(value) : 0n);
+
 /** This wallet's entry in the ledger's members list, or null. */
 function ledgerMember(config, allowances, address) {
-  if (ledgerDecimals(config, allowances) === null) return null;
-  const row = allowances.members && allowances.members[address];
-  return row && typeof row === 'object' ? row : null;
+  return ledgerDecimals(config, allowances) === null ? null : rowOf(allowances.members, address);
+}
+
+/** The OTT (base units) the ledger has counted from this wallet: a member's total, or a partial join's. */
+function ledgerBurned(config, allowances, address) {
+  if (ledgerDecimals(config, allowances) === null) return 0n;
+  const row = rowOf(allowances.members, address) || rowOf(allowances.joins, address);
+  return row ? unitsIn(row.burned) : 0n;
+}
+
+/** The send that made a ledger member one, keeping only well-formed fields. */
+function sinceOf(row) {
+  const s = row && row.since;
+  if (!s || typeof s !== 'object') return null;
+  const at = Number(s.at), slot = Number(s.slot);
+  return { at: Number.isSafeInteger(at) ? at : null, slot: Number.isSafeInteger(slot) ? slot : null, tx: S.isSignature(s.tx) ? s.tx : null };
 }
 
 /**
- * Whether the app may offer the burn right now. A burn can't be undone, so it is offered only
- * when a welcome eSIM can actually be bought: purchases are on, the ledger knows the coin, the
- * treasury reports the pool funded, and the pool less what this week still owes members covers
- * the dearest welcome plan. The treasury file is up to half an hour old; this is a gate on the
- * offer, and the order itself still fails safely if the pool turns out short.
+ * This week's join amount from the ledger: { week, burnTokens, burnUnits, priceUsd }, or null
+ * unless the ledger is about this coin, is this week's, and carries an amount for this week that
+ * agrees with itself: `burnTokens` (whole tokens) at the ledger's decimals is `burnUnits`, and
+ * `requirements` records the same figure for the week, since that map is what a fresh join is
+ * judged against.
  */
-function enrolmentOf(m, burnUnits, treasury) {
+function currentRequirement(config, allowances, week) {
+  const decimals = ledgerDecimals(config, allowances);
+  const lm = ledgerMembership(config, allowances);
+  if (decimals === null || !lm || Number(allowances.week) !== week) return null;
+  const req = lm.requirement;
+  if (!req || typeof req !== 'object' || Number(req.week) !== week) return null;
+  const burnTokens = String(req.burnTokens || ''), burnUnits = String(req.burnUnits || '');
+  if (!/^\d{1,30}$/.test(burnTokens) || !/^\d{1,40}$/.test(burnUnits)) return null;
+  let units;
+  try { units = rules.unitsOf(burnTokens, decimals); } catch (e) { return null; }
+  if (units <= 0n || units !== BigInt(burnUnits) || rules.weekAmount(lm.requirements, week) !== units) return null;
+  const priceUsd = Number(req.priceUsd);
+  return { week, burnTokens, burnUnits, priceUsd: Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null };
+}
+
+/**
+ * Whether the app may offer the join right now. A join can't be undone, so it is offered only when
+ * this week's amount is known and a welcome eSIM can actually be bought: purchases are on, the
+ * ledger is about the coin and is this week's, it carries this week's amount, the treasury reports
+ * the pool funded, and the pool less what this week still owes members covers the dearest welcome
+ * plan. The treasury file is up to half an hour old; this is a gate on the offer, and the order
+ * itself still fails safely if the pool turns out short.
+ */
+function enrolmentOf(m, { config, allowances, week, requirement }, treasury) {
   if (!redemptionsEnabled()) return { open: false, reason: 'Joining opens when eSIM purchases are switched on.' };
-  if (burnUnits === null) return { open: false, reason: 'Joining opens once the weekly ledger includes the token.' };
+  if (ledgerDecimals(config, allowances) === null) return { open: false, reason: 'Joining opens once the weekly ledger includes the coin.' };
+  if (Number(allowances.week) !== week) return { open: false, reason: 'Joining reopens once this week’s ledger is published.' };
+  if (!requirement) return { open: false, reason: 'This week’s join amount isn’t set yet. Try again shortly.' };
   const balance = Number(treasury && treasury.reseller && treasury.reseller.balanceUsd);
   const owed = Number(treasury && treasury.owedUsd);
   if (!treasury || treasury.reseller?.balanceUsd == null || treasury.owedUsd == null || !Number.isFinite(balance) || !Number.isFinite(owed)) {
@@ -529,32 +617,53 @@ function welcomeOrderOut(order, config, codes) {
 async function membershipOf(prov, config, allowances, address, week, treasury, { codes = false } = {}) {
   const m = membershipRules(config);
   if (!m) return { configured: false };
-  const decimals = ledgerDecimals(config, allowances);
-  const burnUnits = decimals === null ? null : rules.unitsOf(m.burnTokens, decimals).toString();
+  const requirement = currentRequirement(config, allowances, week);
   const row = ledgerMember(config, allowances, address);
-  const fileRow = allowances && allowances.wallets && allowances.wallets[address];
+  const fileRow = ledgerAbout(config, allowances) ? rowOf(allowances.wallets, address) : null;
   const found = await prov.find(welcomeIdFor(address));
-  const since = row ? Number(row.sinceBlock) : NaN;
   return {
     configured: true,
-    burnTokens: m.burnTokens, burnUnits,
-    burnAddress: config.membership.burnAddress,
-    coin: config.coin,
+    coin: config.coin, tokenProgram: config.tokenProgram, decimals: ledgerDecimals(config, allowances),
+    burnOwner: m.burnOwner, burnAccount: m.burnAccount, burnUsd: m.burnUsd,
+    requirement,
+    burned: ledgerBurned(config, allowances, address).toString(),
     welcome: m.welcome, capMultiple: m.capMultiple,
     member: !!row,
-    memberSinceBlock: Number.isSafeInteger(since) ? since : null,
+    memberSince: row ? sinceOf(row) : null,
     sharing: Number(allowances && allowances.week) === week && !!fileRow && fileRow.member === true,
     welcomeOrder: found ? welcomeOrderOut(found, config, codes) : null,
-    enrolment: enrolmentOf(m, burnUnits, treasury),
+    enrolment: enrolmentOf(m, { config, allowances, week, requirement }, treasury),
   };
+}
+
+/**
+ * Whether `joinTx` makes `address` a member now, by the rule the ledger keeper applies
+ * (docs/membership.md): a successful transaction the ledger has not read yet (newer than its
+ * cursor), in which this wallet alone sent OTT to the incinerator's account, enough, with what the
+ * ledger already counted from it, to reach the amount for that transaction's week. A transaction
+ * the ledger has read was counted there already, so it adds nothing here.
+ */
+async function joinProvesMembership(config, m, allowances, address, joinTx) {
+  const lm = ledgerMembership(config, allowances);
+  if (!lm) return false;
+  const tx = await chainRpc.getTransaction(joinTx);
+  if (!tx || !S.succeeded(tx)) return false;
+  const signature = tx.transaction && Array.isArray(tx.transaction.signatures) ? tx.transaction.signatures[0] : null;
+  if (signature !== joinTx) return false;
+  const cursorSlot = Number(lm.cursor && lm.cursor.slot);
+  if (Number.isFinite(cursorSlot) && !(Number(tx.slot) > cursorSlot)) return false;
+  const join = rules.joinFromTransaction(tx, { coin: config.coin, burnAccount: m.burnAccount, exclude: [config.treasury] });
+  if (!join || join.skip || join.wallet !== address) return false;
+  const need = rules.requirementFor(lm.requirements, join.at);
+  return need !== null && ledgerBurned(config, allowances, address) + join.amount >= need;
 }
 
 /**
  * A signed welcome claim, already checked for shape and signature. The existing order comes back
  * for a repeat of the same plan; otherwise the wallet must be a member, by the ledger or by the
- * receipt of the burn it names, and then the order is placed under the wallet's fixed welcome id.
+ * join transaction it names, and then the order is placed under the wallet's fixed welcome id.
  */
-async function claimWelcome(res, { prov, config, m, allowances, address, pkg, burnTx }) {
+async function claimWelcome(res, { prov, config, m, allowances, address, pkg, joinTx }) {
   const transactionId = welcomeIdFor(address);
   const supplierPackage = pkg.packageCode || pkg.code;
   const place = pkg.slug || pkg.code;
@@ -567,11 +676,8 @@ async function claimWelcome(res, { prov, config, m, allowances, address, pkg, bu
     return send(res, 200, { ok: true, order: welcomeOrderOut(existing, config, true), sims: await simsFor(prov, address, existing), replayed: true });
   }
   if (!ledgerMember(config, allowances, address)) {
-    if (!burnTx) return fail(res, 409, 'burn ' + Number(m.burnTokens).toLocaleString('en-US') + ' OTT to join first');
-    const decimals = ledgerDecimals(config, allowances) ?? await chainRpc.decimalsOf(config.coin);
-    const receipt = await chainRpc.call('eth_getTransactionReceipt', [burnTx]);
-    const burned = rules.burnedInReceipt(receipt, { coin: config.coin, address, destinations: m.destinations });
-    if (burned < rules.unitsOf(m.burnTokens, decimals)) return fail(res, 409, 'the burn transaction was not found or did not burn enough OTT');
+    if (!joinTx) return fail(res, 409, 'join OT+T first');
+    if (!(await joinProvesMembership(config, m, allowances, address, joinTx))) return fail(res, 409, 'the join transaction was not found or did not send enough OTT');
   }
   const order = await prov.order({ transactionId, packageCode: supplierPackage, slug: place, code: pkg.code, priceUsd: Number(pkg.priceUsd), address });
   // Another claim for a different plan can win the id while this one waits.
@@ -589,14 +695,15 @@ module.exports = async (req, res) => {
   try {
     const config = await readConfig().catch(() => null);
     if (!config || !Array.isArray(config.packages)) return fail(res, 503, 'data config unavailable');
-    // Empty, zero or malformed coin/curve is not a launched configuration. Everything downstream would
-    // "work" against an empty allowances file, but the honest answer is that there is nothing to
-    // redeem yet, and the page shows the rules and the launch link instead.
-    if (!isLaunchAddress(config.coin) || !isLaunchAddress(config.curve)) return fail(res, 409, 'coin not launched yet');
+    // An empty, zero or malformed launch address is not a launched configuration. Everything
+    // downstream would "work" against an empty allowances file, but the honest answer is that there
+    // is nothing to redeem yet, and the page shows the rules and the launch link instead.
+    if (!launched(config)) return fail(res, 409, 'coin not launched yet');
 
     if (req.method === 'GET') {
       const url = new URL(req.url || '/', 'http://local');
-      const address = String(url.searchParams.get('address') || '').toLowerCase();
+      // Base58 is case-sensitive: the address is used exactly as sent, and must be canonical.
+      const address = String(url.searchParams.get('address') || '');
       if (!isAddress(address)) return fail(res, 400, 'address required');
       const nowMs = Date.now();
       const week = weekOf(Math.floor(nowMs / 1000));
@@ -634,7 +741,7 @@ module.exports = async (req, res) => {
       return fail(res, 400, 'body must be JSON');
     }
     if (!body || typeof body !== 'object') return fail(res, 400, 'body must be JSON');
-    const address = String(body.address || '').toLowerCase();
+    const address = typeof body.address === 'string' ? body.address : '';
     if (!isAddress(address)) return fail(res, 400, 'address required');
 
     // A signed request with no package is a read: the standing, with the codes this time. Which it
@@ -658,8 +765,8 @@ module.exports = async (req, res) => {
       pkg = config.packages.find((p) => p && p.code === body.packageCode);
       if (!pkg) return fail(res, 400, 'unknown package');
       if (!rules.welcomeEligible(pkg, m.welcome)) return fail(res, 400, 'this plan is not included with membership');
-      const tx = body.burnTx;
-      if (tx !== undefined && tx !== null && tx !== '' && !/^0x[0-9a-fA-F]{64}$/.test(String(tx))) return fail(res, 400, 'burnTx must be a transaction hash');
+      const tx = body.joinTx;
+      if (tx !== undefined && tx !== null && tx !== '' && !S.isSignature(tx)) return fail(res, 400, 'joinTx must be a transaction signature');
     } else if (!reading) {
       pkg = config.packages.find((p) => p && p.code === body.packageCode);
       if (!pkg) return fail(res, 400, 'unknown package');
@@ -673,8 +780,8 @@ module.exports = async (req, res) => {
       welcomeClaim ? { action: 'welcome', packageCode: String(body.packageCode) }
         : reading ? { action: 'read' } : { action: 'redeem', packageCode: String(body.packageCode), n: String(body.n) });
     if (why) return fail(res, 401, why);
-    const signer = eip191.recoverAddress(body.message, body.signature);
-    if (!signer || signer !== address) return fail(res, 401, 'signature does not match address');
+    // The wallet's ed25519 signature over the message's exact UTF-8 bytes, base58 (signMessage).
+    if (!solanaAuth.verifyMessage(body.message, body.signature, address)) return fail(res, 401, 'signature does not match address');
 
     const prov = chooseProvider();
     const allowances = await readAllowances().catch(() => null);
@@ -686,7 +793,7 @@ module.exports = async (req, res) => {
     // ledger's stamp, so every picture of this wallet goes, not just the one matching this read.
     for (const k of standingCache.keys()) if (k.startsWith(address + ':')) standingCache.delete(k);
     if (welcomeClaim) {
-      return await claimWelcome(res, { prov, config, m, allowances, address, pkg, burnTx: body.burnTx ? String(body.burnTx).toLowerCase() : '' });
+      return await claimWelcome(res, { prov, config, m, allowances, address, pkg, joinTx: body.joinTx ? String(body.joinTx) : '' });
     }
     const s = await standing(prov, config, allowances, address, week, null, { includeSims: reading });
     if (reading) {

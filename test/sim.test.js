@@ -20,8 +20,10 @@
  *   node test/sim.test.js
  */
 const path = require('path');
+const crypto = require('crypto');
 
 const LIB = path.join(__dirname, '..', 'site', 'api', '_lib');
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 const mockPayer = require(path.join(LIB, 'payers', 'mock.js'));
 const fakeWholesale = require(path.join(__dirname, 'support', 'fake-wholesale.js'));
 
@@ -50,7 +52,9 @@ const DE = { packageCode: 'fixed_1GB_7D_DE', slug: 'germany', priceUsd: 1.99 };
 const JP = { packageCode: 'fixed_2GB_15D_JAPAN', slug: 'japan', priceUsd: 12.99 };
 const CATALOGUE = Object.assign({}, fakeWholesale.CATALOGUE, { fixed_2GB_15D_JAPAN: { slug: 'japan', price: 12.99 } });
 
-const mkAddr = (tag) => '0x' + tag.padStart(40, '0');
+// Base58 Solana addresses, one per tag, the same on every run. The provider keys SIM records by
+// the address lowercased, which keeps them apart as long as two wallets differ by more than case.
+const mkAddr = (tag) => S.encodeBase58(new Uint8Array(crypto.createHash('sha256').update('wallet:' + tag).digest()));
 const WALLET_A = mkAddr('a1');   // first order, then a same-place top-up, then a different place
 const WALLET_B = mkAddr('b2');   // must never land on WALLET_A's eSIM
 const WALLET_C = mkAddr('c3');   // a top-up wholesale refuses, and recovery afterwards

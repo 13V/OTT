@@ -9,6 +9,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createServer } = require('../scripts/serve-api');
 const redeem = require('../site/api/redeem');
+const S = require('../site/solana.js');
 const { weekOf, weekEnd } = require('../site/api/_lib/week');
 
 let checks = 0;
@@ -81,7 +82,8 @@ async function main() {
   Object.assign(process.env, fixtureEnv);
   const originalFetch = global.fetch;
   const currentWeek = weekOf(Math.floor(Date.now() / 1000));
-  const config = { coin: '', curve: '', treasury: '', provider: 'mock', packages: [] };
+  const config = { chain: 'solana', coin: '', tokenProgram: '', treasury: '', provider: 'mock', packages: [],
+    membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: '', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } } };
   const allowances = { week: currentWeek, weekEnd: weekEnd(currentWeek), budgetUsd: 0, holders: 0, wallets: {} };
   let upstreamCalls = 0;
   global.fetch = async url => {
@@ -97,14 +99,14 @@ async function main() {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const port = server.address().port;
     console.log('the portable server exposes only the API');
-    for (const url of ['/', '/index.html', '/config/esim.json', '/.env', '/site/api/redeem.js', '/health', '/api/redeem/']) {
+    for (const url of ['/', '/index.html', '/config/esim.json', '/.env', '/site/api/redeem.js', '/health', '/api/redeem/', '/api/auth']) {
       const result = await request(port, url);
       check(url + ' does not expose a file or another route', [result.status, result.body.error], [404, 'API route not found']);
     }
     let result = await request(port, '/api/status');
     check('the actual status handler reports the unlaunched programme', [result.status, result.body.ok, result.body.config.launched], [200, true, false]);
     check('API responses are JSON and never cached', [result.headers['content-type'], result.headers['cache-control'], result.headers['x-content-type-options']], ['application/json; charset=utf-8', 'no-store', 'nosniff']);
-    result = await request(port, '/api/redeem?address=0x' + 'a'.repeat(40));
+    result = await request(port, '/api/redeem?address=' + S.INCINERATOR);
     check('an account read cannot invent credit before launch', [result.status, result.body.error], [409, 'coin not launched yet']);
     result = await request(port, '/api/status', { method: 'POST' });
     check('the status handler keeps its GET-only method policy', [result.status, result.headers.allow], [405, 'GET']);

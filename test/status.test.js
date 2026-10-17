@@ -19,6 +19,7 @@ const http = require('node:http');
 const path = require('path');
 
 const API = path.join(__dirname, '..', 'site', 'api');
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 const mockPayer = require(path.join(API, '_lib', 'payers', 'mock.js'));
 const week = require(path.join(API, '_lib', 'week.js'));
 const { catalogueFingerprint } = require(path.join(API, '_lib', 'catalogue.js'));
@@ -39,9 +40,13 @@ const SECRET_FORMS = [
 ];
 
 // --------------------------------------------------------------------------- fixtures
-const COIN = '0x1111111111111111111111111111111111111111';
-const CURVE = '0x2222222222222222222222222222222222222222';
-const TREASURY = '0x3333333333333333333333333333333333333333';
+// Solana launch addresses: any canonical base58 keys will do here, nothing is read from chain.
+const key = (n) => S.encodeBase58(new Uint8Array(32).fill(n));
+const COIN = key(1);
+const TREASURY = key(3);
+const BURN_ACCOUNT = key(4);
+const TOKEN_2022 = S.PROGRAMS.token2022;
+const MEMBERSHIP = { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } };
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT' };
 // Four packages across three places, so packages/places are two different numbers and a mistake
 // between them (counting rows instead of distinct slugs) would be caught.
@@ -52,27 +57,29 @@ const PACKAGES = [
   { code: 'fixed_1GB_7D_GLOBAL', slug: 'global', name: 'Global', kind: 'region', regions: 'DE,FR,US', gb: 1, days: 7, priceUsd: 8.99 },
 ];
 const LAUNCHED_CONFIG = {
-  coin: COIN, curve: CURVE, treasury: TREASURY, provider: 'wholesale', catalogueAt: '2026-09-15',
-  budgetBps: 10000, taxBps: 1000, brand: BRAND, packages: PACKAGES,
+  chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY, provider: 'wholesale', catalogueAt: '2026-09-15',
+  budgetBps: 10000, brand: BRAND, membership: MEMBERSHIP, packages: PACKAGES,
 };
-const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', curve: '' });
+const UNLAUNCHED_CONFIG = Object.assign({}, LAUNCHED_CONFIG, { coin: '', tokenProgram: '', treasury: '', membership: Object.assign({}, MEMBERSHIP, { burnAccount: '' }) });
 
 // The current week, computed the same way status.js computes it (site/api/_lib/week.js), so the
 // allowances fixture below is unconditionally "this week" whenever this file happens to run.
 const CUR = week.weekOf(Math.floor(Date.now() / 1000));
 const STALE_WEEK = CUR - 1;
 
-// The contract shape: written by the indexer, for one specific week, each wallet's standing FOR
-// THAT WEEK ONLY — the holding, its share of the circulating supply, and the dollars that share
-// is worth of this week's budget.
+// The contract shape (docs/membership.md): written by the ledger keeper, for one specific week —
+// the members, this week's join amount, and each sharing member's holding, share and credit.
 const ALLOWANCES = {
-  asOf: 1789500000, block: 64082470, week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
-  snapshotBlock: 64082470, coin: COIN, curve: CURVE, budgetUsd: 412.5, budgetSource: 'test fixture',
-  circulating: '1000000000000000000000000', decimals: 18, holders: 3,
+  asOf: 1789500000, slot: 458000000, chain: 'solana', week: CUR, weekStart: week.weekStart(CUR), weekEnd: week.weekEnd(CUR),
+  coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, treasury: TREASURY, budgetUsd: 412.5, budgetSource: 'test fixture',
+  membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3,
+    requirement: { week: CUR, burnTokens: '1800000', burnUnits: '1800000000000', priceUsd: 0.0000029 }, requirements: { [CUR]: '1800000000000' } },
+  members: { [key(10)]: { burned: '1800000000000' }, [key(11)]: { burned: '1800000000000' }, [key(12)]: { burned: '1800000000000' }, [key(13)]: { burned: '1800000000000' } },
+  holders: 3, memberTokens: '60000000',
   wallets: {
-    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': { tokens: '10000000000000000000', share: 0.01, allowanceUsd: 0.8 },
-    '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb': { tokens: '20000000000000000000', share: 0.02, allowanceUsd: 1.6 },
-    '0xcccccccccccccccccccccccccccccccccccccccc': { tokens: '30000000000000000000', share: 0.03, allowanceUsd: 2.4 },
+    [key(10)]: { tokens: '10000000', share: 0.1667, allowanceUsd: 0.8, member: true },
+    [key(11)]: { tokens: '20000000', share: 0.3333, allowanceUsd: 1.6, member: true },
+    [key(12)]: { tokens: '30000000', share: 0.5, allowanceUsd: 2.4, member: true },
   },
 };
 // The same file, but stamped for last week — what a dashboard sees the instant the clock rolls
@@ -211,24 +218,26 @@ async function main() {
     FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, packages: [PACKAGES[0], PACKAGES[0]] };
     r = await GET();
     check('duplicate provider SKUs cannot report configuration ready', [r.body.ready.config, r.body.config.catalogueFingerprint], [false, '']);
-    const membership = { burnTokens: '100000', burnAddress: '0x000000000000000000000000000000000000dEaD', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } };
-    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership };
-    r = await GET();
-    check('the membership rules in effect are reported', r.body.config.membership,
-      { configured: true, burnTokens: '100000', burnAddress: '0x000000000000000000000000000000000000dead', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } });
-    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership: { ...membership, capMultiple: 0 } };
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership: { ...MEMBERSHIP, capMultiple: 0 } };
     r = await GET();
     check('a malformed membership block is reported, since the redeem API would quietly treat it as off', r.body.config.membership,
       { configured: false, error: 'the membership block in esim.json is invalid' });
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership: undefined };
+    r = await GET();
+    check('a config without a membership block reports membership off, and has no incinerator account, so is not launched', [r.body.config.membership, r.body.config.launched], [{ configured: false }, false]);
   } finally { FILES['/config/esim.json'] = LAUNCHED_CONFIG; }
   r = await GET();
-  check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
-  check('a config without a membership block reports membership off', r.body.config.membership, { configured: false });
+  check('the membership rules in effect are reported', r.body.config.membership,
+    { configured: true, burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } });
+  check('chain, launch addresses and budget come from the config', [r.body.config.chain, r.body.config.launched, r.body.config.coin, r.body.config.tokenProgram, r.body.config.treasury, r.body.config.budgetBps],
+    ['solana', true, COIN, TOKEN_2022, TREASURY, 10000]);
+  checkThat('the Robinhood-era fields are gone', !('curve' in r.body.config) && !('taxBps' in r.body.config), JSON.stringify(r.body.config));
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
   check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'wholesale', payer: 'mock', store: 'memory' });
   check('healthy development fixtures never claim live redemption is ready', r.body.redemption, { enabled: true, ready: false });
   checkThat('the allowances check names the holder count and the budget for the current week', new RegExp('3 holders?, \\$412\\.50 budget, week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
-  check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances, { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3 });
+  check('and the structured numbers behind it sit at the top level, like the payer\'s pool', r.body.allowances,
+    { week: CUR, currentWeek: CUR, stale: false, budgetUsd: 412.5, holders: 3, members: 4, requirement: { week: CUR, burnTokens: '1800000' } });
   checkThat('the provider check names how many bundles came back', /8 bundles/.test(r.body.checks.provider.detail), r.body.checks.provider.detail);
   checkThat('and wholesale saw only the bundle listing, never purchase or complete', bundleHits > 0);
 
@@ -367,7 +376,8 @@ async function main() {
   checkThat('and says the file is for last week, not published for the current one',
     new RegExp('week ' + STALE_WEEK + '.*not the current week ' + CUR).test(r.body.checks.allowances.detail), r.body.checks.allowances.detail);
   check('ready.allowances mirrors the failure', r.body.ready.allowances, false);
-  check('the top-level allowances field carries both weeks and the stale flag for a dashboard to key off', r.body.allowances, { week: STALE_WEEK, currentWeek: CUR, stale: true, budgetUsd: 412.5, holders: 3 });
+  check('the top-level allowances field carries both weeks and the stale flag for a dashboard to key off, and no join amount for this week',
+    r.body.allowances, { week: STALE_WEEK, currentWeek: CUR, stale: true, budgetUsd: 412.5, holders: 3, members: 4, requirement: null });
   checkThat('every other check is unaffected by the allowances file being stale', r.body.checks.store.ok && r.body.checks.payer.ok && r.body.checks.provider.ok, JSON.stringify(r.body.checks));
   process.env.ALLOWANCES_URL = fileBase + '/data/allowances.json';
 
@@ -426,22 +436,23 @@ async function main() {
   try {
     r = await GET();
     check('real adapter wiring with healthy dependencies can report enabled and ready', r.body.redemption, { enabled: true, ready: true });
-    for (const field of ['coin', 'curve']) {
-      for (const [label, invalid] of [['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['short', '0x1234'], ['wrapped in an array', [COIN]]]) {
+    const withField = (field, value) => field === 'burnAccount'
+      ? Object.assign({}, LAUNCHED_CONFIG, { membership: Object.assign({}, MEMBERSHIP, { burnAccount: value }) })
+      : Object.assign({}, LAUNCHED_CONFIG, { [field]: value });
+    for (const field of ['coin', 'tokenProgram', 'treasury', 'burnAccount']) {
+      for (const [label, invalid] of [['missing', ''], ['zero', S.PROGRAMS.system], ['EVM', '0x' + '1'.repeat(40)], ['malformed', 'not-an-address'], ['wrapped in an array', [COIN]]]
+        .concat(field === 'tokenProgram' ? [['non-token-program', COIN]] : [])) {
         const route = '/config/esim-invalid-' + field + '-' + label.replace(/ /g, '-') + '.json';
-        FILES[route] = Object.assign({}, LAUNCHED_CONFIG, { [field]: invalid });
+        FILES[route] = withField(field, invalid);
         process.env.ESIM_CONFIG_URL = fileBase + route;
         r = await GET();
         check('a ' + label + ' ' + field + ' cannot report launched or ready', [r.body.config.launched, r.body.redemption.ready], [false, false]);
       }
     }
-    for (const [label, invalid] of [['missing', ''], ['zero', '0x' + '0'.repeat(40)], ['malformed', 'not-an-address'], ['array', [TREASURY]]]) {
-      const route = '/config/esim-invalid-treasury-' + label + '.json';
-      FILES[route] = Object.assign({}, LAUNCHED_CONFIG, { treasury: invalid });
-      process.env.ESIM_CONFIG_URL = fileBase + route;
-      r = await GET();
-      check('a ' + label + ' treasury prevents ready without mislabelling the token launch', [r.body.config.launched, r.body.redemption.ready], [true, false]);
-    }
+    FILES['/config/esim-other-chain.json'] = Object.assign({}, LAUNCHED_CONFIG, { chain: 'robinhood' });
+    process.env.ESIM_CONFIG_URL = fileBase + '/config/esim-other-chain.json';
+    r = await GET();
+    check('a config for another chain cannot report launched or ready', [r.body.config.launched, r.body.redemption.ready], [false, false]);
     process.env.ESIM_CONFIG_URL = fileBase + '/config/esim.json';
     process.env.REDEMPTIONS_ENABLED = '0';
     r = await GET();
