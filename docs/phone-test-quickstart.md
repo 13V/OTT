@@ -42,7 +42,8 @@ It does not validate the proposed OTT burn membership or holder allocation.
    Receive is needed only if generating a funding invoice through the API. Confirm that the
    Upstash REST token is the standard read/write token. Read-only preflight cannot establish
    either service's write permissions. [Blink scope documentation](https://dev.blink.sv/api/auth).
-4. Open PowerShell in this repository and run:
+4. Open PowerShell in this repository and run the commands below. To run from a Claude Code
+   cloud session instead, see [Running from a Claude Code cloud environment](#running-from-a-claude-code-cloud-environment).
 
    ```powershell
    Set-Location 'C:\Users\troyw\OneDrive\Documents\ChatGPT\OTT'
@@ -73,6 +74,55 @@ Local credentialed wallet/storage preflight has **not** passed yet. The open Bli
 is signed out, and the encrypted operator credentials file is absent. Wallet access must be
 configured through the hidden local setup prompts before funding. A wallet address alone
 does not grant access to the API payer.
+
+## Running from a Claude Code cloud environment
+
+The operator chose on 17 October 2026 to run this test from a Claude Code cloud session
+instead of local PowerShell. Steps 1–3 above are unchanged; this replaces step 4.
+
+1. In the cloud environment's settings (the environment menu in the session's title bar, then
+   **Edit**), add three secrets:
+   - `BLINK_API_KEY`: the short-lived `OTT phone test` key, with Read and Write scopes.
+   - `KV_REST_API_URL`: the Upstash HTTPS REST URL.
+   - `KV_REST_API_TOKEN`: the standard read/write token.
+
+   Don't add `BLINK_WALLET_ID`, `STORE`, `STORE_URL` or `STORE_TOKEN`; the scripts refuse them.
+   Never paste the values into chat. A session reads secrets when it starts, so start a new
+   session after adding them.
+2. In that session, run the read-only checks:
+
+   ```sh
+   npm ci
+   npm run phone:storage-check:env
+   npm run phone:preflight:env
+   ```
+
+   These are the same checks as `phone:storage-check` and `phone:preflight`. The only
+   difference is that they read the secrets from the environment, not the Windows-encrypted
+   file.
+3. After funding, a passing preflight and the operator's explicit purchase approval, run the
+   paid command without `--local-credentials`:
+
+   ```sh
+   node scripts/test-esim.js --purchase --run-id phone-test-20261006-au-001 --sku fixed_1GB_7D_AU --max-invoice-usd 2.50 --max-payment-usd 2.50 --max-wallet-usd 4.00
+   ```
+
+Two things differ from a local run:
+
+- **Private files don't last.** `order.json` and `install.html` are written under
+  `~/.codex/private/ott-phone-test/` inside the container, and the container is discarded
+  when the session ends or sits idle. The order record itself is stored durably in Redis under
+  `ott:operator-test:`. If the container restarts, rerun the same purchase command with the
+  same run ID and limits. That resumes the order, or re-exports an issued eSIM, without paying
+  again. Never start a new run ID to recover.
+- **The installation page reaches the operator through the chat.** Build it with
+  `node scripts/esim-install-pack.js --order-file ~/.codex/private/ott-phone-test/phone-test-20261006-au-001/order.json`,
+  then the session sends `install.html` as a file. It contains the one-time activation code,
+  so install promptly and keep the conversation private. Open the page on a second screen and
+  scan its QR code with the phone, or type in the manual details.
+
+When the test is finished, revoke the `OTT phone test` Blink key and remove the three secrets
+from the environment.
 
 ## Funding route and amount
 

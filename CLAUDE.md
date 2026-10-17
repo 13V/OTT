@@ -130,7 +130,8 @@ This is Phantom sign-in-with-Solana (SIWS). The API issues single-use challenges
 ## Operator tooling
 
 `test-esim.js`, `esim-install-pack.js`, `operator-test-*.js`, `phone-test-storage-check.js`, `solana-*.js` and the `.ps1` files in `scripts/` support a private, funded phone test. The runbooks are `docs/phone-test-quickstart.md`, `docs/operator-phone-test.md` and `docs/solana-test-wallet.md`.
-- Credential storage is Windows-only: DPAPI encryption through PowerShell.
+- On the operator's Windows PC, `npm run phone:setup` stores credentials encrypted with DPAPI through PowerShell, and the `--local-credentials` commands unlock them.
+- In a Claude Code cloud environment, the same three values (`BLINK_API_KEY`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`) come from environment secrets. Use `npm run phone:storage-check:env` and `npm run phone:preflight:env`, and run the paid `--purchase` command without `--local-credentials`, only after the operator explicitly approves it. See "Running from a Claude Code cloud environment" in `docs/phone-test-quickstart.md`.
 - Private files must live outside the repo, under `~/.codex/private/ott-phone-test`.
 
 `docs/backend-deployment.md` covers hosting and environment settings.

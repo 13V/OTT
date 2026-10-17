@@ -25,9 +25,11 @@ const dependencies = (env, storage, extra = {}) => ({ env, probeOptions: options
     BLINK_API_KEY: 'unused-wallet-credential' }), makeStore: () => storage, ...extra });
 (async () => {
   await check('CLI requires an explicit isolated check and rejects payment or arbitrary key options', () => {
-    assert.deepEqual(parse(['--local-credentials']), { help: false });
-    assert.deepEqual(parse(['--help']), { help: true });
-    for (const args of [[], ['--purchase'], ['--key', 'order:existing'], ['--local-credentials', '--local-credentials']]) assert.throws(() => parse(args), rejection);
+    assert.deepEqual(parse(['--local-credentials']), { help: false, source: 'local' });
+    assert.deepEqual(parse(['--env-credentials']), { help: false, source: 'env' });
+    assert.deepEqual(parse(['--help']), { help: true, source: null });
+    for (const args of [[], ['--purchase'], ['--key', 'order:existing'], ['--local-credentials', '--local-credentials'],
+      ['--local-credentials', '--env-credentials'], ['--env-credentials', '--purchase'], ['toString'], ['__proto__']]) assert.throws(() => parse(args), rejection);
   });
   await check('capability probe uses one dummy key, exercises stale contenders and confirms cleanup', async () => {
     const f = fixture(), result = await checkStorage(f.storage, options);
@@ -135,6 +137,39 @@ const dependencies = (env, storage, extra = {}) => ({ env, probeOptions: options
     const env = { STORE: 'memory' };
     await assert.rejects(main(['--local-credentials'], dependencies(env, fixture().storage)), rejection);
     assert.deepEqual(env, { STORE: 'memory' });
+  });
+  await check('environment credentials run the same isolated check without unlocking local files', async () => {
+    const f = fixture(), env = { KV_REST_API_URL: 'https://unit-storage-check.upstash.io', KV_REST_API_TOKEN: marker,
+      NODE_ENV: 'development', STORE_PREFIX: 'production:', REDEMPTIONS_ENABLED: '1' }, before = { ...env };
+    const result = await main(['--env-credentials'], dependencies(env, f.storage, {
+      loadCredentials: () => { throw new Error('must not unlock local credentials'); },
+      makeStore: () => {
+        assert.equal(env.NODE_ENV, 'production'); assert.equal(env.STORE_PREFIX, PREFIX); assert.equal(env.REDEMPTIONS_ENABLED, '0');
+        assert.equal(env.KV_REST_API_URL, 'https://unit-storage-check.upstash.io'); assert.equal(env.KV_REST_API_TOKEN, marker);
+        return f.storage;
+      } }));
+    assert.equal(result.passed, true); assert.deepEqual(env, before);
+    assert.ok(!JSON.stringify(result).includes(marker));
+  });
+  await check('environment credentials accept the Upstash variable names and restore the caller environment', async () => {
+    const f = fixture(), env = { UPSTASH_REDIS_REST_URL: 'https://unit-storage-check.upstash.io', UPSTASH_REDIS_REST_TOKEN: marker }, before = { ...env };
+    const result = await main(['--env-credentials'], dependencies(env, f.storage, { makeStore: () => {
+      assert.equal(env.KV_REST_API_URL, 'https://unit-storage-check.upstash.io'); assert.equal(env.KV_REST_API_TOKEN, marker);
+      return f.storage;
+    } }));
+    assert.equal(result.passed, true); assert.deepEqual(env, before);
+  });
+  await check('missing, foreign or in-memory environment storage is rejected before storage access', async () => {
+    for (const start of [{}, { KV_REST_API_URL: 'https://unit-storage-check.upstash.io' }, { KV_REST_API_TOKEN: marker },
+      { KV_REST_API_URL: 'https://evil.example', KV_REST_API_TOKEN: marker },
+      { KV_REST_API_URL: 'http://unit-storage-check.upstash.io', KV_REST_API_TOKEN: marker },
+      { KV_REST_API_URL: 'https://unit-storage-check.upstash.io', KV_REST_API_TOKEN: marker, STORE: 'memory' },
+      { KV_REST_API_URL: 'https://unit-storage-check.upstash.io', KV_REST_API_TOKEN: marker, STORE_URL: 'https://other.upstash.io' }]) {
+      let accessed = false; const env = { ...start };
+      await assert.rejects(main(['--env-credentials'], dependencies(env, null, {
+        makeStore: () => { accessed = true; throw new Error(marker); } })), rejection);
+      assert.equal(accessed, false); assert.deepEqual(env, start);
+    }
   });
   await check('actual production REST adapter sends only isolated one-key GET SET NX and EVAL commands', async () => {
     const originalFetch = globalThis.fetch, commands = [], kv = new Map();

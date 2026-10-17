@@ -9,9 +9,19 @@ const FAILURE = 'Storage capability check did not pass. Review the private stora
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const requireResult = condition => { if (!condition) throw new Error(FAILURE); };
 
+// --local-credentials unlocks the Windows-encrypted file from npm run phone:setup.
+// --env-credentials reads the same two values from this process's environment, for hosts
+// such as a Claude Code cloud environment that keep secrets in their own settings.
+const SOURCES = { '--local-credentials': 'local', '--env-credentials': 'env' };
+
 function parse(argv) {
-  if (!Array.isArray(argv) || argv.length !== 1 || !['--help', '--local-credentials'].includes(argv[0])) throw new Error(FAILURE);
-  return { help: argv[0] === '--help' };
+  if (!Array.isArray(argv) || argv.length !== 1 || !(argv[0] === '--help' || Object.hasOwn(SOURCES, argv[0]))) throw new Error(FAILURE);
+  return argv[0] === '--help' ? { help: true, source: null } : { help: false, source: SOURCES[argv[0]] };
+}
+
+function environmentCredentials(env) {
+  return { KV_REST_API_URL: env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL,
+    KV_REST_API_TOKEN: env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN };
 }
 
 async function checkStorage(storage, { randomUUID = crypto.randomUUID, now = Date.now } = {}) {
@@ -92,8 +102,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   const previous = names.map(name => [name, Object.hasOwn(env, name), env[name]]);
   try {
     const options = parse(argv);
-    if (options.help) return 'Storage permission probe: node scripts/phone-test-storage-check.js --local-credentials\nUses encrypted local credentials and one temporary isolated dummy key. Checks GET, SET NX and atomic compare operations, then removes only matching owned values. No wallet, invoice, order or purchase is used. A crash may leave a dummy key; success does not establish payment readiness.';
-    const credentials = await (deps.loadCredentials || (() => require('./operator-test-credentials').loadLocalCredentials()))();
+    if (options.help) return 'Storage permission probe: node scripts/phone-test-storage-check.js --local-credentials | --env-credentials\nUses encrypted local credentials, or KV_REST_API_URL and KV_REST_API_TOKEN from the environment, and one temporary isolated dummy key. Checks GET, SET NX and atomic compare operations, then removes only matching owned values. No wallet, invoice, order or purchase is used. A crash may leave a dummy key; success does not establish payment readiness.';
+    const credentials = options.source === 'env' ? environmentCredentials(env)
+      : await (deps.loadCredentials || (() => require('./operator-test-credentials').loadLocalCredentials()))();
     requireResult(credentials && ['KV_REST_API_URL', 'KV_REST_API_TOKEN'].every(name => typeof credentials[name] === 'string' && credentials[name].trim()));
     env.KV_REST_API_URL = credentials.KV_REST_API_URL;
     env.KV_REST_API_TOKEN = credentials.KV_REST_API_TOKEN;
