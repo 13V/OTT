@@ -272,6 +272,14 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-dialog-head { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
 .om-dialog-head h2 { padding-top: 6px; font: 700 28px/1.08 var(--font-display); letter-spacing: -.035em; }
 .om-icon-button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 1px solid #d8cdbc; border-radius: 50%; }
+/* The wallet picker app.js opens from Connect wallet, on the website and in the app alike. */
+.wallet-dialog .om-dialog-head h2 { font-size: 24px; }
+.wallet-choices { display: grid; gap: 10px; margin: 6px 0 4px; }
+.wallet-choice { display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 12px 16px; border: 1px solid var(--om-line); border-radius: 12px; background: #fffaf2; color: var(--om-ink); font-size: 16px; font-weight: 600; text-align: left; cursor: pointer; }
+.wallet-choice:hover, .wallet-choice:focus-visible { border-color: var(--om-rim); }
+.wallet-choice img, .wallet-choice-mark { width: 28px; height: 28px; flex: none; border-radius: 8px; }
+.wallet-choice-mark { display: inline-flex; align-items: center; justify-content: center; background: var(--om-orange); color: #fff; font-size: 14px; }
+.wallet-choices .om-button, .wallet-choices .om-secondary-button { width: 100%; text-decoration: none; }
 .om-guide-copy p { margin: 12px 0; font-size: 15px; line-height: 1.6; }
 .om-guide-copy h3 { margin-top: 20px; font: 650 19px/1.3 var(--font-display); }
 .om-guide-copy .om-button { width: 100%; margin-top: 14px; }
@@ -420,6 +428,9 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
   .om-nav > a.is-active { background: #173b42; color: #fff8e8; box-shadow: inset 0 1px 0 #51706f; }
   .om-nav > a.is-active::after { content: none; }
   .om-nav .om-website-link { display: none; }
+  /* Toasts sit above the fixed bottom navigation, with the same clearance as the screen content,
+     rather than covering Plans, eSIMs and Help until they time out. */
+  body.ott-app-mode #toasts { bottom: calc(88px + env(safe-area-inset-bottom)); }
   .om-coverage-button { grid-column: 1; min-height: 49px; margin-bottom: 14px; padding: 8px 0; }
   .om-coverage-name { font-size: 16px; }
   .om-plan-illustration { grid-column: 1; grid-row: 3; margin-top: 20px; }

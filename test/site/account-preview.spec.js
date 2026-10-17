@@ -3,12 +3,17 @@ let pwTest;
 try { pwTest = require('@playwright/test'); } catch (_) { pwTest = require('playwright/test'); }
 const { test, expect } = pwTest;
 const { stubNetwork } = require('./support/network.js');
+const { installWallet } = require('./support/wallet.js');
+const { COIN, TREASURY, TOKEN_2022, BURN_ACCOUNT } = require('./support/solana.js');
 const catalogue = require('../../site/config/esim.json');
 
 test('My data example switches between credit and eSIMs without issuing a package or using a wallet', async ({ page }) => {
   const network = stubNetwork(page);
+  // An installed wallet must not be touched by the example: no connection, no signature.
+  const wallet = await installWallet(page);
   const writes = [];
-  page.on('request', (request) => { if (request.method() !== 'GET' && !request.url().match(/robinhood|ordofi|publicnode/)) writes.push(request.url()); });
+  // Solana JSON-RPC reads are POSTs too; anything else that writes is the example doing real work.
+  page.on('request', (request) => { if (request.method() !== 'GET' && !request.url().match(/publicnode|mainnet-beta\.solana/)) writes.push(request.url()); });
   await page.goto('/index.html#/');
   const preview = page.locator('.ott-account-preview');
   await expect(preview.getByRole('heading', { name: 'Your wallet. Your data.' })).toBeVisible();
@@ -41,11 +46,15 @@ test('My data example switches between credit and eSIMs without issuing a packag
   await expect(page.locator('#wallet-gate')).toHaveCount(0);
   expect(writes).toEqual([]);
   expect(network.blocked).toEqual([]);
+  expect(wallet.calls()).toEqual([]);
 });
 
 test('configured launch links to My data while preserving the example label and sample figures', async ({ page }) => {
   stubNetwork(page);
-  const live = { ...catalogue, coin: '0x' + '1'.repeat(40), curve: '0x' + '2'.repeat(40), treasury: '0x' + '3'.repeat(40) };
+  // Launched means every Solana launch address is filled in: the coin, its token program, the
+  // treasury and the incinerator's account for the coin.
+  const live = { ...catalogue, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY,
+    membership: { ...catalogue.membership, burnAccount: BURN_ACCOUNT } };
   await page.route('**/config/esim.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(live) }));
   await page.goto('/index.html#/');
   const preview = page.locator('.ott-account-preview');

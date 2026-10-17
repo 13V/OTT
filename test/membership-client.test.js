@@ -4,83 +4,148 @@
  * The browser's copies of the membership rules, held to the server's.
  *
  * site/esim.js cannot require site/api/_lib (the functions directory is not served), so it
- * carries its own welcome-plan filter, builds the burn transaction itself and writes the welcome
- * message the API checks. If any of those drift, the failure is quiet and costly: the app offers
- * a plan the API refuses, signs a message the API rejects, or asks a wallet to send the wrong
- * transaction. So the copy that ships is loaded under Node, as test/week.test.js does, and
- * compared with the server's code and an independent ABI encoder.
+ * carries its own welcome-plan filter and join rule, builds the join transaction itself and writes
+ * the messages the API checks. If any of those drift, the failure is quiet and costly: the app
+ * offers a plan the API refuses, signs a message the API rejects, or asks a wallet to send the
+ * wrong transaction. So the copy that ships is loaded under Node, as test/week.test.js does, and
+ * compared with the server's code and with @solana/kit's own decoders.
  *
  *   node test/membership-client.test.js
  */
 const path = require('path');
+const crypto = require('crypto');
+const kit = require('@solana/kit');
+const tok = require('@solana-program/token');
 
 const ROOT = path.join(__dirname, '..');
 const rules = require(path.join(ROOT, 'site', 'api', '_lib', 'membership.js'));
-const chain = require(path.join(ROOT, 'scripts', 'chain.js'));
+const S = require(path.join(ROOT, 'site', 'solana.js'));
 const config = require(path.join(ROOT, 'site', 'config', 'esim.json'));
+const fixture = (name) => require(path.join(__dirname, 'fixtures', 'solana', name));
 
 process.env.SIGNIN_HOST = 'ott.test';
 delete process.env.NODE_ENV;
 delete process.env.VERCEL_ENV;
 const redeem = require(path.join(ROOT, 'site', 'api', 'redeem.js'));
 
-global.window = {};
+global.window = { OTTSolana: S };
 global.location = { host: 'ott.test' };
 require(path.join(ROOT, 'site', 'esim.js'));
 const page = global.window.WhateverData;
 
 let failures = 0, checks = 0;
+const norm = (v) => JSON.stringify(v, (k, x) => (typeof x === 'bigint' ? x.toString() + 'n' : x instanceof Uint8Array ? Array.from(x) : x));
 const check = (what, got, want) => {
   checks++;
-  if (JSON.stringify(got) === JSON.stringify(want)) console.log(`  ok   ${what}`);
-  else { failures++; console.error(`  FAIL ${what}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
+  if (norm(got) === norm(want)) console.log(`  ok   ${what}`);
+  else { failures++; console.error(`  FAIL ${what}\n       got  ${norm(got)}\n       want ${norm(want)}`); }
 };
+const wallet = () => S.encodeBase58(new Uint8Array(crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12)));
 
-console.log('the page exposes the helpers this test compares');
-check('signInMessage, burnCalldata and welcomeEligible are on the page global',
-  [typeof page.signInMessage, typeof page.burnCalldata, typeof page.welcomeEligible], ['function', 'function', 'function']);
+(async () => {
+  console.log('the page exposes the helpers this test compares');
+  check('signInMessage, joinTransaction, joinFromTransaction, welcomeEligible and publishedJoinMismatch are on the page global',
+    ['signInMessage', 'joinTransaction', 'joinFromTransaction', 'welcomeEligible', 'publishedJoinMismatch'].map((n) => typeof page[n]), Array(5).fill('function'));
+  check('the page\'s ceiling on a join amount is the server\'s', page.MAX_JOIN_SHARE_BPS, rules.MAX_BURN_SHARE_BPS);
 
-const ADDRESS = '0xe9f89a769f234f6cc75e1c1c6b1fd9963d72c652';
-const now = () => Math.floor(Date.now() / 1000);
+  const ADDRESS = wallet();
+  const now = () => Math.floor(Date.now() / 1000);
 
-console.log('\nthe messages the page writes are the ones the API accepts');
-const welcomeMessage = page.signInMessage(ADDRESS, { action: 'welcome', packageCode: 'fixed_1GB_7D_AU' });
-check('a welcome message passes the API\'s check for that plan', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'welcome', packageCode: 'fixed_1GB_7D_AU' }), null);
-check('its first line is the welcome head', welcomeMessage.split('\n')[0], redeem.HEADS.welcome);
-check('it names no slot', welcomeMessage.split('\n').some((line) => line.startsWith('Slot: ')), false);
-check('it cannot pass as a weekly redemption', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '0' }), 'this signature does not authorise a redemption');
-check('or as a read', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'read' }), 'this signature does not authorise a read');
-const redeemMessage = page.signInMessage(ADDRESS, { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: 2 });
-check('weekly redemption messages still pass', redeem.checkMessage(redeemMessage, ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '2' }), null);
-check('and read messages still pass', redeem.checkMessage(page.signInMessage(ADDRESS, { action: 'read' }), ADDRESS, now(), { action: 'read' }), null);
+  console.log('\nthe messages the page writes are the ones the API accepts');
+  const welcomeMessage = page.signInMessage(ADDRESS, { action: 'welcome', packageCode: 'fixed_1GB_7D_AU' });
+  check('a welcome message passes the API\'s check for that plan', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'welcome', packageCode: 'fixed_1GB_7D_AU' }), null);
+  check('it carries the address exactly, case and all', welcomeMessage.split('\n').find((l) => l.startsWith('Wallet: ')), 'Wallet: ' + ADDRESS);
+  check('its first line is the welcome head', welcomeMessage.split('\n')[0], redeem.HEADS.welcome);
+  check('it names no slot', welcomeMessage.split('\n').some((line) => line.startsWith('Slot: ')), false);
+  check('it cannot pass as a weekly redemption', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '0' }), 'this signature does not authorise a redemption');
+  check('or as a read', redeem.checkMessage(welcomeMessage, ADDRESS, now(), { action: 'read' }), 'this signature does not authorise a read');
+  const redeemMessage = page.signInMessage(ADDRESS, { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: 2 });
+  check('weekly redemption messages pass', redeem.checkMessage(redeemMessage, ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '2' }), null);
+  check('and read messages pass', redeem.checkMessage(page.signInMessage(ADDRESS, { action: 'read' }), ADDRESS, now(), { action: 'read' }), null);
 
-console.log('\nthe page offers exactly the welcome plans the API accepts');
-const welcome = rules.membershipConfig(config).welcome;
-const pageList = config.packages.filter((pkg) => page.welcomeEligible(pkg, welcome)).map((pkg) => pkg.code);
-const serverList = config.packages.filter((pkg) => rules.welcomeEligible(pkg, welcome)).map((pkg) => pkg.code);
-check('the same plans, across the whole live catalogue', pageList, serverList);
-check('which is 27 places\' 1 GB / 7 day plan, everything but Global', [serverList.length, serverList.includes('fixed_1GB_7D_GLOBAL')], [27, false]);
+  console.log('\nthe page offers exactly the welcome plans the API accepts');
+  const welcome = rules.membershipConfig(config).welcome;
+  const pageList = config.packages.filter((pkg) => page.welcomeEligible(pkg, welcome)).map((pkg) => pkg.code);
+  const serverList = config.packages.filter((pkg) => rules.welcomeEligible(pkg, welcome)).map((pkg) => pkg.code);
+  check('the same plans, in the same order', pageList, serverList);
+  check('27 of the 28 places', new Set(config.packages.filter((pkg) => page.welcomeEligible(pkg, welcome)).map((pkg) => pkg.slug)).size, 27);
 
-console.log('\nthe burn transaction is a plain ERC-20 transfer to the burn address');
-const units = rules.unitsOf(config.membership.burnTokens, 18);
-check('its calldata matches an independent ABI encoding of transfer(burnAddress, amount)',
-  page.burnCalldata(config.membership.burnAddress, units.toString()),
-  chain.encodeCall('transfer(address,uint256)', [config.membership.burnAddress, units]));
+  console.log('\nthe join transaction is exactly the transfer the API counts');
+  {
+    const coin = 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump';
+    const tokenProgram = S.PROGRAMS.token2022;
+    const burnAccount = await S.associatedTokenAddress(S.INCINERATOR, coin, tokenProgram);
+    const blockhash = S.encodeBase58(new Uint8Array(32).fill(3));
+    const { wire, message, source } = await page.joinTransaction({ owner: ADDRESS, coin, tokenProgram, decimals: 6, burnOwner: S.INCINERATOR, burnAccount, units: '1800000000000', blockhash });
+    check('it spends from the wallet\'s own associated account', source, await S.associatedTokenAddress(ADDRESS, coin, tokenProgram));
+    const tx = kit.getTransactionDecoder().decode(wire);
+    check('one signature slot, for the wallet, still empty', Object.keys(tx.signatures), [ADDRESS]);
+    check('the wire carries the message the wallet is shown', Array.from(tx.messageBytes), Array.from(message));
+    const decoded = kit.decompileTransactionMessage(kit.getCompiledTransactionMessageDecoder().decode(message));
+    check('the wallet pays the fee', decoded.feePayer.address, ADDRESS);
+    check('four instructions: compute limit, priority fee, create the incinerator account, transfer',
+      decoded.instructions.map((ix) => ix.programAddress), [S.PROGRAMS.computeBudget, S.PROGRAMS.computeBudget, S.PROGRAMS.associatedToken, tokenProgram]);
+    const signer = { address: kit.address(ADDRESS), signTransactions: async () => [] };
+    const wantCreate = tok.getCreateAssociatedTokenIdempotentInstruction({ payer: signer, ata: kit.address(burnAccount), owner: kit.address(S.INCINERATOR), mint: kit.address(coin), tokenProgram: kit.address(tokenProgram) });
+    const wantTransfer = tok.getTransferCheckedInstruction({ source: kit.address(source), mint: kit.address(coin), destination: kit.address(burnAccount), authority: signer, amount: 1800000000000n, decimals: 6 }, { programAddress: kit.address(tokenProgram) });
+    // Roles in a compiled message are merged across instructions (the wallet signs and pays, so it
+    // is a writable signer everywhere), so accounts and data are compared, and signing separately.
+    const same = (got, want) => norm({ a: (got.accounts || []).map((x) => x.address), d: Array.from(got.data || []) }) === norm({ a: want.accounts.map((x) => x.address), d: Array.from(want.data) });
+    check('the create matches @solana-program/token, accounts and data', same(decoded.instructions[2], wantCreate), true);
+    check('the transfer matches too: this amount, these decimals, into the incinerator\'s account', same(decoded.instructions[3], wantTransfer), true);
+    check('the wallet signs the transfer, and only the wallet', decoded.instructions[3].accounts.map((a) => a.role >= kit.AccountRole.READONLY_SIGNER), [false, false, false, true]);
+    check('the incinerator\'s account and the wallet\'s are the writable ones', decoded.instructions[3].accounts.map((a) => a.role === kit.AccountRole.WRITABLE || a.role === kit.AccountRole.WRITABLE_SIGNER), [true, false, true, true]);
+    let refused = null;
+    try { await page.joinTransaction({ owner: ADDRESS, coin, tokenProgram, decimals: 6, burnOwner: ADDRESS, burnAccount, units: '1', blockhash }); } catch (e) { refused = e.message; }
+    check('a destination owned by anyone but the incinerator is refused', refused, 'The join details are not valid.');
+    refused = null;
+    try { await page.joinTransaction({ owner: ADDRESS, coin, tokenProgram, decimals: 6, burnOwner: S.INCINERATOR, burnAccount, units: '0', blockhash }); } catch (e) { refused = e.message; }
+    check('a zero amount is refused', refused, 'The join amount is not valid.');
+  }
 
-console.log('\nthe page refuses burn details from the API that the published config does not back');
-const COIN = '0x1111111111111111111111111111111111111111';
-const published = Object.assign({}, config, { coin: COIN });
-const fromApi = (extra) => Object.assign({ coin: COIN, burnAddress: config.membership.burnAddress, burnTokens: config.membership.burnTokens, burnUnits: units.toString() }, extra);
-const ledger = { coin: COIN, decimals: 18 };
-check('matching details pass', page.publishedBurnMismatch(published, fromApi(), ledger), '');
-check('the burn address compares without regard to case', page.publishedBurnMismatch(published, fromApi({ burnAddress: config.membership.burnAddress.toLowerCase() }), ledger), '');
-const refused = (what, api, ledgerFile = ledger, cfg = published) => check(what, /nothing was sent/.test(page.publishedBurnMismatch(cfg, api, ledgerFile)), true);
-refused('another burn address is refused', fromApi({ burnAddress: '0x' + '6'.repeat(40) }));
-refused('another coin is refused', fromApi({ coin: '0x' + '7'.repeat(40) }));
-refused('another burn amount is refused', fromApi({ burnTokens: '1000000' }));
-refused('units that do not match the ledger\'s decimals are refused', fromApi({ burnUnits: (units * 10n).toString() }));
-check('units are not judged against a ledger for another coin', page.publishedBurnMismatch(published, fromApi({ burnUnits: (units * 10n).toString() }), { coin: '0x' + '8'.repeat(40), decimals: 18 }), '');
-refused('a site with no published membership refuses every burn', fromApi(), ledger, Object.assign({}, published, { membership: undefined }));
+  console.log('\nthe page reads a join the way the API does');
+  for (const [name, coin, burnAccount] of [
+    ['join-creates-account.json', 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump', 'HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF'],
+    ['join-existing-account.json', 'AyYNfPtftg2zDP4ZbgcoQMggQtwLh4zpfVVmUJs2thto', 'HzfSrAF1hu9CfqF83X3RSW7Jtr9t3ETgk459cVaTahbH']]) {
+    const tx = fixture(name);
+    const a = page.joinFromTransaction(tx, { coin, burnAccount });
+    const b = rules.joinFromTransaction(tx, { coin, burnAccount });
+    check(name + ': the same sender and amount', [a.wallet, a.amount, a.tx], [b.wallet, b.amount, b.tx]);
+  }
+  {
+    const tx = fixture('join-creates-account.json');
+    const coin = 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump';
+    const failed = JSON.parse(JSON.stringify(tx));
+    failed.meta.err = { InstructionError: [1, { Custom: 1 }] };
+    check('a failed transaction is no join to either', [page.joinFromTransaction(failed, { coin, burnAccount: 'HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF' }), rules.joinFromTransaction(failed, { coin, burnAccount: 'HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF' })], [null, null]);
+    check('nor is a transfer into another account', page.joinFromTransaction(tx, { coin, burnAccount: ADDRESS }), null);
+  }
 
-console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
-process.exit(failures ? 1 : 0);
+  console.log('\nthe join must match the site\'s published settings');
+  {
+    const coin = 'FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump';
+    const tokenProgram = S.PROGRAMS.token2022;
+    const burnAccount = await S.associatedTokenAddress(S.INCINERATOR, coin, tokenProgram);
+    const cfg = { coin, tokenProgram, membership: { burnOwner: S.INCINERATOR, burnAccount } };
+    const m = { coin, tokenProgram, decimals: 6, burnOwner: S.INCINERATOR, burnAccount, requirement: { burnTokens: '1800000', burnUnits: '1800000000000' } };
+    const supply = { amount: '1000000000000000', decimals: 6 };
+    const refuse = 'The join details from the server don’t match this site’s published settings, so nothing was sent. Reload and try again.';
+    const variant = (mChange, cfgChange = {}, sup = supply) => page.publishedJoinMismatch(Object.assign({}, cfg, cfgChange), Object.assign({}, m, mChange), sup);
+    check('matching details pass', await variant({}), '');
+    check('another coin is refused', await variant({ coin: S.MINTS.usdc }), refuse);
+    check('another token program is refused', await variant({ tokenProgram: S.PROGRAMS.token }), refuse);
+    const attacker = await S.associatedTokenAddress(ADDRESS, coin, tokenProgram);
+    check('a destination that is not the published one is refused', await variant({ burnAccount: attacker }), refuse);
+    check('even when the published config was tampered to match it', await variant({ burnAccount: attacker }, { membership: { burnOwner: S.INCINERATOR, burnAccount: attacker } }), refuse);
+    check('an owner other than the incinerator is refused', await variant({ burnOwner: ADDRESS }), refuse);
+    check('a zero amount is refused', await variant({ requirement: { burnTokens: '0', burnUnits: '0' } }), refuse);
+    check('2% of the supply passes', await variant({ requirement: { burnTokens: '20000000', burnUnits: '20000000000000' } }), '');
+    check('more than 2% of the supply is refused', await variant({ requirement: { burnTokens: '20000001', burnUnits: '20000001000000' } }), refuse);
+    check('decimals that disagree with the coin are refused', await variant({ decimals: 9 }), refuse);
+    check('no supply reading, no join', await variant({}, {}, null), refuse);
+    check('no amount this week, no join', await variant({ requirement: null }), refuse);
+  }
+
+  console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
+  process.exit(failures ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });

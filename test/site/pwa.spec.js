@@ -12,6 +12,8 @@ const TYPES = {
   '.json': 'application/json', '.webmanifest': 'application/manifest+json',
   '.webp': 'image/webp', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2',
 };
+// A test wallet's address, for the account request the worker must never cache.
+const HOLDER = require('./support/wallet.js').walletAddress();
 let server;
 let origin;
 let base;
@@ -44,6 +46,22 @@ test.beforeAll(async () => {
   base = origin + '/OTT/';
 });
 test.afterAll(async () => { await new Promise((resolve) => server.close(resolve)); });
+
+/** The ?v= release URLs a file references, as written in the file. */
+const versioned = (text) => [...text.matchAll(/["'(\s]\.?\/?([\w./-]+\.(?:js|css)\?v=[\w.-]+)["'\s)]/g)].map((m) => m[1].replace(/^\.\//, ''));
+
+test('every release tag index.html loads is in the service worker shell, with the same tag, and the shell names no other', async () => {
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const shell = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
+  const fromHtml = [...new Set(versioned(html))].sort();
+  const fromShell = [...new Set(versioned(shell))].sort();
+  expect(fromHtml.length).toBeGreaterThan(0);
+  expect(fromShell).toEqual(fromHtml);
+  // The Solana helpers ship in this release; the removed sign-in script and WalletConnect bundle do not.
+  expect(fromHtml.some((url) => url.startsWith('solana.js?v='))).toBe(true);
+  expect(html + shell).not.toMatch(/solana-login\.js|walletconnect/i);
+});
 
 async function visitApp(page) {
   // Real external services are not involved in this installation/offline test.
@@ -141,18 +159,19 @@ test('iPhone installation guidance explains Safari Share rather than offering an
 test('the service worker caches public release files but never configuration, ledgers, account APIs, arbitrary queries or activation images', async ({ page, context }) => {
   await visitApp(page);
   await controlled(page);
-  const result = await page.evaluate(async (base) => {
-    const privatePaths = ['config/addresses.json', 'config/esim.json', 'data/allowances.json', 'data/treasury.json', 'api/status', 'api/auth', 'api/redeem?address=0xfixture', 'ui.js?wallet=private-marker', 'activation/fixture.svg'];
+  const result = await page.evaluate(async ({ base, address }) => {
+    const privatePaths = ['config/addresses.json', 'config/esim.json', 'config/app.json', 'data/allowances.json', 'data/treasury.json', 'data/claims.json', 'data/funding.json',
+      'api/status', 'api/redeem?address=' + address, 'ui.js?wallet=private-marker', 'solana.js?v=private-marker', 'activation/fixture.svg'];
     for (const rel of privatePaths) await fetch(new URL(rel, base), { cache: 'no-store' });
     await fetch(new URL('api/redeem', base), {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: 'fixture only', signature: 'not-a-wallet-signature' }),
+      body: JSON.stringify({ address, message: 'fixture only', signature: 'not-a-wallet-signature' }),
       cache: 'no-store',
     });
     await fetch(new URL('assets/flags/jp.svg', base));
     await fetch(new URL('fonts/InstrumentSans-latin-variable.woff2', base));
     return privatePaths.map((rel) => new URL(rel, base).href);
-  }, base);
+  }, { base, address: HOLDER });
   const urls = await cacheUrls(page);
   expect(urls).toContain(base + 'index.html');
   expect(urls).toContain(base + 'assets/flags/jp.svg');
@@ -161,7 +180,7 @@ test('the service worker caches public release files but never configuration, le
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));
   expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual([
-    'account-preview.js', 'app.js', 'client-config.js', 'esim.js', 'holder-tools.js', 'home.css', 'home.js', 'membership-story.css', 'membership-story.js', 'mobile-app.css', 'mobile-app.js', 'solana-login.js', 'style.css', 'wallet.js',
+    'account-preview.js', 'app.js', 'client-config.js', 'esim.js', 'holder-tools.js', 'home.css', 'home.js', 'membership-story.css', 'membership-story.js', 'mobile-app.css', 'mobile-app.js', 'solana.js', 'style.css', 'wallet.js',
   ]);
   for (const url of publicVersions) expect(urls).toContain(url);
   expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);

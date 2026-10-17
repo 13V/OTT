@@ -1,16 +1,17 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { stubNetwork } = require('./support/network');
+const { installWallet } = require('./support/wallet');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana');
 test.use({ serviceWorkers: 'block' });
+const PUBLISHED = require('../../site/config/esim.json');
 
 test('sample journey selects a plan without a wallet signature or a real order', async ({ page }) => {
   stubNetwork(page);
   const writes = [];
   page.on('request', request => { if (request.method() !== 'GET' && new URL(request.url()).pathname.includes('/api/')) writes.push(request.url()); });
-  await page.addInitScript(() => {
-    window.walletCalls = [];
-    window.ethereum = { request: async ({ method }) => { window.walletCalls.push(method); if (method === 'eth_accounts') return []; throw new Error('Preview must not request a wallet action'); } };
-  });
+  // A Solana wallet is installed but the preview must never ask it for anything.
+  const wallet = await installWallet(page, { connect: 'reject', sign: 'reject', send: 'reject' });
   await page.goto('/#/app');
   const previewAction = page.getByRole('button', { name: 'Try the app preview', exact: true });
   await expect(previewAction).toHaveCount(1);
@@ -33,7 +34,7 @@ test('sample journey selects a plan without a wallet signature or a real order',
   await expect(page.locator('.om-balance')).toHaveText('$7.01');
   await page.getByRole('button', { name: 'Exit preview', exact: true }).click();
   await expect(page.locator('.om-balance')).toHaveCount(0);
-  expect(await page.evaluate(() => window.walletCalls)).toEqual(['eth_accounts']);
+  expect(wallet.calls()).toEqual([]);
   expect(writes).toEqual([]);
 });
 
@@ -83,7 +84,7 @@ test('coverage picker supports keyboard selection, no matches and prelaunch pack
   await page.getByRole('button', { name: 'Review package', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('10 GB');
   await expect(page.getByRole('dialog')).toContainText('Japan');
-  await expect(page.getByRole('dialog')).toContainText('Membership enrolment and purchases are not open.');
+  await expect(page.getByRole('dialog')).toContainText('Catalogue preview. Joining and purchases are not open yet. Package costs do not set the join amount.');
   await expect(page.getByRole('button', { name: 'Add to preview', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Continue to eSIMs', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -183,52 +184,77 @@ test('phone eSIM screens put account actions before artwork in prelaunch and sam
   }
 });
 
-test('missing mobile wallet opens an honest handoff instead of pretending to connect', async ({ page }) => {
+test('without a Solana wallet in this browser, Connect offers the wallet apps’ own browsers instead of pretending to connect', async ({ page }) => {
   stubNetwork(page);
   await page.goto('/#/app');
-  await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('Mobile wallet connection has not been enabled on this deployment yet.');
-  await expect(page.getByRole('button', { name: 'Copy app link', exact: true })).toBeVisible();
+  const connect = page.getByRole('button', { name: 'Connect wallet', exact: true });
+  await connect.click();
+  const sheet = page.getByRole('dialog', { name: 'Open OT+T in your wallet', exact: true });
+  await expect(sheet).toContainText('OT+T works with Solana wallets such as Phantom and Solflare. On a phone, open this page inside your wallet app, then tap Connect wallet.');
+  // Phantom's and Solflare's own links open this exact page inside the wallet app's browser.
+  const here = page.url();
+  const ref = '?ref=' + encodeURIComponent(new URL(here).origin);
+  await expect(sheet.getByRole('link', { name: 'Open in Phantom', exact: true })).toHaveAttribute('href', 'https://phantom.app/ul/browse/' + encodeURIComponent(here) + ref);
+  await expect(sheet.getByRole('link', { name: 'Open in Solflare', exact: true })).toHaveAttribute('href', 'https://solflare.com/ul/v1/browse/' + encodeURIComponent(here) + ref);
+  await expect(sheet.getByRole('link', { name: 'Phantom', exact: true })).toHaveAttribute('href', 'https://phantom.com/download');
   expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(null);
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Connect wallet', exact: true })).toBeFocused();
+  await sheet.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(connect).toBeFocused();
+  // Closing the chooser is not a failed connection.
+  await expect(page.locator('#toasts')).toBeEmpty();
+  expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(null);
 });
 
 test('declining a wallet connection leaves the app usable and a later connection never asks for a signature', async ({ page }) => {
   stubNetwork(page);
-  const address = '0x4444444444444444444444444444444444444444';
   const writes = [];
   page.on('request', request => { if (request.method() !== 'GET' && new URL(request.url()).pathname.includes('/api/')) writes.push(request.url()); });
-  await page.addInitScript(address => {
-    window.fixtureConnectionMethods = [];
-    window.declineFixtureConnection = true;
-    window.ethereum = { request: async ({ method }) => {
-      window.fixtureConnectionMethods.push(method);
-      if (method === 'eth_accounts') return [];
-      if (method === 'eth_chainId') return '0x1237';
-      if (method === 'eth_requestAccounts') {
-        if (window.declineFixtureConnection) throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
-        return [address];
-      }
-      throw new Error('A prelaunch connection must not request a signature');
-    } };
-  }, address);
+  const wallet = await installWallet(page, { connect: 'reject' });
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto('/#/app');
   const connect = page.getByRole('button', { name: 'Connect wallet', exact: true });
   await connect.click();
   await expect(page.locator('#toasts')).toContainText('Could not connect');
-  await expect(page.locator('#toasts')).toContainText('User rejected the request.');
+  await expect(page.locator('#toasts')).toContainText('The connection was not approved.');
   await expect(connect).toBeEnabled();
   expect(await page.evaluate(() => window.OTT_STATE.account)).toBeNull();
-  await page.evaluate(() => { window.declineFixtureConnection = false; });
+  wallet.behave({ connect: 'approve' });
   await connect.click();
   await expect(page.getByRole('button', { name: 'Wallet settings', exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(address);
-  expect(await page.evaluate(() => window.fixtureConnectionMethods)).toEqual(['eth_accounts', 'eth_requestAccounts', 'eth_requestAccounts', 'eth_chainId']);
+  expect(await page.evaluate(() => window.OTT_STATE.account)).toBe(wallet.address);
+  // One installed wallet is asked directly, twice, and never for a signature or a transaction.
+  expect(wallet.calls()).toEqual([{ method: 'connect', silent: false }, { method: 'connect', silent: false }]);
   expect(writes).toEqual([]);
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Review package', exact: true })).toBeEnabled();
+});
+
+test('on phones a toast sits above the bottom navigation instead of covering it', async ({ page }) => {
+  stubNetwork(page);
+  await installWallet(page, { connect: 'reject' });
+  for (const viewport of [{ width: 320, height: 568 }, { width: 360, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/#/app');
+    await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
+    const toast = page.locator('#toasts .toast').last();
+    await expect(toast).toContainText('Could not connect');
+    const layout = await page.evaluate(() => {
+      const nav = document.querySelector('.om-nav').getBoundingClientRect();
+      const toasts = document.querySelector('#toasts').getBoundingClientRect();
+      const reachable = [...document.querySelectorAll('.om-nav a:not(.om-website-link)')].map((link) => {
+        const box = link.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return link === hit || link.contains(hit);
+      });
+      return { navTop: nav.top, toastsBottom: toasts.bottom, reachable };
+    });
+    expect(layout.toastsBottom).toBeLessThanOrEqual(layout.navTop);
+    expect(layout.reachable).toEqual([true, true, true, true]);
+    // Navigating while the toast is still up does not wait for it to go.
+    await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Plans', exact: true }).click({ timeout: 2000 });
+    await expect(page).toHaveURL(/#\/app\/plans$/);
+  }
 });
 
 test('browser back dismisses package review and returns to the previous app screen', async ({ page }) => {
@@ -244,16 +270,22 @@ test('browser back dismisses package review and returns to the previous app scre
 
 test('live account revocation hides codes and reconnecting requires a fresh read signature', async ({ page }) => {
   stubNetwork(page);
-  const address = '0x4444444444444444444444444444444444444444';
-  const cfg = { ...require('../../site/config/esim.json'), coin: '0x1111111111111111111111111111111111111111', curve: '0x2222222222222222222222222222222222222222', treasury: '0x3333333333333333333333333333333333333333' };
+  const wallet = await installWallet(page);
+  const address = wallet.address;
+  const cfg = { ...PUBLISHED, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY,
+    membership: { ...PUBLISHED.membership, burnAccount: BURN_ACCOUNT } };
   const week = Math.floor((Date.now() / 1000 - 345600) / 604800);
   const order = { n: 0, week, transactionId: 'fixture-only', packageCode: 'fixed_5GB_30D_US', priceUsd: 7.99,
     iccid: 'fixture-not-an-iccid', createdAt: new Date().toISOString(), stage: 'done', pending: false,
     codes: false, ac: '', qrCodeUrl: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '' };
   const signedOrder = { ...order, codes: true, ac: 'LPA:1$smdp.example$FIXTURE-ONLY', smdpAddress: 'smdp.example', matchingId: 'FIXTURE-ONLY' };
+  const membership = { configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT,
+    burnUsd: 5, requirement: { week, burnTokens: '180000', burnUnits: '180000000000', priceUsd: 0.0000278 }, burned: '180000000000',
+    welcome: { gb: 1, days: 7, maxUsd: 4 }, capMultiple: 3, member: true, memberSince: { at: 1790000000, slot: 399000000, tx: signatureFrom('join') },
+    sharing: true, welcomeOrder: null, enrolment: { open: true, reason: '' } };
   const standing = { ok: true, address, week, weekEnd: 345600 + (week + 1) * 604800,
-    tokens: '1234000000000000000000', share: 0.01, allowanceUsd: 20, decimals: 18,
-    redeemedUsd: 7.99, remainingUsd: 12.01, stale: false, orders: [order], history: [], sims: [] };
+    tokens: '1234000000', share: 0.01, allowanceUsd: 20, decimals: 6, allowancesWeek: week, poolUsd: 120,
+    redeemedUsd: 7.99, remainingUsd: 12.01, stale: false, orders: [order], history: [], sims: [], membership };
   await page.route('**/config/esim.json', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(cfg) }));
   const writes = [];
   await page.route('**/api/redeem**', route => {
@@ -261,43 +293,34 @@ test('live account revocation hides codes and reconnecting requires a fresh read
     if (request.method() === 'POST') writes.push(request.postDataJSON());
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(request.method() === 'GET' ? standing : { ...standing, orders: [signedOrder] }) });
   });
-  await page.addInitScript(address => {
-    window.walletListeners = {};
-    window.readSignatures = 0;
-    window.ethereum = {
-      request: async ({ method }) => {
-        if (method === 'eth_accounts') return [];
-        if (method === 'eth_requestAccounts') return [address];
-        if (method === 'eth_chainId') return '0x1237';
-        if (method === 'personal_sign') {
-          window.readSignatures++;
-          if (window.deferWalletSignature) return new Promise(resolve => { window.finishWalletSignature = () => resolve('0xfixture'); });
-          return '0xfixture';
-        }
-        throw new Error('Unexpected wallet method: ' + method);
-      }, on: (event, handler) => { window.walletListeners[event] = handler; },
-    };
-  }, address);
+  // Revoking this site in the wallet ends its access; the wallet itself keeps the account, so the
+  // next approval shares it again. (switchTo(null) empties the fake wallet too, so it is given the
+  // account back afterwards, which the page, no longer listening, does not see.)
+  const revoke = async () => { await wallet.switchTo(page, null); await wallet.switchTo(page, 'holder'); };
   await page.goto('/#/app/esims');
   await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
   await expect(page.locator('.data-ac')).toContainText('FIXTURE-ONLY');
-  expect(await page.evaluate(() => window.readSignatures)).toBe(1);
-  await page.evaluate(() => window.walletListeners.accountsChanged([]));
+  expect(wallet.calls('signMessage')).toHaveLength(1);
+  await revoke();
   await expect(page.locator('.data-ac')).toHaveCount(0);
   await expect(page.locator('.data-addr')).toHaveCount(0);
   await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
   await expect(page.locator('.data-ac')).toContainText('FIXTURE-ONLY');
-  expect(await page.evaluate(() => window.readSignatures)).toBe(2);
+  // The read signature from before the revocation was not reused.
+  expect(wallet.calls('signMessage')).toHaveLength(2);
   expect(writes).toHaveLength(2);
-  expect(writes.every(body => !body.packageCode)).toBe(true);
+  expect(writes.every(body => !body.packageCode && wallet.verify(body.message, body.signature))).toBe(true);
   // An account change while the wallet prompt is still open must prevent the signed POST.
-  await page.evaluate(() => { window.walletListeners.accountsChanged([]); window.deferWalletSignature = true; });
+  await revoke();
+  wallet.behave({ sign: 'hold' });
   await page.getByRole('button', { name: 'Connect wallet', exact: true }).click();
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => typeof window.finishWalletSignature)).toBe('function');
-  await page.evaluate(() => { window.walletListeners.accountsChanged([]); window.finishWalletSignature(); });
+  await expect.poll(() => wallet.calls('signMessage').length).toBe(3);
+  await wallet.switchTo(page, null);
+  wallet.behave({ sign: 'approve' });
+  expect(wallet.release('signMessage')).toBe(1);
   await expect(page.getByRole('button', { name: 'Connect wallet', exact: true })).toBeVisible();
   await expect(page.locator('.data-ac')).toHaveCount(0);
   expect(writes).toHaveLength(2);

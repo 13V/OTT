@@ -1,35 +1,39 @@
 'use strict';
+/**
+ * A weekly redemption whose answer is lost or unconfirmed. The order may already be paid, so the
+ * page never offers a second purchase for it: it checks the existing order with a GET, allows only
+ * an explicit retry of the same plan and slot, and keeps installation details private.
+ */
 const { test, expect } = require('@playwright/test');
 const { stubNetwork } = require('./support/network');
+const { installWallet, walletAddress } = require('./support/wallet');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, addressFrom, signatureFrom } = require('./support/solana');
 test.use({ serviceWorkers: 'block' });
-const ADDRESS = '0x4444444444444444444444444444444444444444';
+
+const ADDRESS = walletAddress();
 const WEEK = Math.floor((Date.now() / 1000 - 345600) / 604800);
-const CFG = { ...require('../../site/config/esim.json'), coin: '0x1111111111111111111111111111111111111111',
-  curve: '0x2222222222222222222222222222222222222222', treasury: '0x3333333333333333333333333333333333333333' };
-const STANDING = { ok: true, address: ADDRESS, week: WEEK, weekEnd: 345600 + (WEEK + 1) * 604800,
-  tokens: '1000000000000000000000', decimals: 18, share: 0.01, allowanceUsd: 10, redeemedUsd: 0,
-  remainingUsd: 10, stale: false, orders: [], history: [], sims: [] };
+const WEEK_END = 345600 + (WEEK + 1) * 604800;
+const CATALOGUE = require('../../site/config/esim.json');
+const CFG = { ...CATALOGUE, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY,
+  membership: { ...CATALOGUE.membership, burnAccount: BURN_ACCOUNT } };
+const JOIN_UNITS = '180000000000';
+const MEMBERSHIP = { configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT,
+  burnUsd: 5, requirement: { week: WEEK, burnTokens: '180000', burnUnits: JOIN_UNITS, priceUsd: 0.0000278 }, burned: JOIN_UNITS,
+  welcome: CATALOGUE.membership.welcome, capMultiple: 3, member: true, sharing: true,
+  memberSince: { at: Math.floor(Date.now() / 1000) - 86400, slot: 399000000, tx: signatureFrom('recovery join') },
+  welcomeOrder: null, enrolment: { open: true, reason: '' } };
+const STANDING = { ok: true, address: ADDRESS, week: WEEK, weekEnd: WEEK_END,
+  tokens: '1000000000', decimals: 6, share: 0.01, allowanceUsd: 10, redeemedUsd: 0,
+  remainingUsd: 10, stale: false, allowancesWeek: WEEK, orders: [], history: [], sims: [], membership: MEMBERSHIP };
 const json = value => ({ contentType: 'application/json', body: JSON.stringify(value) });
-async function fixture(page, reject = false) {
+
+async function fixture(page, behaviour = {}) {
   stubNetwork(page);
   await page.route('**/config/esim.json', route => route.fulfill(json(CFG)));
-  await page.route('**/data/allowances.json', route => route.fulfill(json({ week: WEEK, weekEnd: STANDING.weekEnd, decimals: 18,
-    wallets: { [ADDRESS]: { tokens: STANDING.tokens, share: 0.01, allowanceUsd: 10 } } })));
-  await page.addInitScript(({ address, reject }) => {
-    window.recoveryWalletMethods = [];
-    window.rejectRecoveryApproval = reject;
-    window.ethereum = { on() {}, request: async ({ method }) => {
-      window.recoveryWalletMethods.push(method);
-      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [address];
-      if (method === 'eth_chainId') return '0x1237';
-      if (method === 'personal_sign') {
-        if (window.rejectRecoveryApproval) throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
-        if (window.pauseRecoveryApproval) await new Promise(resolve => { window.resolveRecoveryApproval = resolve; });
-        return '0x' + 'ab'.repeat(65);
-      }
-      throw new Error('Unexpected fixture wallet method');
-    } };
-  }, { address: ADDRESS, reject });
+  await page.route('**/data/allowances.json', route => route.fulfill(json({ chain: 'solana', week: WEEK, weekEnd: WEEK_END, decimals: 6,
+    coin: COIN, tokenProgram: TOKEN_2022, memberTokens: '100000000000', members: { [ADDRESS]: { burned: JOIN_UNITS, since: MEMBERSHIP.memberSince } },
+    wallets: { [ADDRESS]: { tokens: STANDING.tokens, share: 0.01, allowanceUsd: 10, member: true } } })));
+  return installWallet(page, { trusted: true, ...behaviour });
 }
 function order(body, pending = true) {
   const pkg = CFG.packages.find(value => value.code === body.packageCode);
@@ -39,7 +43,7 @@ function order(body, pending = true) {
 }
 
 test('a lost accepted response recovers the existing order with a GET and no second purchase', async ({ page }) => {
-  await fixture(page); await page.setViewportSize({ width: 390, height: 844 });
+  const wallet = await fixture(page); await page.setViewportSize({ width: 390, height: 844 });
   const posts = [];
   let standing = STANDING;
   await page.route('**/api/redeem**', route => {
@@ -54,18 +58,23 @@ test('a lost accepted response recovers the existing order with a GET and no sec
   await expect(page.getByRole('button', { name: 'Check existing order', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Redeem / })).toBeDisabled();
   await expect(page.locator('#f-place')).toBeDisabled();
-  await expect(page.locator('.data-order-progress')).toHaveAttribute('data-phase', 'checking');
-  await expect(page.locator('.data-order-progress')).not.toContainText('The provider is issuing your data package.');
+  await expect(page.locator('.data-redeem .data-order-progress')).toHaveAttribute('data-phase', 'checking');
+  await expect(page.locator('.data-redeem .data-order-progress')).not.toContainText('The provider is issuing your data package.');
   await page.getByRole('button', { name: 'Check existing order', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check existing order', exact: true })).toHaveCount(0);
   await expect(page.locator('.data-sims')).toContainText('Paying the invoice');
   expect(posts).toHaveLength(1);
-  expect(await page.evaluate(() => window.recoveryWalletMethods.filter(method => method === 'personal_sign').length)).toBe(1);
+  // The one purchase carried this wallet's signature over the plan and slot it names.
+  expect(posts[0].message).toContain('Plan: ' + posts[0].packageCode);
+  expect(posts[0].message).toContain('Slot: 0');
+  expect(wallet.verify(posts[0].message, posts[0].signature)).toBe(true);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
+  expect(wallet.calls('signAndSendTransaction')).toEqual([]);
   expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain('fixture-order');
 });
 
 test('checking an unseen order permits only an explicit retry of the same plan and slot', async ({ page }) => {
-  await fixture(page);
+  const wallet = await fixture(page);
   const posts = [];
   await page.route('**/api/redeem**', route => {
     if (route.request().method() === 'GET') return route.fulfill(json(STANDING));
@@ -85,10 +94,13 @@ test('checking an unseen order permits only an explicit retry of the same plan a
   await expect(page.locator('.data-sims')).toContainText('fixture-iccid');
   expect(posts).toHaveLength(2);
   expect(posts[1].n).toBe(posts[0].n); expect(posts[1].packageCode).toBe(posts[0].packageCode);
+  // A redemption signature is never reused: the retry was approved again in the wallet.
+  expect(wallet.calls('signMessage')).toHaveLength(2);
+  expect(posts.every(body => wallet.verify(body.message, body.signature))).toBe(true);
 });
 
 test('a declined signature leaves the plan retryable without sending a purchase', async ({ page }) => {
-  await fixture(page, true);
+  const wallet = await fixture(page, { sign: 'reject' });
   let posts = 0;
   await page.route('**/api/redeem**', route => {
     if (route.request().method() !== 'GET') posts++;
@@ -96,11 +108,12 @@ test('a declined signature leaves the plan retryable without sending a purchase'
   });
   await page.goto('/#/app/esims');
   await page.getByRole('button', { name: /^Redeem / }).click();
-  await expect(page.locator('.data-redeem')).toContainText('User rejected the request.');
+  await expect(page.locator('.data-redeem')).toContainText('Could not redeem: The request was not approved in your wallet.');
   await expect(page.getByRole('button', { name: /^Redeem / })).toBeEnabled();
   await expect(page.locator('#f-place')).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Check existing order', exact: true })).toHaveCount(0);
   expect(posts).toBe(0);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
 });
 
 test('route changes preserve the unconfirmed plan and mismatched reads cannot unlock it', async ({ page }) => {
@@ -108,7 +121,7 @@ test('route changes preserve the unconfirmed plan and mismatched reads cannot un
   let foreign = false, posts = 0;
   await page.route('**/api/redeem**', route => {
     if (route.request().method() === 'POST') { posts++; return route.abort('failed'); }
-    return route.fulfill(json(foreign ? { ...STANDING, address: '0x5555555555555555555555555555555555555555',
+    return route.fulfill(json(foreign ? { ...STANDING, address: addressFrom('foreign wallet'),
       orders: [{ ...order({ packageCode: CFG.packages[0].code, n: 0 }), ac: 'PRIVATE-FOREIGN-CODE' }] } : STANDING));
   });
   await page.goto('/#/app/esims');
@@ -127,18 +140,20 @@ test('route changes preserve the unconfirmed plan and mismatched reads cannot un
 });
 
 test('leaving the account during wallet approval cancels a purchase before dispatch', async ({ page }) => {
-  await fixture(page);
+  const wallet = await fixture(page);
   let posts = 0;
   await page.route('**/api/redeem**', route => {
     if (route.request().method() === 'POST') posts++;
     return route.fulfill(json(STANDING));
   });
   await page.goto('/#/app/esims');
-  await page.evaluate(() => { window.pauseRecoveryApproval = true; });
+  wallet.behave({ sign: 'hold' });
   await page.getByRole('button', { name: /^Redeem / }).click();
   await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'wallet');
+  await expect.poll(() => wallet.calls('signMessage').length).toBe(1);
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'Help', exact: true }).click();
-  await page.evaluate(() => { window.pauseRecoveryApproval = false; window.resolveRecoveryApproval(); });
+  wallet.behave({ sign: 'approve' });
+  expect(wallet.release('signMessage')).toBe(1);
   await expect(page.getByRole('heading', { name: 'Set up your eSIM', exact: true })).toBeVisible();
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Your eSIMs.', exact: true })).toBeVisible();

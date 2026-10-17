@@ -2,25 +2,21 @@
 
 const { test, expect } = require('@playwright/test');
 const { stubNetwork } = require('./support/network');
+const { installWallet } = require('./support/wallet');
 test.use({ serviceWorkers: 'block' });
 
+// A Solana wallet is installed, so the story could reach one if it tried. It must never connect,
+// sign, burn or pay: the story is read-only, and only My data and the app ask a wallet for anything.
 async function story(page) {
   const network = stubNetwork(page), writes = [], errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   page.on('request', request => {
     if (request.method() !== 'GET' && /\/api\//.test(new URL(request.url()).pathname)) writes.push(request.url());
   });
-  await page.addInitScript(() => {
-    window.membershipWalletCalls = [];
-    window.ethereum = { on() {}, off() {}, request: async ({ method }) => {
-      window.membershipWalletCalls.push(method);
-      if (method === 'eth_accounts') return [];
-      throw new Error('The membership story must not connect, sign, burn or pay: ' + method);
-    } };
-  });
+  const wallet = await installWallet(page, { connect: 'reject', sign: 'reject', send: 'reject' });
   await page.goto('/index.html#/');
   await expect(page.locator('.ott-hero-title')).toHaveText('A memecoin with a data plan.');
-  return { network, writes, errors };
+  return { network, writes, errors, wallet };
 }
 const exampleResult = page => page.getByLabel('Illustrative weekly data credit', { exact: true });
 const inputs = page => ({ fees: page.getByLabel('Daily fees collected ($)', { exact: true }),
@@ -30,11 +26,12 @@ async function openExample(page) {
   await inputs(page).fees.scrollIntoViewIfNeeded();
   await expect(inputs(page).fees).toBeVisible();
 }
-function noApprovalCalls(methods) {
-  expect(methods).not.toContain('eth_requestAccounts');
-  expect(methods).not.toContain('personal_sign');
-  expect(methods).not.toContain('eth_sendTransaction');
-  expect(methods).not.toContain('eth_signTypedData_v4');
+// No connection prompt, no message to sign and no transaction to send. A silent reconnect of an
+// already-trusted wallet asks the person nothing, so it would not count, but this wallet is not
+// remembered by the site and is not asked even that.
+function noApprovalCalls(wallet) {
+  expect(wallet.calls().filter(call => !(call.method === 'connect' && call.silent))).toEqual([]);
+  expect(wallet.calls()).toEqual([]);
 }
 
 test('the one-time burn enrols for a first eSIM while collected trading fees fund future data', async ({ page }) => {
@@ -45,8 +42,10 @@ test('the one-time burn enrols for a first eSIM while collected trading fees fun
   await expect(journey).toContainText(/burn once/i);
   await expect(journey).toContainText(/first eSIM/i);
   await expect(journey).toContainText(/trading fees/i);
-  // The published terms come from config/esim.json, and enrolment stays closed before launch.
-  await expect(journey).toContainText('Burn 100,000 OTT once to join');
+  // The published terms come from config/esim.json, and enrolment stays closed before launch. The
+  // join is set in dollars and turned into OTT each week, so the story quotes dollars, not tokens.
+  await expect(journey).toContainText('Burn about $5 of OTT once to join');
+  await expect(journey.locator('.ott-member-pass-note')).toHaveText('ABOUT $5 OF OTT · ENROLMENT OPENS AT LAUNCH');
   await expect(journey).toContainText('any 1 GB, 7-day plan up to $4.00');
   await expect(journey).toContainText('80% of the fees actually collected');
   await expect(journey).toContainText('no member gets more than 3× the average');
@@ -57,9 +56,15 @@ test('the one-time burn enrols for a first eSIM while collected trading fees fun
   await illustration.scrollIntoViewIfNeeded();
   await expect.poll(() => illustration.evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
   await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);
+  await expect(page.locator('.ott-hero-note')).toContainText('burn about $5 of OTT once for your first eSIM');
+  await expect(page.locator('.ott-token-facts')).toContainText('Solana · pump.fun');
+  // The launch step names pump.fun; nothing on the home page still speaks of the old chain, its
+  // dollar token, a fixed token amount or the old creator tax.
+  await expect(page.locator('#trust')).toContainText('Launch OTT on pump.fun and publish the coin and treasury addresses.');
+  await expect(page.locator('#view')).not.toContainText(/Robinhood|USDG|escrow|WalletConnect|MetaMask|100,000 OTT|creator tax|10% tax/i);
   await expect(page.getByRole('button', { name: /^Burn(?:\s|$)/i })).toHaveCount(0);
   await expect(page.locator('#ott-example-share')).toHaveCount(0);
-  noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+  noApprovalCalls(f.wallet);
   expect(f.writes).toEqual([]);
   expect(f.errors).toEqual([]);
 });
@@ -76,7 +81,7 @@ test('Trust opens the protection section from Status and on a direct reload with
   await page.reload();
   await expect(trust.getByText('Launch pending', { exact: true })).toBeVisible();
   await expect.poll(() => trust.evaluate(section => Math.round(section.getBoundingClientRect().top))).toBeLessThan(130);
-  noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+  noApprovalCalls(f.wallet);
   expect(f.writes).toEqual([]);
   expect(f.errors).toEqual([]);
 });
@@ -90,7 +95,7 @@ test('trust shows the published rules and outstanding launch and automated testi
   }
   await expect(trust.getByText(/^(?:Audited|Escrow active|Phone test passed|Fully insured|Guaranteed data)$/i)).toHaveCount(0);
   await expect(trust).toContainText(/(?:pending|planned)/i);
-  noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+  noApprovalCalls(f.wallet);
   expect(f.writes).toEqual([]);
   expect(f.network.blocked).toEqual([]);
   expect(f.errors).toEqual([]);
@@ -117,7 +122,7 @@ test('the fee example varies daily collection, allocation and enrolled users wit
   await controls.percent.fill('0');
   await expect(exampleResult(page)).toHaveText('$0.00');
   await expect(page.locator('.ott-statement-balance')).toContainText('$15.00');
-  noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+  noApprovalCalls(f.wallet);
   expect(f.writes).toEqual([]);
   expect(f.errors).toEqual([]);
 });
@@ -140,7 +145,7 @@ test('invalid fee examples refuse negative, non-finite, out-of-range and non-int
   }
   await controls.members.fill('1');
   await expect(exampleResult(page)).toHaveText('$5,600.00');
-  noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+  noApprovalCalls(f.wallet);
   expect(f.writes).toEqual([]);
   expect(f.errors).toEqual([]);
 });
@@ -166,7 +171,7 @@ for (const width of [320, 2538]) {
     await expect(page.locator('#trust')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe('auto');
-    noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
+    noApprovalCalls(f.wallet);
     expect(f.writes).toEqual([]);
     expect(f.errors).toEqual([]);
   });

@@ -1,56 +1,53 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { stubNetwork } = require('./support/network');
+const { installWallet, walletAddress } = require('./support/wallet');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana');
 
 test.use({ serviceWorkers: 'block' });
 
-const ADDRESS = '0x4444444444444444444444444444444444444444';
+const ADDRESS = walletAddress();
 const WEEK = Math.floor((Date.now() / 1000 - 345600) / 604800);
 const WEEK_END = 345600 + (WEEK + 1) * 604800;
-const CFG = { ...require('../../site/config/esim.json'), coin: '0x1111111111111111111111111111111111111111',
-  curve: '0x2222222222222222222222222222222222222222', treasury: '0x3333333333333333333333333333333333333333' };
+const CATALOGUE = require('../../site/config/esim.json');
+const CFG = { ...CATALOGUE, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY,
+  membership: { ...CATALOGUE.membership, burnAccount: BURN_ACCOUNT } };
+const PRELAUNCH = { ...CATALOGUE, chain: 'solana', coin: '', tokenProgram: '', treasury: '', membership: { ...CATALOGUE.membership, burnAccount: '' } };
 const ORDER = { n: 0, week: WEEK, transactionId: 'fixture-setup', packageCode: 'fixed_5GB_30D_US', priceUsd: 7.99,
   iccid: 'fixture-setup-iccid', createdAt: new Date().toISOString(), stage: 'done', pending: false, codes: true,
   ac: 'LPA:1$smdp.fixture.example$SETUP-CODE', qrCodeUrl: '', smdpAddress: 'smdp.fixture.example', matchingId: 'SETUP-CODE',
   appleInstallUrl: 'https://esimsetup.apple.com/es?carddata=fixture-only', androidInstallUrl: 'https://provider.fixture.example/install/fixture-only' };
+const JOIN_UNITS = '180000000000';
+const MEMBERSHIP = { configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT,
+  burnUsd: 5, requirement: { week: WEEK, burnTokens: '180000', burnUnits: JOIN_UNITS, priceUsd: 0.0000278 }, burned: JOIN_UNITS,
+  welcome: CATALOGUE.membership.welcome, capMultiple: 3, member: true, sharing: true,
+  memberSince: { at: Math.floor(Date.now() / 1000) - 86400, slot: 399000000, tx: signatureFrom('setup join') },
+  welcomeOrder: null, enrolment: { open: true, reason: '' } };
 const json = value => ({ contentType: 'application/json', body: JSON.stringify(value) });
 const redacted = order => ({ ...order, codes: false, ac: '', qrCodeUrl: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '' });
 const standing = orders => ({ ok: true, address: ADDRESS, week: WEEK, weekEnd: WEEK_END,
-  tokens: '1234000000000000000000', share: 0.01, allowanceUsd: 20, decimals: 18, redeemedUsd: 7.99,
-  remainingUsd: 12.01, stale: false, orders, history: [], sims: [] });
+  tokens: '1234000000', share: 0.01, allowanceUsd: 20, decimals: 6, redeemedUsd: 7.99,
+  remainingUsd: 12.01, stale: false, allowancesWeek: WEEK, orders, history: [], sims: [], membership: MEMBERSHIP });
+// The weekly redemption's own progress tracker. A member's unclaimed welcome eSIM has another,
+// hidden until that claim starts, so the locator names the redeem form.
+const orderProgress = page => page.locator('.data-redeem .data-order-progress');
 
+/** A member's wallet, already approved for this site; `wallet.behave()` changes how it answers. */
 async function setupFixture(page, { order = ORDER, prelaunch = false } = {}) {
   stubNetwork(page);
-  await page.route('**/config/esim.json', route => route.fulfill(json(prelaunch ? { ...CFG, coin: '', curve: '', treasury: '' } : CFG)));
-  await page.route('**/config/app.json', route => route.fulfill(json({ walletConnect: { projectId: '' }, apiBaseUrl: '' })));
+  await page.route('**/config/esim.json', route => route.fulfill(json(prelaunch ? PRELAUNCH : CFG)));
   const requests = [];
   await page.route('**/api/redeem**', route => {
     const request = route.request();
     requests.push({ method: request.method(), body: request.method() === 'POST' ? request.postDataJSON() : null });
     return route.fulfill(json(standing([request.method() === 'POST' ? order : redacted(order)])));
   });
-  await page.addInitScript(address => {
-    window.fixtureSetupMethods = [];
-    window.fixtureSetupHandlers = {};
+  await page.addInitScript(() => {
     window.fixtureSetupCopies = [];
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { window.fixtureSetupCopies.push(value); } } });
-    window.ethereum = {
-      request: async ({ method }) => {
-        window.fixtureSetupMethods.push(method);
-        if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [address];
-        if (method === 'eth_chainId') return '0x1237';
-        if (method === 'personal_sign') {
-          if (window.rejectSetupSignature) throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
-          if (window.deferSetupSignature) return new Promise(resolve => { window.finishSetupSignature = () => resolve('0xfixture-setup-signature'); });
-          return '0xfixture-setup-signature';
-        }
-        throw new Error('Unexpected wallet request: ' + method);
-      },
-      on: (event, callback) => { window.fixtureSetupHandlers[event] = callback; },
-      off: (event, callback) => { if (window.fixtureSetupHandlers[event] === callback) delete window.fixtureSetupHandlers[event]; },
-    };
-  }, ADDRESS);
-  return requests;
+  });
+  const wallet = await installWallet(page, { trusted: true });
+  return { requests, wallet };
 }
 
 async function reveal(page) {
@@ -68,7 +65,7 @@ async function openSetup(page) {
 }
 
 test('authorized setup guides both phone types and copies details only after an explicit action', async ({ page }) => {
-  const requests = await setupFixture(page);
+  const { requests, wallet } = await setupFixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await reveal(page);
   const sheet = await openSetup(page);
@@ -98,7 +95,11 @@ test('authorized setup guides both phone types and copies details only after an 
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toBeFocused();
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(1);
   expect(requests.filter(request => request.method === 'POST').every(request => !request.body.packageCode)).toBe(true);
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(1);
+  // One signed read: this wallet's signature over the read message it posted.
+  const read = requests.find(request => request.method === 'POST').body;
+  expect(read.message.split('\n')[0]).toBe('OT+T — show my eSIM codes');
+  expect(wallet.verify(read.message, read.signature)).toBe(true);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
   expect(storage).not.toContain('SETUP-CODE');
   expect(storage).not.toContain(ORDER.ac);
@@ -162,12 +163,13 @@ test('unsafe provider install URLs are omitted while supplied manual details rem
 });
 
 test('revoking the wallet closes setup and removes authorized installation details', async ({ page }) => {
-  await setupFixture(page);
+  const { wallet } = await setupFixture(page);
   await reveal(page);
   const sheet = await openSetup(page);
   await sheet.getByRole('button', { name: 'Next step', exact: true }).click();
   await expect(sheet).toContainText('SETUP-CODE');
-  await page.evaluate(() => window.fixtureSetupHandlers.accountsChanged([]));
+  // The person revokes this site's access in their wallet.
+  await wallet.switchTo(page, null);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.data-ac')).toHaveCount(0);
   await expect(page.locator('.om-install-details')).toHaveCount(0);
@@ -177,13 +179,13 @@ test('revoking the wallet closes setup and removes authorized installation detai
 });
 
 test('sample accounts and pending provider orders do not advertise an installer', async ({ page }) => {
-  const requests = await setupFixture(page, { prelaunch: true });
+  const { requests, wallet } = await setupFixture(page, { prelaunch: true });
   await page.goto('/#/app/esims');
   await page.getByRole('button', { name: 'Explore a sample account', exact: true }).click();
   await expect(page.locator('.om-sim-card')).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toHaveCount(0);
   expect(requests.filter(request => request.method === 'POST')).toEqual([]);
-  expect(await page.evaluate(() => window.fixtureSetupMethods)).not.toContain('personal_sign');
+  expect(wallet.calls('signMessage')).toEqual([]);
   await page.getByRole('button', { name: 'Exit preview', exact: true }).click();
   await page.route('**/config/esim.json', route => route.fulfill(json(CFG)));
   await page.route('**/api/redeem**', route => route.fulfill(json(standing([{ ...redacted(ORDER), codes: true, pending: true, stage: 'paid' }]))));
@@ -194,7 +196,7 @@ test('sample accounts and pending provider orders do not advertise an installer'
 });
 
 test('unsigned responses remain private even when they incorrectly include installation fields', async ({ page }) => {
-  const requests = await setupFixture(page);
+  const { requests, wallet } = await setupFixture(page);
   await page.route('**/api/redeem**', route => route.fulfill(json(standing([{ ...ORDER, codes: false }]))));
   await page.goto('/#/app/esims');
   await expect(page.locator('.data-sim')).toHaveCount(1);
@@ -204,7 +206,7 @@ test('unsigned responses remain private even when they incorrectly include insta
   await expect(page.getByRole('link', { name: /Install on/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toHaveCount(0);
   expect(requests.filter(request => request.method === 'POST')).toEqual([]);
-  expect(await page.evaluate(() => window.fixtureSetupMethods)).not.toContain('personal_sign');
+  expect(wallet.calls('signMessage')).toEqual([]);
   expect(await page.evaluate(() => window.fixtureSetupCopies)).toEqual([]);
 });
 
@@ -212,13 +214,13 @@ test('provider issuing stays pending even when an authorized response already su
   await setupFixture(page, { order: { ...ORDER, pending: true, stage: 'paid' } });
   await reveal(page);
   await expect(page.locator('.data-sim')).toContainText('issuing');
-  await expect(page.locator('.data-order-progress')).toHaveAttribute('data-phase', 'issuing');
+  await expect(orderProgress(page)).toHaveAttribute('data-phase', 'issuing');
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('a completed order without supplied installation details never claims setup is available', async ({ page }) => {
-  const requests = await setupFixture(page);
+  const { requests, wallet } = await setupFixture(page);
   let completed;
   await page.route('**/api/redeem**', route => {
     const request = route.request();
@@ -232,7 +234,7 @@ test('a completed order without supplied installation details never claims setup
   });
   await page.goto('/#/app/esims');
   await page.getByRole('button', { name: /^Redeem / }).click();
-  const progress = page.locator('.data-order-progress');
+  const progress = orderProgress(page);
   await expect(progress).toContainText('Package issued. Installation details haven’t been supplied yet. Refresh your eSIMs.');
   await expect(progress).not.toContainText('Setup details available');
   await expect(page.locator('.t-title')).not.toContainText(['Setup details available']);
@@ -241,11 +243,11 @@ test('a completed order without supplied installation details never claims setup
   await page.getByRole('button', { name: 'Refresh eSIMs', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Redeem / })).toBeVisible();
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(1);
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(1);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
 });
 
 test('an issued top-up says the existing eSIM needs no additional installation', async ({ page }) => {
-  const requests = await setupFixture(page);
+  const { requests, wallet } = await setupFixture(page);
   const profile = { ...ORDER, slug: 'united-states' };
   await page.route('**/api/redeem**', route => {
     const request = route.request();
@@ -261,17 +263,17 @@ test('an issued top-up says the existing eSIM needs no additional installation',
   await page.locator('#f-place').selectOption('united-states');
   await expect(page.locator('.data-redeem')).toContainText('top up a compatible eSIM');
   await page.getByRole('button', { name: /^Redeem / }).click();
-  const progress = page.locator('.data-order-progress');
+  const progress = orderProgress(page);
   await expect(progress).toContainText('Top-up issued. Your existing eSIM does not need another installation.');
   await expect(progress).not.toContainText('Your phone still needs to add the eSIM');
   await expect(page.locator('.data-sim')).toHaveCount(1);
   await expect(page.locator('.data-bundle')).toHaveCount(2);
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(1);
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(1);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
 });
 
 test('order progress waits for approval and provider issuing, and a pending refresh never orders again', async ({ page }) => {
-  const requests = await setupFixture(page);
+  const { requests, wallet } = await setupFixture(page);
   let releaseOrder;
   const response = new Promise(resolve => { releaseOrder = resolve; });
   let pendingOrder;
@@ -289,13 +291,14 @@ test('order progress waits for approval and provider issuing, and a pending refr
     return route.fulfill(json({ ok: true, order: pendingOrder, remainingUsd: 12.01 - pendingOrder.priceUsd }));
   });
   await page.goto('/#/app/esims');
-  const progress = page.locator('.data-order-progress');
+  const progress = orderProgress(page);
   await expect(progress).toHaveAttribute('data-phase', 'select');
-  await page.evaluate(() => { window.deferSetupSignature = true; });
+  wallet.behave({ sign: 'hold' });
   await page.getByRole('button', { name: /^Redeem / }).click();
   await expect(progress).toHaveAttribute('data-phase', 'wallet');
-  await expect.poll(() => page.evaluate(() => typeof window.finishSetupSignature)).toBe('function');
-  await page.evaluate(() => window.finishSetupSignature());
+  await expect.poll(() => wallet.calls('signMessage').length).toBe(1);
+  wallet.behave({ sign: 'approve' });
+  expect(wallet.release('signMessage')).toBe(1);
   await expect(progress).toHaveAttribute('data-phase', 'issuing');
   await expect.poll(() => requests.filter(request => request.method === 'POST').length).toBe(1);
   releaseOrder();
@@ -304,11 +307,11 @@ test('order progress waits for approval and provider issuing, and a pending refr
   await expect(progress).toHaveAttribute('data-phase', 'issuing');
   await expect(progress).not.toContainText(/installed|connected/i);
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toHaveCount(0);
-  const signatures = await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length);
+  const signatures = wallet.calls('signMessage').length;
   await page.getByRole('button', { name: 'Refresh eSIMs', exact: true }).click();
   await expect(pendingBundle).toHaveCount(1);
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(1);
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(signatures);
+  expect(wallet.calls('signMessage')).toHaveLength(signatures);
 });
 
 test('a closed redemption gate reports no order while signed installation reads remain usable', async ({ page }) => {
@@ -331,11 +334,11 @@ test('a closed redemption gate reports no order while signed installation reads 
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toBeVisible();
   expect(posts.filter(body => body.packageCode)).toHaveLength(1);
   expect(posts.filter(body => !body.packageCode)).toHaveLength(1);
-  await expect(page.locator('.data-order-progress')).not.toContainText('Setup details available');
+  await expect(orderProgress(page)).not.toContainText('Setup details available');
 });
 
 test('declining an order restores the picker and a deliberate retry issues only the approved package', async ({ page }) => {
-  await setupFixture(page);
+  const { wallet } = await setupFixture(page);
   const orders = [];
   await page.route('**/api/redeem**', route => {
     const request = route.request();
@@ -347,9 +350,9 @@ test('declining an order restores the picker and a deliberate retry issues only 
       iccid: 'fixture-retry-iccid', packageCode: pkg.code, priceUsd: pkg.priceUsd }, remainingUsd: 12.01 - pkg.priceUsd }));
   });
   await page.goto('/#/app/esims');
-  await page.evaluate(() => { window.rejectSetupSignature = true; });
+  wallet.behave({ sign: 'reject' });
   await page.getByRole('button', { name: /^Redeem / }).click();
-  await expect(page.locator('.data-redeem')).toContainText('Could not redeem: User rejected the request.');
+  await expect(page.locator('.data-redeem')).toContainText('Could not redeem: The request was not approved in your wallet.');
   await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'select');
   await expect(page.locator('#f-place')).toBeEnabled();
   await expect(page.locator('.data-sizes button').first()).toBeEnabled();
@@ -357,24 +360,27 @@ test('declining an order restores the picker and a deliberate retry issues only 
   expect(orders).toEqual([]);
   await page.locator('#f-place').selectOption('united-states');
   const code = await page.locator('#f-package').inputValue();
-  await page.evaluate(() => { window.rejectSetupSignature = false; window.deferSetupSignature = true; });
+  wallet.behave({ sign: 'hold' });
   await page.getByRole('button', { name: /^Redeem / }).click();
   await expect(page.getByRole('button', { name: /^Redeem / })).toBeDisabled();
   await expect(page.locator('#f-place')).toBeDisabled();
   await expect(page.locator('.data-sizes button').first()).toBeDisabled();
   expect(orders).toEqual([]);
-  await expect.poll(() => page.evaluate(() => typeof window.finishSetupSignature)).toBe('function');
-  await page.evaluate(() => window.finishSetupSignature());
+  await expect.poll(() => wallet.calls('signMessage').length).toBe(2);
+  wallet.behave({ sign: 'approve' });
+  expect(wallet.release('signMessage')).toBe(1);
   await expect(page.getByRole('status', { name: 'Order progress', exact: true })).toHaveAttribute('data-phase', 'setup');
   expect(orders).toHaveLength(1);
-  expect(orders[0]).toMatchObject({ address: ADDRESS, packageCode: code, n: 1, signature: '0xfixture-setup-signature' });
-  expect(orders[0].message).toContain('Plan: ' + code);
-  expect(orders[0].message).toContain('Slot: 1');
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(2);
+  expect(orders[0]).toMatchObject({ address: ADDRESS, packageCode: code, n: 1 });
+  expect(orders[0].message.split('\n').slice(0, 5)).toEqual(['OT+T — authorise a data redemption', 'Site: ' + new URL(page.url()).host,
+    'Wallet: ' + ADDRESS, 'Plan: ' + code, 'Slot: 1']);
+  expect(wallet.verify(orders[0].message, orders[0].signature)).toBe(true);
+  // The declined attempt and the approved retry each asked the wallet once; only the retry was sent.
+  expect(wallet.calls('signMessage')).toHaveLength(2);
 });
 
 test('failed authorized code reads keep installation private and recover without placing an order', async ({ page }) => {
-  await setupFixture(page);
+  const { wallet } = await setupFixture(page);
   let fail = true;
   const posts = [];
   await page.route('**/api/redeem**', route => {
@@ -396,5 +402,6 @@ test('failed authorized code reads keep installation private and recover without
   await expect(page.getByRole('button', { name: 'Set up this eSIM', exact: true })).toBeVisible();
   expect(posts).toHaveLength(2);
   expect(posts.every(body => !body.packageCode)).toBe(true);
-  expect(await page.evaluate(() => window.fixtureSetupMethods.filter(method => method === 'personal_sign').length)).toBe(1);
+  // The retry reused the read signature while it was fresh, so the wallet was asked once.
+  expect(wallet.calls('signMessage')).toHaveLength(1);
 });

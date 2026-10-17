@@ -17,13 +17,11 @@
 let pwTest;
 try { pwTest = require('@playwright/test'); } catch (e) { pwTest = require('playwright/test'); }
 const { test, expect } = pwTest;
-const { stubNetwork, hexWord } = require('./support/network.js');
+const { stubNetwork } = require('./support/network.js');
+const { installWallet, walletAddress } = require('./support/wallet.js');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana.js');
 
-const ADDR = '0x4ca685f4a1cd39ba0d0f1cd06b3f2b0f5b7cdd11';
-const COIN = '0x1111111111111111111111111111111111111111';
-const CURVE = '0x2222222222222222222222222222222222222222';
-const TREASURY = '0x3333333333333333333333333333333333333333';
-const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+const ADDR = walletAddress();
 
 const WEEK_S = 604800;
 const ANCHOR = 345600;
@@ -40,38 +38,31 @@ const PACKAGES = [
   { code: 'fixed_5GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 5, days: 30, priceUsd: 4.99, regions: 'DE', flag: '🇩🇪' },
   { code: 'fixed_1GB_7D_JP', slug: 'japan', name: 'Japan', kind: 'country', gb: 1, days: 7, priceUsd: 2.99, regions: 'JP', flag: '🇯🇵' },
 ];
+const WELCOME = { gb: 1, days: 7, maxUsd: 4 };
 const LAUNCHED = {
-  coin: COIN, curve: CURVE, treasury: TREASURY, pair: USDG, taxBps: 1000, budgetBps: 10000,
+  chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY, budgetBps: 8000,
+  membership: { burnUsd: 5, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, welcome: WELCOME },
   provider: 'wholesale', packages: PACKAGES,
   brand: { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' },
 };
-const CALLS = {
-  '0xf59e38b7': hexWord(1234560000n), '0x4f1f58fd': hexWord(3000000000n),
-  '0x8b0bc501': hexWord(10000000000n), '0xe7c2b772': hexWord(0),
-  '0xc1bb8901': hexWord(1000), '0xdb2bd533': hexWord(50000000n),
-};
+const JOIN_UNITS = '180000000000';
+const REQUIREMENT = { week: CUR_WEEK, burnTokens: '180000', burnUnits: JOIN_UNITS, priceUsd: 0.0000278 };
+const SINCE = { at: NOW_S - 3 * 86400, slot: 399000000, tx: signatureFrom('sim spec join') };
 
 const json = (body, status) => ({ status: status || 200, contentType: 'application/json', body: JSON.stringify(body) });
 const stubConfig = (page) => page.route('**/config/esim.json', (r) => r.fulfill(json(LAUNCHED)));
 const stubAllowances = (page) => page.route('**/data/allowances.json', (r) => r.fulfill(json({
-  asOf: NOW_S, block: 64200000, week: CUR_WEEK, weekStart: weekStartOf(CUR_WEEK), weekEnd: CUR_WEEK_END,
-  snapshotBlock: 64200000, coin: COIN, curve: CURVE, budgetUsd: 412.5,
-  budgetSource: 'tax collected in week ' + (CUR_WEEK - 1),
-  circulating: '812345678000000000000000', decimals: 18, holders: 214,
-  wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } },
+  asOf: NOW_S, slot: 400000000, chain: 'solana', week: CUR_WEEK, weekStart: weekStartOf(CUR_WEEK), weekEnd: CUR_WEEK_END,
+  coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, treasury: TREASURY, budgetUsd: 412.5,
+  budgetSource: 'creator fees collected in week ' + (CUR_WEEK - 1),
+  membership: { burnUsd: 5, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, requirement: REQUIREMENT,
+    requirements: { [CUR_WEEK]: JOIN_UNITS }, members: 214, cursor: null },
+  members: { [ADDR]: { burned: JOIN_UNITS, since: SINCE } }, joins: {}, holders: 214, memberTokens: '812345678000',
+  wallets: { [ADDR]: { tokens: '1234000000', share: 0.00152, allowanceUsd: 20, member: true } },
 })));
-const stubWallet = (page) => page.addInitScript((addr) => {
-  window.__eth = [];
-  window.ethereum = {
-    request: async ({ method }) => {
-      window.__eth.push({ method });
-      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [addr];
-      if (method === 'eth_chainId') return '0x1237';
-      if (method === 'personal_sign') return '0x' + 'ab'.repeat(65);
-      return null;
-    },
-  };
-}, ADDR);
+// The member's wallet, already approved for this site, so the page reconnects it on load and
+// there is no button to press.
+const stubWallet = (page) => installWallet(page, { trusted: true });
 
 const DE_ICCID = '8900000000000000011';
 const JP_ICCID = '8900000000000000022';
@@ -97,18 +88,24 @@ const bundle = (n, code, iccid, extra) => Object.assign({
   qrCodeUrl: '', ac: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '', codes: false,
 }, extra || {});
 
+/** A member in this week's split. The unclaimed welcome eSIM sits in its own card above the eSIMs, apart from everything here. */
+const membership = {
+  configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT, burnUsd: 5,
+  requirement: REQUIREMENT, burned: JOIN_UNITS, welcome: WELCOME, capMultiple: 3, member: true, memberSince: SINCE, sharing: true,
+  welcomeOrder: null, enrolment: { open: true, reason: '' },
+};
 const standing = (extra) => Object.assign({
   ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END,
-  tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20, decimals: 18,
+  tokens: '1234000000', share: 0.00152, allowanceUsd: 20, decimals: 6,
   redeemedUsd: 0, remainingUsd: 20, stale: false, allowancesWeek: CUR_WEEK,
-  orders: [], history: [], sims: [],
+  orders: [], history: [], sims: [], membership,
 }, extra);
 
 /**
- * The dashboard, painted for a wallet that stubWallet() already answers eth_accounts for — the
- * page connects itself on load, so there is no button to press. treasury.json is stubbed away as
- * missing: these tests are about the wallet's own panel, not the pool card, and a real
- * scripts/treasury.js run in this checkout must not be able to change what they see.
+ * The dashboard, painted for the member's wallet, which stubWallet() has already approved for
+ * this site — the page reconnects it on load, so there is no button to press. treasury.json is
+ * stubbed away as missing: these tests are about the wallet's own panel, not the pool card, and a
+ * real scripts/treasury.js run in this checkout must not be able to change what they see.
  */
 async function open(page, body) {
   await page.route('**/api/redeem**', (r) => r.fulfill(json(body)));
@@ -122,7 +119,7 @@ async function open(page, body) {
 test('a week\'s claim is a bundle on the eSIM the holder already has, not a second eSIM to install', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page); await stubAllowances(page); await stubWallet(page);
 
   // Two weeks of Germany: the first minted the profile, the second queued onto it.
@@ -161,8 +158,8 @@ test('a week\'s claim is a bundle on the eSIM the holder already has, not a seco
 test('the one code the holder scans belongs to the eSIM, and a top-up never carries one of its own', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
-  await stubConfig(page); await stubAllowances(page); await stubWallet(page);
+  stubNetwork(page);
+  await stubConfig(page); await stubAllowances(page);
 
   // The real sequence, not a shortcut: the unsigned GET withholds the codes, and only the signed
   // POST the reveal button makes carries them.
@@ -172,9 +169,14 @@ test('the one code the holder scans belongs to the eSIM, and a top-up never carr
     history: [bundle(1, 'fixed_1GB_7D_DE', DE_ICCID, { week: CUR_WEEK - 1 })],
     redeemedUsd: 4.99, remainingUsd: 15.01,
   });
+  const wallet = await installWallet(page, { trusted: true });
+  const reads = [];
   await page.route('**/data/treasury.json', (r) => r.fulfill({ status: 404, body: 'no treasury reading' }));
-  await page.route('**/api/redeem**', (r) => r.fulfill(json(
-    r.request().method() === 'GET' ? shape(sim(DE_ICCID, 'germany')) : shape(withCodes(sim(DE_ICCID, 'germany'))))));
+  await page.route('**/api/redeem**', (r) => {
+    if (r.request().method() === 'GET') return r.fulfill(json(shape(sim(DE_ICCID, 'germany'))));
+    reads.push(r.request().postDataJSON());
+    return r.fulfill(json(shape(withCodes(sim(DE_ICCID, 'germany')))));
+  });
   await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
@@ -190,13 +192,18 @@ test('the one code the holder scans belongs to the eSIM, and a top-up never carr
   await expect(card.locator('.data-bundle .data-ac')).toHaveCount(0);
   // And with nothing left hidden, the button that revealed them stops offering to.
   await expect(mine.getByRole('button', { name: 'Show my eSIM codes' })).toHaveCount(0);
+  // One signed read revealed them: this wallet's signature over the read message it posted.
+  expect(reads).toHaveLength(1);
+  expect(reads[0].message.split('\n')[0]).toBe('OT+T — show my eSIM codes');
+  expect(wallet.verify(reads[0].message, reads[0].signature)).toBe(true);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
   expect(errors).toEqual([]);
 });
 
 test('a second region is a second eSIM, each labelled by where it works', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page); await stubAllowances(page); await stubWallet(page);
 
   const mine = await open(page, standing({
@@ -227,7 +234,7 @@ test('a second region is a second eSIM, each labelled by where it works', async 
 test('a pool that cannot cover the week says so before the button, not after', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page); await stubAllowances(page); await stubWallet(page);
 
   // $20 of allowance against a pool holding $6.20. The budget comes from tax collected on chain,
@@ -257,7 +264,7 @@ test('a pool that cannot cover the week says so before the button, not after', a
 test('the picker says whether a plan tops up an eSIM or issues one, before anything is spent', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page); await stubAllowances(page); await stubWallet(page);
 
   const mine = await open(page, standing({

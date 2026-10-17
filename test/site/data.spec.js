@@ -1,16 +1,12 @@
 'use strict';
 /**
- * The programme page — OT+T's home route (#/); it lived at #/data back when this site was two
- * routes inside whatever.fun — reads three things nothing else on the site reads: config/esim.json,
- * the indexer's allowances.json, and /api/redeem, plus six view functions on the coin's curve and
- * the fee escrow. Every one of them is stubbed here, so each number the page shows is a number
- * this file chose and the assertion can name it. Holding is the plan now: allowances.json carries a
- * whole week's shape (a budget, a circulating supply, a per-wallet share) rather than a running
- * per-wallet total, and the redeem API answers the same wallet standing the founder actually asked
- * for — what a wallet holds, and what that buys this week. The states that matter are "not launched
- * yet" (the checked-in config until launch day), "launched" with no wallet (an invitation), a
- * wallet that holds nothing, a week whose allowance has not been published yet ("stale"), and the
- * ordinary case, all of which must be honest without an exception.
+ * The public page (#/) and My data (#/data). The public page reads only config/esim.json; My data
+ * also reads the keeper's allowances.json and /api/redeem, and asks the wallet to sign. Every one
+ * of those is stubbed here, so each number the page shows is a number this file chose and the
+ * assertion can name it. The states that matter: "not launched yet" (the checked-in config until
+ * launch day), launched with no wallet, a member who held nothing at the snapshot, a week whose
+ * allowance has not been published yet ("stale"), an unreachable API, and the ordinary case of a
+ * member spending weekly credit. Each must be honest without an exception.
  */
 // package.json's devDependency is @playwright/test; a sandbox with no npm install instead has the
 // base `playwright` package on NODE_PATH, whose `playwright/test` subpath is the same test runner.
@@ -18,19 +14,16 @@
 let pwTest;
 try { pwTest = require('@playwright/test'); } catch (e) { pwTest = require('playwright/test'); }
 const { test, expect } = pwTest;
-const { stubNetwork, hexWord } = require('./support/network.js');
+const { stubNetwork } = require('./support/network.js');
+const { installWallet, walletAddress } = require('./support/wallet.js');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana.js');
 
-const ADDR = '0x4ca685f4a1cd39ba0d0f1cd06b3f2b0f5b7cdd11';
-const COIN = '0x1111111111111111111111111111111111111111';
-const CURVE = '0x2222222222222222222222222222222222222222';
-const TREASURY = '0x3333333333333333333333333333333333333333';
-const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+const ADDR = walletAddress();
 
-// Week arithmetic — identical to plan-contract.md, scripts/allowances.js and site/esim.js's own
-// copy, so a fixture's week is never off by one from what the page computes for itself. Computed
-// from the real clock at load time (not a hardcoded week number) so this file's "current week"
-// fixtures are genuinely current whenever the suite actually runs, and "last week" is always
-// genuinely in the past.
+// Week arithmetic — identical to scripts/allowances.js, site/api/_lib/week.js and site/esim.js's
+// own copy, so a fixture's week is never off by one from what the page computes for itself.
+// Computed from the real clock at load time (not a hardcoded week number) so this file's "current
+// week" fixtures are genuinely current whenever the suite runs, and "last week" is in the past.
 const WEEK_S = 604800;
 const ANCHOR = 345600;
 const weekOf = (s) => Math.floor((s - ANCHOR) / WEEK_S);
@@ -69,81 +62,69 @@ const PACKAGES = [
   { code: 'fixed_10GB_30D_DE', slug: 'germany', name: 'Germany', kind: 'country', gb: 10, days: 30, priceUsd: 7.99, regions: 'DE', flag: '🇩🇪' },
 ];
 const BRAND = { name: 'OT+T', full: 'Onchain Telephone + Telegraph', ticker: 'OTT', since: '2026' };
-const base = { pair: USDG, taxBps: 1000, budgetBps: 10000, provider: 'wholesale', packages: PACKAGES, brand: BRAND };
-const NOT_LAUNCHED = Object.assign({ coin: '', curve: '', treasury: '' }, base);
-const LAUNCHED = Object.assign({ coin: COIN, curve: CURVE, treasury: TREASURY }, base);
+const WELCOME = { gb: 1, days: 7, maxUsd: 4 };
+const TERMS = { burnUsd: 5, burnOwner: INCINERATOR, capMultiple: 3, welcome: WELCOME };
+const base = { chain: 'solana', budgetBps: 8000, provider: 'wholesale', packages: PACKAGES, brand: BRAND };
+// The checked-in config until launch day: the four launch fields empty.
+const NOT_LAUNCHED = Object.assign({ coin: '', tokenProgram: '', treasury: '', membership: Object.assign({ burnAccount: '' }, TERMS) }, base);
+const LAUNCHED = Object.assign({ coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY, membership: Object.assign({ burnAccount: BURN_ACCOUNT }, TERMS) }, base);
 // A config from before the brand existed — no `brand` key at all — to prove the fallback path.
 const NOT_LAUNCHED_NO_BRAND = Object.assign({}, NOT_LAUNCHED);
 delete NOT_LAUNCHED_NO_BRAND.brand;
 
-// The six reads, as USDG (6 decimals) or bare numbers. The page turns these into the figures the
-// tests below look for: $1,234.56 claimable, 1,545 GB of it at Germany's $0.80/GB, 30% of the way
-// to graduation, a 10% tax with $50.00 still sitting in the curve.
-const CALLS = {
-  '0xf59e38b7': hexWord(1234560000n),        // balanceOfToken(treasury, USDG)
-  '0x4f1f58fd': hexWord(3000000000n),        // realQuoteReserve()
-  '0x8b0bc501': hexWord(10000000000n),       // graduationThreshold()
-  '0xe7c2b772': hexWord(0),                  // graduated()
-  '0xc1bb8901': hexWord(1000),               // creatorTaxBps()
-  '0xdb2bd533': hexWord(50000000n),          // creatorTaxBalance()
-};
+// 1,234 OTT (6 decimals) is 0.152% of the members' OTT at the snapshot, and $20.00 of allowance
+// floors to 25 GB at Germany's ~80¢/GB and 2 GB at Global's $8.99/GB.
+const TOKENS = '1234000000';
+const ROW = { tokens: TOKENS, share: 0.00152, allowanceUsd: 20, member: true };
+const JOIN_UNITS = '180000000000';
+const REQUIREMENT = { week: CUR_WEEK, burnTokens: '180000', burnUnits: JOIN_UNITS, priceUsd: 0.0000278 };
+const SINCE = { at: NOW_S - 3 * 86400, slot: 399000000, tx: signatureFrom('data spec join') };
 
 const json = (body, status) => ({ status: status || 200, contentType: 'application/json', body: JSON.stringify(body) });
 
 function stubConfig(page, cfg) {
   return page.route('**/config/esim.json', (route) => route.fulfill(json(cfg)));
 }
-function stubTreasury(page, t) {
-  return page.route('**/data/treasury.json', (route) => route.fulfill(json(t)));
+// The week's ledger as scripts/allowances.js writes it (docs/membership.md): this week's budget,
+// the members' OTT at the snapshot, and `wallets` for the members sharing this week. `overrides`
+// replaces top-level fields over this "healthy, currently published, nobody sharing yet" default.
+function ledger(overrides) {
+  return Object.assign({
+    asOf: NOW_S, slot: 400000000, chain: 'solana', week: CUR_WEEK, weekStart: CUR_WEEK_START, weekEnd: CUR_WEEK_END,
+    coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, treasury: TREASURY,
+    budgetUsd: 412.5, budgetSource: 'creator fees collected in week ' + (CUR_WEEK - 1),
+    membership: { burnUsd: 5, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT, capMultiple: 3, requirement: REQUIREMENT,
+      requirements: { [CUR_WEEK]: JOIN_UNITS }, members: 214, cursor: null },
+    members: {}, joins: {}, holders: 214, memberTokens: '812345678000', wallets: {},
+  }, overrides || {});
 }
-// The week's own shape, per plan-contract.md: a budget, a circulating supply, a holder count, and
-// a wallets map keyed by lowercase address. `overrides` replaces individual top-level fields (or
-// `wallets`) over this "healthy, currently-published, nobody-holds-anything-yet" default, so a test
-// only has to say what actually matters for it.
-function stubAllowances(page, overrides) {
-  const base = {
-    asOf: NOW_S, block: 64200000, week: CUR_WEEK, weekStart: CUR_WEEK_START, weekEnd: CUR_WEEK_END,
-    snapshotBlock: 64200000, coin: COIN, curve: CURVE,
-    budgetUsd: 412.5, budgetSource: 'tax collected in week ' + (CUR_WEEK - 1),
-    circulating: '812345678000000000000000', decimals: 18, holders: 214,
-    wallets: {},
-  };
-  const file = Object.assign({}, base, overrides || {});
+// What the keeper writes before launch: no coin, no budget, no membership.
+const PRELAUNCH_LEDGER = ledger({ coin: '', tokenProgram: '', treasury: '', budgetUsd: 0, budgetSource: '', membership: null, holders: 0, memberTokens: '0' });
+function stubAllowances(page, file) {
   return page.route('**/data/allowances.json', (route) => route.fulfill(json(file)));
 }
-const ALLOW_BUDGET_USD = 412.5;
-const ALLOW_CIRCULATING = '812345678000000000000000';
-const ALLOW_DECIMALS = 18;
-// How many OTT tokensToCover() says a package needs, computed with the page's own arithmetic and
-// its own fmtTokens() rounding, so this can never drift from a hand-typed literal.
-function needStr(priceUsd) {
-  const circulating = Number(BigInt(ALLOW_CIRCULATING)) / Math.pow(10, ALLOW_DECIMALS);
-  const need = priceUsd * circulating / ALLOW_BUDGET_USD;
-  return need.toLocaleString('en-US', { maximumFractionDigits: 2 });
-}
+const memberLedger = (overrides) => ledger(Object.assign({
+  members: { [ADDR]: { burned: JOIN_UNITS, since: SINCE } }, wallets: { [ADDR]: ROW },
+}, overrides || {}));
 
-/** A wallet that answers the four methods the page uses, and records every call it was asked. */
-function stubWallet(page) {
-  return page.addInitScript((addr) => {
-    window.__eth = [];
-    window.ethereum = {
-      request: async ({ method, params }) => {
-        window.__eth.push({ method, params });
-        if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [addr];
-        if (method === 'eth_chainId') return '0x1237';
-        if (method === 'personal_sign') return '0x' + 'ab'.repeat(65);
-        return null;
-      },
-    };
-  }, ADDR);
-}
+/** The API's membership answer for a member in this week's split; `extra` changes any field. */
+const membership = (extra) => Object.assign({
+  configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT, burnUsd: 5,
+  requirement: REQUIREMENT, burned: JOIN_UNITS, welcome: WELCOME, capMultiple: 3, member: true, memberSince: SINCE, sharing: true,
+  welcomeOrder: null, enrolment: { open: true, reason: '' },
+}, extra);
+const standingOf = (extra) => Object.assign({
+  ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END, stale: false, allowancesWeek: CUR_WEEK,
+  tokens: TOKENS, share: 0.00152, allowanceUsd: 20, decimals: 6, redeemedUsd: 0, remainingUsd: 20, poolUsd: null,
+  orders: [], history: [], sims: [], membership: membership(),
+}, extra);
 
 test('before launch, home explains the mechanism and availability', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED);
-  await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
+  await stubAllowances(page, PRELAUNCH_LEDGER);
 
   await page.goto('/index.html#/');
   await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
@@ -154,12 +135,16 @@ test('before launch, home explains the mechanism and availability', async ({ pag
   await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'How it works' })).toHaveAttribute('href', '#how-it-works');
   await expect(page.locator('.ott-hero-actions').getByRole('link', { name: 'Explore the app' })).toHaveAttribute('href', '#/app');
   await expect(page.locator('.ott-hero-note')).toContainText('Enrolment is not open until launch.');
+  await expect(page.locator('.ott-hero-note')).toContainText('burn about $5 of OTT once for your first eSIM');
   await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);
+  await expect(page.locator('.ott-token-strip')).toContainText('Solana · pump.fun');
+  await expect(page.locator('.ott-token-strip')).toContainText('Prelaunch');
   await expect(page.locator('.ott-journey-note')).toContainText('Enrolment opens when OTT launches.');
   await expect(page.locator('.ott-journey-note')).toContainText('can’t be refunded');
   await expect(page.locator('.ott-faq')).toContainText(/burn/i);
-  await expect(page.getByRole('link', { name: 'Launch the coin on whatever.fun' })).toHaveCount(0);
   await expect(page.locator('.data-mine')).toHaveCount(0);
+  // Nothing on the page still describes the chain or launchpad this site was extracted from.
+  await expect(page.locator('body')).not.toContainText(/Robinhood|USDG|whatever\.fun|MetaMask|WalletConnect|100,000 OTT/);
   expect(errors).toEqual([]);
 });
 
@@ -168,16 +153,14 @@ test('coverage leads with a supported place and reveals actual plans from config
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED);
-  // No budget has been published for an unlaunched coin — the same shape scripts/allowances.js
-  // writes for one, per plan-contract.md — so the plan cards' "OTT this week" line cannot be
-  // computed and must fall back to the coverage fact alone rather than inventing a number.
-  await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
+  await stubAllowances(page, PRELAUNCH_LEDGER);
 
   await page.goto('/index.html#/');
 
   await expect(page.locator('.ott-journey')).toContainText('Burn once. Stay connected.');
   await expect(page.locator('.ott-journey')).toContainText('No repeat burn for each top-up.');
   await expect(page.locator('.ott-journey')).toContainText('fees actually collected');
+  await expect(page.locator('.ott-journey')).toContainText('80% of the fees actually collected each week');
 
   // This fixture lacks both the US and Japan, so coverage starts with its first valid place.
   const picker = page.locator('#plan-place');
@@ -220,6 +203,8 @@ test('coverage leads with a supported place and reveals actual plans from config
   await expect(grid).toContainText('$1.99');
   await expect(grid).toContainText('$4.99');
   await expect(grid.locator('.plan-meta').first()).toContainText('DE');
+  // Members' weekly credit is capped, and the plan list says so with the published multiple.
+  await expect(page.locator('.ott-credit-explain')).toContainText('no member gets more than 3× the average');
 
   await expect(page.locator('.ott-member-enrol-copy h3, .ott-member-stop-copy h3')).toHaveCount(3);
   await expect(page.locator('.ott-allocation')).toContainText('each on average');
@@ -243,10 +228,10 @@ test('coverage leads with a supported place and reveals actual plans from config
 test('the public catalogue stays browsable when a weekly allocation is unavailable', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
   // Account budget data does not gate reading actual packages.
-  await stubAllowances(page, {});
+  await stubAllowances(page, ledger());
   await page.route('**/api/redeem**', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'no api in this test' }));
 
   await page.goto('/index.html#/');
@@ -269,7 +254,7 @@ test('a config with no brand block renders exactly as it did before the brand ex
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED_NO_BRAND);
-  await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
+  await stubAllowances(page, PRELAUNCH_LEDGER);
 
   await page.goto('/index.html#/');
   // A missing optional brand block does not break the public story or catalogue.
@@ -282,55 +267,50 @@ test('a config with no brand block renders exactly as it did before the brand ex
 test('the nav exposes destinations, explanation, account, and status', async ({ page }) => {
   stubNetwork(page);
   await stubConfig(page, NOT_LAUNCHED);
-  await stubAllowances(page, { coin: '', curve: '', budgetUsd: 0, budgetSource: '', circulating: '0', holders: 0 });
+  await stubAllowances(page, PRELAUNCH_LEDGER);
   await page.goto('/index.html#/');
   const links = await page.locator('#nav a').evaluateAll((as) => as.map((a) => a.textContent));
   expect(links).toEqual(['The idea', 'Destinations', 'Trust', 'My data', 'Status', 'Open app']);
   await expect(page.locator('#nav a[data-route="home"]')).toHaveClass(/active/);
 });
 
-test('once launched, the public page routes holders to My data and keeps operational figures on Status', async ({ page }) => {
+test('once launched, the public page routes members to My data, and without a wallet My data offers to open OT+T in one', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubAllowances(page, {});
+  await stubAllowances(page, ledger());
 
   await page.goto('/index.html#/');
   await expect(page.locator('#view h1')).toHaveText('A memecoin with a data plan.');
-  await expect(page.locator('.ott-hero-note')).toContainText('Burn OTT once to join.');
+  await expect(page.locator('.ott-hero-note')).toContainText('Burn about $5 of OTT once to join.');
+  await expect(page.locator('.ott-token-strip')).toContainText('Programme configured');
   await expect(page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' })).toHaveAttribute('href', '#/data');
   await expect(page.locator('#programme')).toHaveCount(0);
   await page.locator('.ott-account-preview').getByRole('link', { name: 'Open My data' }).click();
-  await expect(page.locator('.data-mine')).toContainText('No browser wallet detected');
-  await expect(page.locator('.data-mine').getByRole('button', { name: 'Connect wallet' })).toBeDisabled();
+  const mine = page.locator('.data-mine');
+  await expect(mine).toContainText('No Solana wallet found in this browser. On a phone, open OT+T in Phantom or Solflare');
+  // With no wallet installed, connecting offers the wallet apps' own in-app browser links.
+  await mine.getByRole('button', { name: 'Connect wallet' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Open OT+T in your wallet' });
+  await expect(sheet).toBeVisible();
+  const here = encodeURIComponent(page.url());
+  const ref = encodeURIComponent(new URL(page.url()).origin);
+  await expect(sheet.getByRole('link', { name: 'Open in Phantom' })).toHaveAttribute('href', 'https://phantom.app/ul/browse/' + here + '?ref=' + ref);
+  await expect(sheet.getByRole('link', { name: 'Open in Solflare' })).toHaveAttribute('href', 'https://solflare.com/ul/v1/browse/' + here + '?ref=' + ref);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(mine.locator('.hint')).toHaveText('No wallet connected.');
   expect(errors).toEqual([]);
 });
 
 test('with a wallet, the dashboard leads with what it holds and what that buys, then the redeem flow renders the QR and the activation code', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await page.addInitScript((addr) => {
-    window.__eth = [];
-    window.ethereum = { request: async ({ method, params }) => {
-      window.__eth.push({ method, params });
-      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [addr];
-      if (method === 'eth_chainId') return '0x1237';
-      if (method === 'personal_sign') {
-        const bytes = params[0].slice(2).match(/.{2}/g).map(byte => parseInt(byte, 16));
-        const message = new TextDecoder().decode(new Uint8Array(bytes));
-        return '0x' + (message.includes('authorise a data redemption') ? 'ab' : 'cd').repeat(65);
-      }
-      return null;
-    } };
-  }, ADDR);
-
-  // 1,234 OTT of 812,345.678 circulating is a 0.152% share — matching plan-contract.md's own
-  // worked example — and $20.00 of allowance floors to 25 GB at Germany's ~80¢/GB, 2 GB at
-  // Global's $8.99/GB, the same "≈ N GB place · M GB place" spread the plan cards already use.
-  await stubAllowances(page, { wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } } });
+  const wallet = await installWallet(page, { trusted: true });
+  await stubAllowances(page, memberLedger());
 
   const past = {
     n: 0, transactionId: 'ott-' + 'a'.repeat(32), packageCode: 'fixed_1GB_7D_DE', priceUsd: 1.99, week: CUR_WEEK,
@@ -350,11 +330,6 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   };
   const redactCodes = (o) => Object.assign({}, o, { qrCodeUrl: '', ac: '', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '', codes: false });
   const withCodes = (o) => Object.assign({}, o, { codes: true });
-  const standingShape = (extra) => Object.assign({
-    ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END,
-    tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20, decimals: 18,
-    history: [],
-  }, extra);
 
   const posts = [];
   // The redeem this test drives creates order #1, so a signed read made after it sees both orders;
@@ -365,7 +340,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
     const req = route.request();
     if (req.method() === 'GET') {
       expect(new URL(req.url()).searchParams.get('address')).toBe(ADDR);
-      await route.fulfill(json(standingShape({ redeemedUsd: 1.99, remainingUsd: 18.01, orders: [redactCodes(past)] })));
+      await route.fulfill(json(standingOf({ redeemedUsd: 1.99, remainingUsd: 18.01, orders: [redactCodes(past)] })));
       return;
     }
     const reqBody = JSON.parse(req.postData());
@@ -384,7 +359,7 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
     }
     // A signed read: the standing again, with codes this time.
     const orders = redeemed ? [withCodes(past), withCodes(fresh)] : [withCodes(past)];
-    await route.fulfill(json(standingShape({ redeemedUsd: redeemed ? 6.98 : 1.99, remainingUsd: redeemed ? 13.02 : 18.01, orders })));
+    await route.fulfill(json(standingOf({ redeemedUsd: redeemed ? 6.98 : 1.99, remainingUsd: redeemed ? 13.02 : 18.01, orders })));
   });
 
   // This test is about the wallet panel, not the pool card, so treasury.json is stubbed away as
@@ -396,11 +371,15 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText(ADDR);
   await expect(page.locator('.data-pool')).toHaveCount(0);
+  // A member who has not claimed the welcome eSIM is offered it, and is told they share this week.
+  await expect(mine.locator('.data-membership h3')).toHaveText('Claim your welcome eSIM');
+  await expect(mine.locator('.data-membership')).toContainText('You’re in this week’s split.');
 
   // The two headline figures the founder asked for, first in the DOM and biggest on the page.
   const headline = mine.locator('.dh-tile');
   await expect(headline).toHaveCount(2);
   await expect(mine.locator('.credit-summary')).toContainText('$18.01');
+  await expect(mine.locator('.credit-summary')).toContainText('no member gets more than 3× the average');
   await expect(headline.nth(0)).toContainText('OTT at snapshot');
   await expect(headline.nth(0)).toContainText('1,234 OTT');
   await expect(headline.nth(0)).toContainText('0.152%');
@@ -408,19 +387,16 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(headline.nth(1)).toContainText('$20.00');
   await expect(headline.nth(1)).toContainText('25 GB');
   await expect(headline.nth(1)).toContainText('≈ 25 GB Germany · 2 GB Global');
+  await expect(headline.nth(1)).toContainText('capped at 3× the average member share');
   // The very first figure in the panel is a headline tile, not one of the compact supporting ones —
   // the "big number first" the founder asked for, not a grid of equal-weight tiles.
   await expect(mine.locator('.dh-tile, .u-tile, .stat-tile').first()).toHaveClass(/dh-tile/);
 
-  // Used and left, in the same units as the headline (GB, at the same cheapest rate), with the
-  // dollar figures — the ledger's real unit — kept as the honest sub-caption underneath.
+  // Used and left, with the dollar figures — the ledger's real unit.
   const tiles = mine.locator('.data-tiles');
   await expect(tiles).toContainText('Used this week');
   await expect(tiles).toContainText('$1.99');
   await expect(tiles).toContainText('Left this week');
-  // 23, not the 22 that flooring $18.01 on its own would give: the three GB figures on screen have
-  // to add up, because a reader who subtracts 2 from 25 and gets 22 reads it as a bug. So "left" is
-  // what remains of the headline after "used", and the dollars underneath stay exact.
   await expect(tiles).toContainText('$18.01');
   await expect(tiles).toContainText('Your share');
   await expect(tiles).toContainText('0.152%');
@@ -445,6 +421,8 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   await expect(pastCard.locator('img.data-qr')).toHaveCount(0);
   await expect(pastCard.locator('.data-install')).toHaveCount(0);
   await expect(pastCard).not.toContainText('SM-DP+');
+  // Nothing has been signed yet: the page connected silently and only read public figures.
+  expect(wallet.calls('signMessage')).toEqual([]);
 
   // "Show my eSIM codes" signs in once and asks for the same standing again, this time signed —
   // the past order's card repaints in place with its code, its QR and both fallbacks.
@@ -504,71 +482,62 @@ test('with a wallet, the dashboard leads with what it holds and what that buys, 
   expect(redeemPost.n).toBe(1);
   // Both signed reads came from the holder's Show my eSIM codes action. The redemption never
   // sends its own signature to the read endpoint.
-  const readPosts = posts.filter((p) => !p.packageCode);
-  expect(readPosts).toHaveLength(2);
-  expect(readPosts.every(p => !Object.hasOwn(p, 'n'))).toBe(true);
+  const reads = posts.filter((p) => !p.packageCode);
+  expect(reads).toHaveLength(2);
+  expect(reads.every(p => !Object.hasOwn(p, 'n'))).toBe(true);
 
   // What was signed, and what each signature authorises. A redemption's message names the plan
   // and the slot, so it is spent on that one order and can never be walked across the week; a
   // read's names neither and is reused while it is fresh, which is why three calls cost two
   // signatures rather than three. Both are written to be read in a wallet prompt.
   expect(posts).toHaveLength(3);
-  const reads = posts.filter((p) => !p.packageCode);
-  expect(reads).toHaveLength(2);
   expect(new Set(reads.map((p) => p.signature)).size).toBe(1);
-  expect(redeemPost.signature).toBe('0x' + 'ab'.repeat(65));
-  expect(reads.every(p => p.signature === '0x' + 'cd'.repeat(65))).toBe(true);
-  expect(reads.every(p => p.signature !== redeemPost.signature)).toBe(true);
+  expect(reads.every(p => p.message === reads[0].message)).toBe(true);
+  expect(reads[0].signature).not.toBe(redeemPost.signature);
   expect(redeemPost.message).not.toBe(reads[0].message);
+  // Each signature is this wallet's ed25519 signature over exactly the message posted with it.
+  expect(wallet.verify(redeemPost.message, redeemPost.signature)).toBe(true);
+  expect(wallet.verify(reads[0].message, reads[0].signature)).toBe(true);
+  expect(wallet.verify(reads[0].message, redeemPost.signature)).toBe(false);
 
   const lines = redeemPost.message.split('\n');
-  expect(lines[0]).toBe('OT+T — authorise a data redemption');
-  expect(lines).toContain('Wallet: ' + ADDR);
-  expect(lines).toContain('Plan: fixed_5GB_30D_DE');
-  expect(lines).toContain('Slot: 1');
-  const site = lines.find((l) => l.startsWith('Site: '));
-  expect(site).toMatch(/^Site: 127\.0\.0\.1:\d+$/);
+  expect(lines.slice(0, 3)).toEqual(['OT+T — authorise a data redemption', 'Site: ' + new URL(page.url()).host, 'Wallet: ' + ADDR]);
+  expect(lines.slice(3, 5)).toEqual(['Plan: fixed_5GB_30D_DE', 'Slot: 1']);
+  expect(lines).toHaveLength(6);
+  expect(lines[2]).toBe('Wallet: ' + ADDR); // exactly as connected: a Solana address is case-sensitive
+  expect(lines[1]).toMatch(/^Site: 127\.0\.0\.1:\d+$/);
   const issued = Number((lines.find((l) => l.startsWith('Issued: ')) || '').slice(8));
   expect(Math.abs(issued - Math.floor(Date.now() / 1000))).toBeLessThan(60);
 
   const readLines = reads[0].message.split('\n');
-  expect(readLines[0]).toBe('OT+T — show my eSIM codes');
-  expect(readLines.some((l) => l.startsWith('Plan: '))).toBe(false);
-  expect(readLines.some((l) => l.startsWith('Slot: '))).toBe(false);
+  expect(readLines.slice(0, 3)).toEqual(['OT+T — show my eSIM codes', 'Site: ' + new URL(page.url()).host, 'Wallet: ' + ADDR]);
+  expect(readLines[3]).toMatch(/^Issued: \d{10}$/);
+  expect(readLines).toHaveLength(4);
 
-  const signs = await page.evaluate(() => window.__eth.filter((c) => c.method === 'personal_sign'));
-  expect(signs).toHaveLength(2);
-  expect(signs.every((c) => c.params[1] === ADDR)).toBe(true);
-  const hex = '0x' + Buffer.from(redeemPost.message, 'utf8').toString('hex');
-  expect(signs.map((c) => c.params[0])).toContain(hex);
+  // The wallet was asked twice, in order: the read, then the redemption, both for this account.
+  const signs = wallet.calls('signMessage');
+  expect(signs.map((c) => c.message)).toEqual([reads[0].message, redeemPost.message]);
+  expect(signs.every((c) => c.account === ADDR)).toBe(true);
+  expect(wallet.calls('signAndSendTransaction')).toEqual([]);
   expect(errors).toEqual([]);
 });
 
-test('a wallet that holds nothing is told so directly, and pointed at where to get OTT', async ({ page }) => {
+test('a member who held no OTT at the snapshot is told when their share starts, with no zero tiles and no redeem form', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
-  await stubAllowances(page, { wallets: {} }); // this wallet is not in the map at all
-  await page.route('**/api/redeem**', (route) => {
-    const req = route.request();
-    if (req.method() === 'GET') {
-      return route.fulfill(json({
-        ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END,
-        tokens: '0', share: 0, allowanceUsd: 0, decimals: 18,
-        redeemedUsd: 0, remainingUsd: 0, orders: [], history: [],
-      }));
-    }
-    return route.fulfill({ status: 404, contentType: 'text/plain', body: 'unused in this test' });
-  });
+  await installWallet(page, { trusted: true });
+  // A member who joined after the snapshot: listed in `members`, not in this week's `wallets`.
+  await stubAllowances(page, ledger({ members: { [ADDR]: { burned: JOIN_UNITS, since: SINCE } } }));
+  await page.route('**/api/redeem**', (route) => route.fulfill(json(standingOf({
+    tokens: '0', share: 0, allowanceUsd: 0, remainingUsd: 0, membership: membership({ sharing: false }),
+  }))));
 
   await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
-  await expect(mine).toContainText('This wallet holds no OTT, so it has no data this week.');
-  const buy = mine.locator('a[href="https://whatever-fun.vercel.app/#/new"]');
-  await expect(buy).toHaveText('Get OTT on whatever.fun');
-  await expect(buy).toHaveAttribute('target', '_blank');
+  await expect(mine).toContainText('Your weekly share starts at the next Monday snapshot, from the OTT this wallet holds then.');
+  await expect(mine.locator('.data-membership')).toContainText('Your weekly share starts at the next Monday snapshot.');
   // Nothing to redeem, so no dashboard, no redeem form, no orders list.
   await expect(mine.locator('.dh-tile')).toHaveCount(0);
   await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
@@ -576,26 +545,51 @@ test('a wallet that holds nothing is told so directly, and pointed at where to g
   expect(errors).toEqual([]);
 });
 
+test('without membership, a wallet that held nothing is told so directly and pointed at pump.fun', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
+  stubNetwork(page);
+  await stubConfig(page, LAUNCHED);
+  await installWallet(page, { trusted: true });
+  await stubAllowances(page, ledger());
+  await page.route('**/api/redeem**', (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill(json(standingOf({ tokens: '0', share: 0, allowanceUsd: 0, remainingUsd: 0, membership: { configured: false } })));
+    }
+    return route.fulfill({ status: 404, contentType: 'text/plain', body: 'unused in this test' });
+  });
+
+  await page.goto('/index.html#/data');
+  const mine = page.locator('.data-mine');
+  await expect(mine).toContainText('This wallet held no OTT at the weekly snapshot, so it has no weekly share this week.');
+  const buy = mine.getByRole('link', { name: 'Get OTT on pump.fun' });
+  await expect(buy).toHaveAttribute('href', 'https://pump.fun/coin/' + COIN);
+  await expect(buy).toHaveAttribute('target', '_blank');
+  await expect(mine.locator('.data-membership')).toHaveCount(0);
+  await expect(mine.locator('.dh-tile')).toHaveCount(0);
+  await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('a week whose allowance has not been published yet says so, with the week it is showing and when it refreshes — not a zero that looks like a verdict', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
+  await installWallet(page, { trusted: true });
   const lastWeek = CUR_WEEK - 1;
-  // The indexer file is one week behind — still carrying last week's real figures — and
-  // /api/redeem, reading that same file, answers with the CURRENT week, stale:true, and a
-  // deliberately zeroed allowance and remaining balance: it is honestly saying "not indexed yet",
-  // not "this wallet has nothing". `allowancesWeek` names exactly which week it did read.
-  await stubAllowances(page, {
+  // The ledger is one week behind — still carrying last week's real figures — and /api/redeem,
+  // reading that same file, answers with the CURRENT week, stale:true, and a deliberately zeroed
+  // allowance and remaining balance: it is honestly saying "not indexed yet", not "this wallet has
+  // nothing". `allowancesWeek` names exactly which week it did read, and joining waits for it.
+  await stubAllowances(page, memberLedger({
     week: lastWeek, weekStart: weekStartOf(lastWeek), weekEnd: weekEndOf(lastWeek),
-    wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } },
-  });
-  await page.route('**/api/redeem**', (route) => route.fulfill(json({
-    ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END, stale: true, allowancesWeek: lastWeek,
-    tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 0, decimals: 18,
-    redeemedUsd: 0, remainingUsd: 0, orders: [], history: [],
-  })));
+    membership: Object.assign({}, ledger().membership, { requirement: Object.assign({}, REQUIREMENT, { week: lastWeek }), requirements: { [lastWeek]: JOIN_UNITS } }),
+  }));
+  await page.route('**/api/redeem**', (route) => route.fulfill(json(standingOf({
+    stale: true, allowancesWeek: lastWeek, allowanceUsd: 0, redeemedUsd: 0, remainingUsd: 0,
+    membership: membership({ sharing: false, requirement: null, enrolment: { open: false, reason: 'Joining reopens once this week’s ledger is published.' } }),
+  }))));
 
   await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
@@ -603,13 +597,15 @@ test('a week whose allowance has not been published yet says so, with the week i
   await expect(mine).toContainText('the week that ended ' + fmtDate(weekEndOf(lastWeek)));
   await expect(mine).toContainText('every half hour');
   // The last-published week's own numbers still render underneath the notice — the file's real
-  // $20.00 allowance (25 GB, used the exact same way the ordinary dashboard test checks it), not
-  // the API's own protective zero.
+  // $20.00 allowance, not the API's own protective zero.
   await expect(mine.locator('.dh-tile').first()).toContainText('1,234 OTT');
   await expect(mine.locator('.dh-tile').nth(1)).toContainText('$20.00');
   await expect(mine.locator('.credit-summary')).toContainText('Awaiting allocation');
   await expect(mine.locator('.data-tiles')).toContainText('Current spendable credit unavailable');
   await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
+  // Nobody is "sharing" before the week is published; that says nothing about this member.
+  await expect(mine.locator('.data-membership')).toContainText('This week’s split isn’t published yet.');
+  await expect(mine.locator('.data-membership')).not.toContainText('starts at the next Monday snapshot');
   expect(errors).toEqual([]);
 });
 
@@ -618,14 +614,14 @@ test('the "Resets in" tile counts down live, without a repaint', async ({ page }
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   const fixed = new Date('2026-09-16T12:00:00Z');
   await page.clock.install({ time: fixed });
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
+  await installWallet(page, { trusted: true });
   const week = weekOf(Math.floor(fixed.getTime() / 1000));
   // 46 minutes from the frozen "now" — close enough that a 90-second jump crosses a whole minute
   // boundary, far enough that it does not also cross an hour boundary and change format.
   const weekEnd = Math.floor(fixed.getTime() / 1000) + 46 * 60;
-  await stubAllowances(page, { week, weekStart: weekStartOf(week), weekEnd, wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } } });
+  await stubAllowances(page, memberLedger({ week, weekStart: weekStartOf(week), weekEnd }));
   await page.route('**/api/redeem**', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'unused in this test' }));
 
   await page.goto('/index.html#/data');
@@ -638,47 +634,46 @@ test('the "Resets in" tile counts down live, without a repaint', async ({ page }
   expect(errors).toEqual([]);
 });
 
-test('when the redeem API cannot be reached, what the indexer last published still shows; redeeming and this week’s orders do not', async ({ page }) => {
+test('when the redeem API cannot be reached, what the keeper last published still shows; redeeming and this week’s orders do not', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
-  await stubAllowances(page, { wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } } });
+  const wallet = await installWallet(page, { trusted: true });
+  await stubAllowances(page, memberLedger());
   // No route for /api/redeem: the static test server answers 404 with a text body, which is also
   // what a static host without the function deployed would do.
 
   await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');
   await expect(mine).toContainText('Could not reach the redeem API');
-  // What the indexer's own file says is still shown: the holding, the share, this week's GB.
+  // What the keeper's own file says is still shown: the holding, the share, this week's credit.
   await expect(mine.locator('.dh-tile').nth(0)).toContainText('1,234 OTT');
   await expect(mine.locator('.dh-tile').nth(1)).toContainText('$20.00');
   // Used/left cannot be known without the API — said as unknown, not shown as zero.
   await expect(mine.locator('.data-tiles')).toContainText('Redeem API unavailable');
   await expect(mine.getByRole('button', { name: /^Redeem/ })).toHaveCount(0);
   await expect(mine.getByRole('button', { name: 'Show my eSIM codes' })).toHaveCount(0);
+  // Without the API, nothing can be joined, claimed or signed for.
+  await expect(mine.locator('.data-membership')).toHaveCount(0);
+  expect(wallet.calls().filter((c) => !(c.method === 'connect' && c.silent))).toEqual([]);
   expect(errors).toEqual([]);
 });
 
 test('a bundle claimed in a previous week is still shown, filed under its eSIM and tagged with the week that claimed it', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
-  stubNetwork(page, { calls: CALLS });
+  stubNetwork(page);
   await stubConfig(page, LAUNCHED);
-  await stubWallet(page);
-  await stubAllowances(page, { wallets: { [ADDR]: { tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20 } } });
+  await installWallet(page, { trusted: true });
+  await stubAllowances(page, memberLedger());
   const oldWeek = CUR_WEEK - 2;
   const history = [{
     n: 0, week: oldWeek, transactionId: 'ott-' + 'c'.repeat(32), packageCode: 'fixed_1GB_7D_EUROPE', priceUsd: 1.19,
     qrCodeUrl: '', ac: '', iccid: '8900000000000000009', createdAt: '2026-08-20T00:00:00Z',
     pending: false, stage: 'done', smdpAddress: '', matchingId: '', appleInstallUrl: '', androidInstallUrl: '', note: '', codes: false,
   }];
-  await page.route('**/api/redeem**', (route) => route.fulfill(json({
-    ok: true, address: ADDR, week: CUR_WEEK, weekEnd: CUR_WEEK_END,
-    tokens: '1234000000000000000000', share: 0.00152, allowanceUsd: 20, decimals: 18,
-    redeemedUsd: 0, remainingUsd: 20, orders: [], history,
-  })));
+  await page.route('**/api/redeem**', (route) => route.fulfill(json(standingOf({ history }))));
 
   await page.goto('/index.html#/data');
   const mine = page.locator('.data-mine');

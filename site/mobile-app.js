@@ -25,14 +25,18 @@
   let dialogSequence = 0;
 
   const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-  const launched = cfg => cfg && ['coin', 'curve', 'treasury'].every(key => /^0x[0-9a-fA-F]{40}$/.test(cfg[key] || '') && !/^0x0{40}$/i.test(cfg[key]));
+  const isAddress = value => !!window.OTTSolana && window.OTTSolana.isAddress(value);
+  // The API's own rule (site/api/status.js launched()): a real address, never the all-zero key an
+  // unset address looks like, and a token program that is Token or Token-2022.
+  const isLaunchAddress = value => isAddress(value) && value !== window.OTTSolana.PROGRAMS.system;
+  const launched = cfg => !!cfg && cfg.chain === 'solana' && window.OTTSolana?.TOKEN_PROGRAMS.includes(cfg.tokenProgram)
+    && [cfg.coin, cfg.treasury, cfg.membership && cfg.membership.burnAccount].every(isLaunchAddress);
   const go = screen => { location.hash = screen === 'home' ? '#/app' : '#/app/' + screen; };
 
+  // The connected Solana wallet is the member's account: its credit, its eSIMs, its signatures.
   function holderAddress(ctx) {
     const account = ctx.currentAccount();
-    if (ctx.accountChain?.() !== 'solana') return /^0x[0-9a-fA-F]{40}$/.test(account || '') ? account.toLowerCase() : null;
-    const login = window.OTTSolanaLogin?.state();
-    return login?.account.address === account ? login.linkedWallet?.address || null : null;
+    return isAddress(account) ? account : null;
   }
   function confirmedBudget(state) {
     if (state?.membership?.configured && !state.membership.member) return null;
@@ -50,31 +54,6 @@
       h('p', { class: 'om-muted' }, welcome + 'It doesn’t use your weekly credit.'),
       action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims')));
   }
-  function linkWalletDialog(h, ctx, source) {
-    let sheet;
-    const status = h('p', { class: 'om-inline-note', role: 'status', 'aria-live': 'polite' }, 'Ready when you are. Both approvals are needed.');
-    const start = async (transport, button) => {
-      const buttons = sheet.querySelectorAll('.om-link-start');
-      buttons.forEach(item => { item.disabled = true; });
-      try {
-        await window.OTTSolanaLogin.linkWallet({ transport, isCurrent: () => sheet.isConnected && ctx.isCurrent(),
-          progress: message => { if (status.isConnected) status.textContent = message; } });
-        ctx.toast('Wallets linked', 'Your Solana login can show the holder wallet’s existing credit.');
-      } catch (error) {
-        if (status.isConnected) status.textContent = error.message || 'Could not link wallets. Try again.';
-      } finally { buttons.forEach(item => { if (item.isConnected) item.disabled = false; }); }
-    };
-    const browser = action(h, 'Link with browser wallet', event => void start('injected', event.currentTarget), 'om-button om-link-start');
-    const mobile = window.OTTWallet?.state().remoteAvailable
-      ? action(h, 'Link with mobile wallet', event => void start('walletconnect', event.currentTarget), 'om-secondary-button om-link-start') : null;
-    sheet = dialog(h, 'Link your holder wallet', h('div', { class: 'om-guide-copy' },
-      h('p', {}, 'See your holder credit while signed in with Solana.'),
-      h('ol', { class: 'om-link-steps' }, h('li', {}, 'Approve the link in Phantom.'), h('li', {}, 'Approve the same link in your Robinhood Chain wallet.')),
-      h('p', { class: 'om-muted' }, 'These message approvals do not move funds.'), status, browser, mobile,
-      h('details', { class: 'om-link-details' }, h('summary', {}, 'What linking allows'),
-        h('p', {}, 'Link one Robinhood Chain wallet to this Solana account. A linked wallet keeps its existing allowance; linking creates no extra credit. Use the holder wallet itself to redeem packages or reveal private installation details.'))), source);
-  }
-
   function icon(name) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
@@ -122,53 +101,22 @@
     dialog(h, 'Add OTT to your phone', instructions, source);
   }
 
+  // app.js picks the wallet: one installed wallet connects directly, several get a short list,
+  // and a phone without one is offered the wallet apps' own "open in my browser" links.
   async function wallet(ctx, source) {
-    const { h } = ctx;
-    if (ctx.walletAvailable?.() || window.OTTWallet?.available() || (!window.OTTWallet && window.ethereum?.request)) {
-      source.disabled = true;
-      preview = false;
-      try {
-        const account = await ctx.connect();
-        if (account) { preview = false; if (ctx.isCurrent()) ctx.refresh(); }
-        return account;
-      } catch (error) { ctx.toast('Could not connect', error.message || 'Try again in your wallet.', 'error'); }
-      finally { if (source.isConnected) source.disabled = false; }
-      return;
-    }
-    const copy = action(h, 'Copy app link', async () => {
-      try {
-        const url = new URL('./', location.href); url.hash = '/app';
-        await navigator.clipboard.writeText(url.href);
-        copy.textContent = 'Link copied';
-      } catch { copy.textContent = 'Copy the address from your browser'; }
-    });
-    dialog(h, 'Open OTT in your wallet', h('div', { class: 'om-guide-copy' },
-      h('p', {}, 'Use your wallet’s browser to open OTT, then tap Connect wallet.'),
-      h('p', { class: 'om-muted' }, 'Mobile wallet connection has not been enabled on this deployment yet. You can still explore plans and the setup guide, or connect from your wallet’s browser.'), copy), source);
-  }
-
-  async function solanaWallet(ctx, source) {
-    const { h } = ctx;
-    if (!window.OTTWallet?.solanaAvailable()) {
-      dialog(h, 'Sign in with Phantom', h('div', { class: 'om-guide-copy' },
-        h('p', {}, 'Open OTT in Phantom’s browser on your phone, or use the Phantom browser extension on desktop.'),
-        h('p', {}, 'Approve the sign-in message to verify your wallet. Signing in does not move funds.'),
-        h('a', { class: 'om-button', href: 'https://phantom.com/download', target: '_blank', rel: 'noopener noreferrer' }, 'Get Phantom'),
-        h('p', { class: 'om-muted' }, 'After signing in, link your Robinhood Chain holder wallet in Wallet settings to view its credit.')), source);
-      return;
-    }
     source.disabled = true;
     preview = false;
-    try { await ctx.connect({ transport: 'solana' }); }
-    catch (error) { ctx.toast('Solana sign-in failed', error.message || 'Try again in Phantom.', 'error'); }
+    try {
+      const account = await ctx.connect(null, source);
+      if (account && ctx.isCurrent()) ctx.refresh();
+      return account;
+    } catch (error) { ctx.toast('Could not connect', error.message || 'Try again in your wallet.', 'error'); }
     finally { if (source.isConnected) source.disabled = false; }
+    return null;
   }
 
   function walletSettings(h, ctx, source) {
     const account = ctx.currentAccount();
-    const solana = ctx.accountChain?.() === 'solana';
-    const verified = window.OTTSolanaLogin?.state()?.account.address === account;
-    const linked = verified && window.OTTSolanaLogin.state().linkedWallet;
     const copy = action(h, 'Copy address', async () => {
       try { await navigator.clipboard.writeText(account); copy.textContent = 'Address copied'; }
       catch { copy.textContent = 'Select the address above to copy it'; }
@@ -178,37 +126,19 @@
       disconnect.disabled = true;
       sheet.close();
       try { await ctx.disconnect(); }
-      catch (error) { ctx.toast('Wallet disconnected from OTT', error.message || 'You can also remove the session in your wallet.'); }
+      catch (error) { ctx.toast('Wallet disconnected from OTT', error.message || 'You can also remove the connection in your wallet.'); }
     }, 'om-secondary-button');
+    const name = window.OTTWallet?.state().wallet;
     sheet = dialog(h, 'Your wallet', h('div', { class: 'om-guide-copy' },
       h('p', { class: 'om-wallet-address' }, account),
-      h('p', {}, solana ? (verified ? 'Signed in with Solana. ' : 'Your Solana wallet is connected. Approve a sign-in message to verify ownership. ')
-        + (linked ? 'Your linked holder wallet supplies the existing test credit shown in OTT.' : 'Link a Robinhood Chain holder wallet to view its existing test credit.')
-        : 'Your EVM wallet on Robinhood Chain is your OTT account. Viewing your credit does not require a signature. Installation details and redemptions need your approval.'),
+      h('p', {}, 'Your Solana wallet' + (name ? ' (' + name + ')' : '') + ' is your OTT account. Viewing your credit does not need a signature. Joining, redemptions and installation details need your approval in the wallet.'),
       h('div', { class: 'om-wallet-actions' }, copy, disconnect,
-        linked ? h('p', { class: 'om-wallet-address' }, 'Holder wallet: ' + linked.address) : null,
-        solana && verified && !linked ? action(h, 'Link holder wallet', event => { sheet.close(); linkWalletDialog(h, ctx, event.currentTarget); }, 'om-secondary-button') : null,
-        linked ? action(h, 'Unlink holder wallet', async event => {
-          const button = event.currentTarget; button.disabled = true;
-          try { await window.OTTSolanaLogin.unlinkWallet(); ctx.toast('Holder wallet unlinked', 'Its credit and eSIMs stay with that wallet.'); }
-          catch (error) { ctx.toast('Could not unlink', error.message, 'error'); if (button.isConnected) button.disabled = false; }
-        }, 'om-secondary-button') : null,
-        solana && verified ? action(h, 'Refresh link status', async event => {
-          const button = event.currentTarget; button.disabled = true;
-          try { await window.OTTSolanaLogin.refreshLink(); if (ctx.isCurrent()) { sheet.close(); ctx.refresh(); } }
-          catch (error) { ctx.toast('Could not refresh link', error.message, 'error'); }
-          finally { if (button.isConnected) button.disabled = false; }
-        }, 'om-secondary-button') : null,
-        solana && !verified && !window.OTTSolanaLogin?.pending(account) ? action(h, 'Sign in with Solana', event => { sheet.close(); void solanaWallet(ctx, event.currentTarget); }, 'om-secondary-button') : null,
-        action(h, solana ? 'Use Robinhood wallet' : 'Sign in with Solana', event => {
-          sheet.close();
-          void (solana ? wallet(ctx, event.currentTarget) : solanaWallet(ctx, event.currentTarget));
-        }, 'om-secondary-button'))), source);
+        h('a', { class: 'om-text-link', href: (ctx.explorer?.account?.(account)) || ('https://solscan.io/account/' + account), target: '_blank', rel: 'noopener' }, 'View on Solscan ↗'))), source);
   }
 
   /** Installation uses only details already revealed by this wallet's signed read. */
   function openSetup(ctx, sim, source, placeName) {
-    if (!ctx.isCurrent() || !source.isConnected || !ctx.currentAccount() || ctx.accountChain?.() === 'solana' || sim.codes !== true) return;
+    if (!ctx.isCurrent() || !source.isConnected || !ctx.currentAccount() || sim.codes !== true) return;
     const { h } = ctx;
     let platform = /Android/i.test(navigator.userAgent) ? 'android' : 'iphone';
     let step = 0;
@@ -329,27 +259,18 @@
   function home(h, ctx, cfg) {
     const active = launched(cfg);
     const account = ctx.currentAccount();
-    const solana = !!account && ctx.accountChain?.() === 'solana';
-    const verified = solana && window.OTTSolanaLogin?.state()?.account.address === account;
     const holder = holderAddress(ctx);
-    const signing = solana && window.OTTSolanaLogin?.pending(account);
     const primary = preview ? action(h, ['Find a data plan', icon('arrow')], () => go('plans'))
-      : solana ? action(h, [signing ? 'Signing in…' : verified ? holder ? 'Browse plans' : 'Link a holder wallet' : 'Sign in with Solana', icon('arrow')], event => verified ? holder ? go('plans') : linkWalletDialog(h, ctx, event.currentTarget) : solanaWallet(ctx, event.currentTarget))
       : active ? action(h, [account ? 'View My data' : 'Connect wallet', icon('arrow')], event => account ? go('esims') : wallet(ctx, event.currentTarget))
         : action(h, ['Try the app preview', icon('arrow')], () => enterPreview(ctx));
-    primary.disabled = !!signing;
     const content = h('div', { class: 'om-pass-content' }, chip(h),
-        h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : solana ? 'SOLANA ACCOUNT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
+        h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
-          : solana && verified && !holder ? h('h2', { class: 'om-pass-title' }, active ? 'Link for holder credit.' : 'Your Solana account.')
-          : solana && holder ? h('h2', { class: 'om-pass-title' }, active ? 'Reading your credit…' : 'Wallets linked.')
-          : solana ? h('h2', { class: 'om-pass-title' }, 'Finish signing in.')
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.'
-          : solana ? verified ? !active ? 'Wallet ownership is verified. Membership enrolment is not open.' : holder ? 'Existing credit from your linked Robinhood Chain holder wallet.' : 'Link a Robinhood Chain holder wallet in Wallet settings to view its credit.' : signing ? 'Finish approval in Phantom. OTT will verify your signature.' : 'Approve the sign-in message in Phantom to verify this account.'
-            : active ? 'Check your weekly credit and eSIMs.' : 'Explore a sample member account. Membership enrolment is not open.'),
-        preview || solana || (active && account) ? h('div', { class: 'om-pass-action' }, primary) : null);
-    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : solana ? 'Solana account' : active ? 'Weekly credit' : 'App preview invitation', 'aria-live': 'polite' }, content);
+          : active ? 'Check your weekly credit and eSIMs.' : 'Explore a sample member account. Joining opens when OTT launches on pump.fun.'),
+        preview || (active && account) ? h('div', { class: 'om-pass-action' }, primary) : null);
+    const credit = h('section', { class: 'om-credit-card om-data-pass', 'aria-label': preview ? 'Sample weekly credit' : active ? 'Weekly credit' : 'App preview invitation', 'aria-live': 'polite' }, content);
     const realAccount = !preview && active && holder;
     const shortcuts = h('section', { class: 'om-holder-shortcuts', 'aria-label': 'Plans for your account' });
     function paintShortcuts(state) {
@@ -427,33 +348,30 @@
         h('span', {}, preview ? first.name + ' · ' + first.gb + ' GB package' : 'For everyday life or your next trip.')), icon('arrow')],
     () => go(preview ? 'esims' : 'plans'), 'om-connection-row');
     connection.setAttribute('aria-label', preview ? 'View sample eSIMs' : 'Find a data plan');
-    const introAction = solana && !preview ? h('a', { class: 'om-text-link', href: '#/app/plans' }, 'Find a data plan ', icon('arrow'))
-      : !active && !preview ? primary
+    const introAction = !active && !preview ? primary
       : preview || account ? h('a', { class: 'om-text-link', href: preview ? '#/app/plans' : '#/app/esims' },
         preview ? 'Browse plans ' : 'Open my eSIMs ', icon('arrow'))
         : action(h, ['Connect wallet', icon('arrow')], event => wallet(ctx, event.currentTarget));
     const intro = h('div', { class: 'om-home-intro' },
       h('p', { class: 'om-home-eyebrow' }, 'OT+T / YOUR DATA'),
       h('h1', {}, 'Touch grass.', h('br', {}), 'Stay online.'),
-      h('p', { class: 'om-home-lede' }, preview || active ? 'Check your credit. Pick a data plan.' : 'Burn once to enrol.', h('br', {}), preview || active ? 'Set up your eSIM.' : 'Trading fees fund your data.'),
+      h('p', { class: 'om-home-lede' }, preview || active ? 'Check your credit. Pick a data plan.' : 'Join once with OTT.', h('br', {}), preview || active ? 'Set up your eSIM.' : 'Trading fees fund your data.'),
       h('div', { class: 'om-home-actions' }, introAction,
         h('a', { class: 'om-text-link', href: !active && !preview ? '#/about' : preview || account ? '#/app/help' : '#/app/plans' },
           !active && !preview ? 'How membership will work' : preview || account ? 'How to get online' : 'Browse plans', icon('arrow'))),
       h('p', { class: 'om-home-context' }, preview ? 'You’re exploring a sample account. No wallet needed.'
-        : solana ? verified ? 'Signed in with Solana. Your wallet ownership is verified.' : 'Solana wallet connected. Sign in to verify ownership.'
-        : active ? account ? 'Your weekly credit and eSIMs are linked to your wallet.' : 'Your EVM wallet on Robinhood Chain is your account. Connecting does not move funds.'
-          : 'Membership enrolment is not open. Preview only.'), credit);
+        : active ? account ? 'Your weekly credit and eSIMs belong to your wallet.' : 'Your Solana wallet is your account. Connecting does not move funds.'
+          : 'Joining is not open yet. Preview only.'), credit);
     const result = h('div', { class: 'om-home-grid' },
       h('div', { class: 'om-home-feature' + (realAccount ? ' om-home-account' : preview ? ' om-home-preview' : '') }, intro,
         h('div', { class: 'om-home-visual' }, world(h, 'home'))),
       h('div', { class: 'om-home-tools' }, connection,
         !preview ? h('div', { class: 'om-wallet-row' },
-          h('span', { class: 'om-row-copy' }, h('strong', {}, verified ? 'Signed in with Solana' : account ? 'Wallet connected' : 'Your wallet is your account'),
-            h('span', {}, account ? account.slice(0, 6) + '…' + account.slice(-4) : active ? 'Robinhood wallet for holder credit. Solana wallet for sign-in.' : 'Sign in to explore. Connecting a wallet does not enrol you.')),
+          h('span', { class: 'om-row-copy' }, h('strong', {}, account ? 'Wallet connected' : 'Your wallet is your account'),
+            h('span', {}, account ? account.slice(0, 4) + '…' + account.slice(-4) : 'Phantom, Solflare or another Solana wallet. Connecting does not enrol you.')),
           h('div', { class: 'om-wallet-choices' },
           action(h, account ? 'Wallet settings' : 'Connect wallet',
-            event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button'),
-          !account ? action(h, 'Sign in with Solana', event => solanaWallet(ctx, event.currentTarget), 'om-text-button') : null)) : null,
+            event => account ? walletSettings(h, ctx, event.currentTarget) : wallet(ctx, event.currentTarget), 'om-text-button'))) : null,
         realAccount ? action(h, 'Refresh account', () => ctx.refresh(), 'om-text-button') : null,
         h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'How eSIM setup works ', icon('arrow'))), shortcuts);
     return result;
@@ -465,7 +383,6 @@
 
   function reviewPackage(h, ctx, cfg, pkg, source) {
     let sheet;
-    const solana = !preview && ctx.accountChain?.() === 'solana';
     const addPreview = action(h, 'Add to preview', () => {
       if (pkg.priceUsd > 20 - demoSpent) return;
       demoSpent = Math.round((demoSpent + pkg.priceUsd) * 100) / 100;
@@ -479,18 +396,6 @@
       if (location.hash === '#/app/esims' && ctx.isCurrent()) ctx.refresh();
       else go('esims');
     });
-    const switchHolder = async event => {
-      const expected = holderAddress(ctx), source = event.currentTarget;
-      window.WhateverData.selectPackage(pkg.code);
-      sheet.close();
-      const connected = await wallet(ctx, source);
-      if (!connected || window.OTTWallet?.state().chain !== 'evm') return;
-      if (expected && connected.toLowerCase() !== expected) {
-        ctx.toast('Choose your linked holder wallet', 'Switch to ' + expected.slice(0, 6) + '…' + expected.slice(-4) + ' to use its credit.');
-        return;
-      }
-      go('esims');
-    };
     const content = h('div', { class: 'om-guide-copy' },
       h('div', { class: 'om-review-size' }, h('strong', {}, pkg.gb + ' GB'), h('span', {}, pkg.days + ' days')),
       h('dl', { class: 'om-detail-list' },
@@ -499,12 +404,11 @@
       h('p', {}, 'Check that your phone supports eSIMs and is unlocked before redeeming. You’ll need an internet connection for setup.'),
       action(h, 'Check your phone', event => checkPhone(h, event.currentTarget), 'om-secondary-button om-review-device-check'),
       preview ? h('div', { class: 'om-inline-note' }, 'Preview only. Adding this package changes the sample account. It does not issue an eSIM or request a wallet signature.')
-        : solana ? h('div', { class: 'om-inline-note' }, holderAddress(ctx) ? 'This linked holder wallet owns the credit. Switch to that Robinhood Chain wallet to approve a redemption.' : 'Link your Robinhood Chain holder wallet in Wallet settings to view its credit. Redemptions require that holder wallet’s approval.')
-          : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Membership enrolment and purchases are not open. Package costs do not set the one-time burn amount.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
-      preview ? addPreview : solana ? action(h, 'Use Robinhood wallet', event => void switchHolder(event))
+        : !launched(cfg) ? h('div', { class: 'om-inline-note' }, 'Catalogue preview. Joining and purchases are not open yet. Package costs do not set the join amount.') : h('p', { class: 'om-muted' }, 'Your wallet will confirm the exact package before a real redemption.'),
+      preview ? addPreview
         : launched(cfg) ? continueLive : action(h, 'See the setup guide', () => { sheet.close(); go('help'); }),
       preview && addPreview.disabled ? h('p', { class: 'om-form-message' }, 'This sample account needs more credit for that package. Choose a smaller plan or restart the preview.') : null,
-      h('p', { class: 'om-muted' }, launched(cfg) ? 'Package validity and the weekly credit reset follow separate rules. The activation window depends on the provider.' : 'Every package has its own validity and activation window. Membership balance rules will be published before enrolment opens.'));
+      h('p', { class: 'om-muted' }, 'Package validity and the weekly credit reset follow separate rules. The activation window depends on the provider.'));
     content.appendChild(h('p', { class: 'om-muted' }, 'If you already have an eSIM for this destination, the provider will top it up when compatible. Otherwise, it may issue a new eSIM with new installation details.'));
     sheet = dialog(h, pkg.name + ' data plan', content, source);
   }
@@ -586,7 +490,7 @@
             h('p', { class: 'om-package-price' }, money(pkg.priceUsd), h('small', {}, ' data credit')),
             preview ? null : h('p', { class: 'om-pass-note' }, !launched(cfg) ? 'Catalogue preview' : 'Available package'),
             action(h, ['Review package', icon('arrow')], event => reviewPackage(h, ctx, cfg, pkg, event.currentTarget), 'om-button om-package-review'))),
-        h('p', { class: 'om-plan-disclaimer' }, launched(cfg) ? 'Use data credit for this package. Package validity is separate from the weekly credit reset.' : 'Sample package costs. The planned one-time burn enrols you; collected fees fund later data. Final membership terms are still being defined.')].filter(Boolean));
+        h('p', { class: 'om-plan-disclaimer' }, launched(cfg) ? 'Use data credit for this package. Package validity is separate from the weekly credit reset.' : 'Sample package costs. Joining once with about $5 of OTT enrols you; collected trading fees fund later data.')].filter(Boolean));
       if (focusCode) [...sizes.querySelectorAll('button')].find(button => button.dataset.packageCode === focusCode)?.focus();
     }
 
@@ -651,15 +555,6 @@
             h('a', { class: 'om-connection-row', href: '#/app/help' }, icon('help'), 'How to add an eSIM', icon('arrow'))),
           h('p', { class: 'om-plan-disclaimer' }, 'Illustration only. No active eSIM. No usable QR codes or activation details are created in preview mode.'),
           action(h, 'Find another plan', () => go('plans'), 'om-text-button')), world(h, 'kit'));
-    }
-    if (ctx.accountChain?.() === 'solana') {
-      const holder = holderAddress(ctx);
-      return h('div', { class: 'om-kit-layout' }, h('section', { class: 'om-panel' },
-        h('h2', {}, 'Your Solana account'),
-        h('p', {}, holder ? 'Your linked holder wallet supplies your credit. Use that Robinhood Chain wallet to approve a redemption or reveal private eSIM installation details.' : 'There are no eSIMs or holder credits linked to this Solana account. Link your Robinhood Chain holder wallet in Wallet settings to view its credit.'),
-        holder ? action(h, 'Use Robinhood wallet', event => void wallet(ctx, event.currentTarget)) : null,
-        h('a', { class: 'om-button', href: '#/app/plans' }, 'Browse plans'),
-        action(h, 'Wallet settings', event => walletSettings(h, ctx, event.currentTarget), 'om-secondary-button')), world(h, 'kit'));
     }
     if (launched(cfg)) {
       const container = h('div', { class: 'om-live-account' });
@@ -726,13 +621,13 @@
       h('section', { class: 'om-panel om-help-notes' },
         h('img', { src: './assets/ott/faq-clay-help.webp', alt: '', loading: 'lazy', width: 720, height: 720 }),
         h('h2', {}, 'Before you connect'),
-        h('details', {}, h('summary', {}, 'How will I get an eSIM with OTT?'), h('p', {}, 'The planned membership starts with one OTT burn to enrol and receive your first eSIM. After that, collected trading fees fund members’ data through a shared pool. Holding tokens or signing in alone does not enrol you. Membership enrolment is not open yet.'), h('a', { class: 'om-text-link', href: '#/about' }, 'Read the membership plan ', icon('arrow'))),
-        h('details', {}, h('summary', {}, 'Will I burn again for every top-up?'), h('p', {}, 'No. The proposed burn is the one-time entry to membership. Future data is funded by collected trading fees, without another burn for each top-up. The allowance can change with fees and membership numbers; unlimited data is not promised. Burn amount and membership duration are still to be finalised.')),
-        h('details', {}, h('summary', {}, 'What happens if my first eSIM fails?'), h('p', {}, 'Refundable enrolment escrow is planned: finalise the burn after confirmed first-eSIM issuance, or provide a refund route after a timeout. The escrow, issuance verification and recovery rules are not built yet. Contract review and a real funded phone test must happen before public enrolment opens.')),
+        h('details', {}, h('summary', {}, 'How will I get an eSIM with OTT?'), h('p', {}, 'Membership starts with one send of about $5 of OTT to Solana’s burn address, which enrols you and includes your first eSIM. After that, collected trading fees fund members’ data through a shared pool. Holding tokens or connecting a wallet alone does not enrol you.' + (launched(cfg) ? '' : ' Joining opens when OTT launches.')), h('a', { class: 'om-text-link', href: '#/about' }, 'Read the membership plan ', icon('arrow'))),
+        h('details', {}, h('summary', {}, 'Do I pay again for every top-up?'), h('p', {}, 'No. Joining is a one-time send, and membership doesn’t expire. Weekly data is then funded by collected trading fees and spent as credit. The credit changes with fees and the number of members; unlimited data is not promised.')),
+        h('details', {}, h('summary', {}, 'What happens if my welcome eSIM is delayed?'), h('p', {}, 'Your membership is recorded on-chain the moment your join confirms, and it stays yours. If the welcome eSIM can’t be issued straight away, for example while the reserve is being topped up, claim it later from eSIMs without sending OTT again. The OTT you sent can’t be refunded.')),
         h('details', {}, h('summary', {}, 'Can I set it up on the same phone?'), h('p', {}, 'Use the provider’s installation link if one is available. Otherwise, use manual details or display the QR on another screen. Supported iPhones can also add an eSIM from a QR shown in Safari.')),
         h('details', {}, h('summary', {}, launched(cfg) ? 'Does weekly credit become cash?' : 'Can I withdraw the data balance?'), h('p', {}, launched(cfg) ? 'No. Credit can be spent on available data packages. It cannot be withdrawn, and unused weekly credit expires at the weekly reset.' : 'The proposed balance is for mobile data, not cash withdrawals. The final membership terms will explain how balances are allocated and whether unused amounts accumulate or expire. The preview uses example figures.')),
         h('details', {}, h('summary', {}, 'Will the app show my remaining GB?'), h('p', {}, 'It shows package sizes and order details. Live remaining-data readings are not available in this version.')),
-        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home for an EVM wallet on Robinhood Chain, or Sign in with Solana for Phantom. Sign-in verifies ownership without moving funds. After signing in with Solana, use Wallet settings to link one holder wallet with a fresh approval from both wallets. You can then view that wallet’s existing credit; linking creates no extra allowance. Redemptions and installation details still require approval from the holder wallet. You can unlink or disconnect in Wallet settings. EVM mobile wallets can connect through WalletConnect when enabled.')),
+        h('details', {}, h('summary', {}, 'How do I connect my wallet?'), h('p', {}, 'Tap Connect wallet on Home. OTT works with Solana wallets such as Phantom and Solflare. On a phone, open OTT inside your wallet app’s browser; OTT offers a link that does this. Connecting does not move funds. Joining, redemptions and installation details each ask for your approval in the wallet. You can disconnect in Wallet settings.')),
         h('a', { class: 'om-text-link', href: '#/status' }, 'Check programme status ', icon('arrow'))));
   }
 

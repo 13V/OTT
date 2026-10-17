@@ -3,13 +3,15 @@ let pwTest;
 try { pwTest = require('@playwright/test'); } catch (e) { pwTest = require('playwright/test'); }
 const { test, expect } = pwTest;
 const { stubNetwork } = require('./support/network.js');
+const { installWallet, walletAddress } = require('./support/wallet.js');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana.js');
 const catalogue = require('../../site/config/esim.json');
 
-const addr = '0x4ca685f4a1cd39ba0d0f1cd06b3f2b0f5b7cdd11';
+const addr = walletAddress();
+// The checked-in catalogue with the four launch fields filled in, as on launch day.
 const launched = Object.assign({}, catalogue, {
-  coin: '0x1111111111111111111111111111111111111111',
-  curve: '0x2222222222222222222222222222222222222222',
-  treasury: '0x3333333333333333333333333333333333333333',
+  chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY,
+  membership: Object.assign({}, catalogue.membership, { burnAccount: BURN_ACCOUNT }),
 });
 const respond = (body) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -90,22 +92,25 @@ test('a live plan selection carries into the connected dashboard without an orde
   const now = Math.floor(Date.now() / 1000);
   const week = Math.floor((now - 345600) / 604800);
   const weekEnd = 345600 + (week + 1) * 604800;
+  const units = '180000000000';
+  const since = { at: now - 86400, slot: 399000000, tx: signatureFrom('discovery join') };
   await page.route('**/data/allowances.json', (route) => route.fulfill(respond({
-    week, weekEnd, decimals: 18, budgetUsd: 500, circulating: '1000000000000000000000000',
-    wallets: { [addr]: { tokens: '1000000000000000000000', share: .001, allowanceUsd: 30 } },
+    chain: 'solana', week, weekEnd, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, budgetUsd: 500, memberTokens: '1000000000000',
+    members: { [addr]: { burned: units, since } },
+    wallets: { [addr]: { tokens: '1000000000', share: .001, allowanceUsd: 30, member: true } },
   })));
   await page.route('**/api/redeem?address=*', (route) => route.fulfill(respond({
-    ok: true, address: addr, week, weekEnd, decimals: 18, stale: false,
-    tokens: '1000000000000000000000', share: .001, allowanceUsd: 30,
+    ok: true, address: addr, week, weekEnd, decimals: 6, stale: false, allowancesWeek: week,
+    tokens: '1000000000', share: .001, allowanceUsd: 30,
     redeemedUsd: 0, remainingUsd: 30, orders: [], history: [], sims: [],
+    membership: { configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT,
+      burnUsd: 5, requirement: { week, burnTokens: '180000', burnUnits: units, priceUsd: 0.0000278 }, burned: units,
+      welcome: catalogue.membership.welcome, capMultiple: 3, member: true, memberSince: since, sharing: true,
+      welcomeOrder: null, enrolment: { open: true, reason: '' } },
   })));
-  await page.addInitScript((address) => {
-    window.ethereum = { request: async ({ method }) => {
-      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [address];
-      if (method === 'eth_chainId') return '0x1237';
-      return null;
-    } };
-  }, addr);
+  const wallet = await installWallet(page, { trusted: true });
+  const writes = [];
+  page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/')) writes.push(request.url()); });
   await page.goto('/index.html#/');
   await page.locator('.ott-plan-details summary').click();
   await page.locator('#plan-place').selectOption('japan');
@@ -114,6 +119,9 @@ test('a live plan selection carries into the connected dashboard without an orde
   await expect(page.locator('#f-place')).toHaveValue('japan');
   await expect(page.locator('#f-package')).toHaveValue('fixed_5GB_30D_JP');
   await expect(page.locator('.data-mine')).toContainText('Your data');
+  // Choosing a plan placed no order and asked the wallet for nothing beyond reconnecting.
+  expect(writes).toEqual([]);
+  expect(wallet.calls().filter((call) => !(call.method === 'connect' && call.silent))).toEqual([]);
 });
 
 test('narrow layout has usable navigation and no horizontal overflow', async ({ page }) => {
@@ -170,15 +178,8 @@ test('the mobile clay hero explains the product and invites prelaunch visitors i
 test('a configured hero opens My data without requesting wallet access or an order', async ({ page }) => {
   stubNetwork(page);
   await page.route('**/config/esim.json', (route) => route.fulfill(respond(launched)));
-  await page.addInitScript(() => {
-    window.__heroWalletMethods = [];
-    window.ethereum = { request: async ({ method }) => {
-      window.__heroWalletMethods.push(method);
-      if (method === 'eth_accounts') return [];
-      if (method === 'eth_chainId') return '0x1237';
-      return null;
-    } };
-  });
+  // A wallet is installed but has never been connected to this site.
+  const wallet = await installWallet(page);
   const orderWrites = [];
   page.on('request', (request) => {
     if (request.method() !== 'GET' && /\/api\/(redeem|sim|sign)/.test(request.url())) orderWrites.push(request.url());
@@ -190,11 +191,10 @@ test('a configured hero opens My data without requesting wallet access or an ord
   await primary.click();
   await expect(page).toHaveURL(/#\/data$/);
   await expect(page.locator('#view h1')).toHaveText('My data');
-  await expect(page.locator('.data-mine')).toContainText('Connect');
-  const walletMethods = await page.evaluate(() => window.__heroWalletMethods);
-  expect(walletMethods).not.toContain('eth_requestAccounts');
-  expect(walletMethods).not.toContain('eth_sendTransaction');
-  expect(walletMethods).not.toContain('personal_sign');
+  await expect(page.locator('.data-mine')).toContainText('Connect your Solana wallet');
+  await expect(page.locator('.data-mine').getByRole('button', { name: 'Connect wallet' })).toBeEnabled();
+  // Opening My data neither prompts the wallet nor signs or sends anything.
+  expect(wallet.calls()).toEqual([]);
   expect(orderWrites).toEqual([]);
 });
 

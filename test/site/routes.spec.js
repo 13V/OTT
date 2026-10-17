@@ -17,7 +17,7 @@ const PAGES = [
   { hash: '#/', heading: 'A memecoin with a data plan.', title: 'OT+T — a memecoin with a data plan' },
   { hash: '#/data', heading: 'My data', title: 'My data — OT+T' },
   { hash: '#/status', heading: 'Everything, and whether it is running.', title: 'Status — OT+T' },
-  { hash: '#/holders', heading: 'Who holds, and what it buys them.', title: 'Holders — OT+T' },
+  { hash: '#/holders', heading: 'Who shares this week, and what it buys them.', title: 'Holders — OT+T' },
   { hash: '#/about', heading: 'Burn once. Get connected.', title: 'How this works — OT+T' },
 ];
 

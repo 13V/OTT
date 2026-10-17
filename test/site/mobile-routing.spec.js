@@ -3,6 +3,7 @@ let pwTest;
 try { pwTest = require('@playwright/test'); } catch (e) { pwTest = require('playwright/test'); }
 const { test, expect } = pwTest;
 const { stubNetwork } = require('./support/network.js');
+const { installWallet, walletAddress } = require('./support/wallet.js');
 
 // Isolate the shell contract from app screens, whose balances and redemption UI have their own
 // tests. This fixture uses the same render(view, ctx, screen) entry point as mobile-app.js.
@@ -61,9 +62,18 @@ test('app boot still provides its offline screen when network configuration is u
   await expect(page.locator('#view h1')).toHaveText('OTT app: help');
   expect(await page.evaluate(() => window.__appContext.cfg)).toEqual({});
   expect(await page.evaluate(() => window.__appContext.walletAvailable())).toBe(false);
+  // With no wallet in this browser, connecting offers to open OT+T inside a wallet app instead.
   await page.getByRole('button', { name: 'Connect in app', exact: true }).click();
-  await expect(page.locator('#toasts')).toContainText('Open OTT in your wallet browser');
+  const chooser = page.getByRole('dialog', { name: 'Open OT+T in your wallet' });
+  await expect(chooser).toBeVisible();
+  const here = encodeURIComponent(page.url());
+  const ref = encodeURIComponent(new URL(page.url()).origin);
+  await expect(chooser.getByRole('link', { name: 'Open in Phantom' })).toHaveAttribute('href', 'https://phantom.app/ul/browse/' + here + '?ref=' + ref);
+  await expect(chooser.getByRole('link', { name: 'Open in Solflare' })).toHaveAttribute('href', 'https://solflare.com/ul/v1/browse/' + here + '?ref=' + ref);
+  await chooser.getByRole('button', { name: 'Close' }).click();
+  await expect(chooser).toHaveCount(0);
   await expect(page.locator('#view h1')).toHaveText('OTT app: help');
+  await expect(page.locator('.test-app-account')).toHaveText('No wallet connected');
 
   // A website visit retains the existing configuration error rather than advertising invented
   // live figures or attempting a made-up RPC endpoint.
@@ -72,41 +82,35 @@ test('app boot still provides its offline screen when network configuration is u
   await expect(page.locator('#view')).toContainText('Could not load configuration');
 });
 
-test('app entry reads an existing wallet without prompting and refreshes after account changes', async ({ page }) => {
-  const first = '0x4ca685f4a1cd39ba0d0f1cd06b3f2b0f5b7cdd11';
-  const next = '0x1111111111111111111111111111111111111111';
+test('app entry reconnects a remembered wallet without prompting and refreshes after account changes', async ({ page }) => {
+  const first = walletAddress('holder');
+  const next = walletAddress('second account');
   await stubMobileApp(page);
-  await page.addInitScript((address) => {
-    window.__walletMethods = [];
-    window.__walletHandlers = {};
-    window.ethereum = {
-      request: async ({ method }) => {
-        window.__walletMethods.push(method);
-        if (method === 'eth_accounts') return [address];
-        if (method === 'eth_requestAccounts') return [];
-        if (method === 'eth_chainId') return '0x1237';
-        return null;
-      },
-      on: (name, callback) => { window.__walletHandlers[name] = callback; },
-    };
-  }, first);
+  // Phantom already approved this site, and the site remembers that Phantom was the wallet used.
+  const wallet = await installWallet(page, { trusted: true });
   await page.goto('/index.html#/app');
   await expect(page.locator('.test-app-account')).toHaveText(first);
-  expect(await page.evaluate(() => window.__walletMethods)).toEqual(['eth_accounts']);
+  // Only the silent reconnect: no approval prompt, no signature.
+  expect(wallet.calls()).toEqual([{ method: 'connect', silent: true }]);
   await page.evaluate(() => {
     const reset = window.WhateverData.resetWallet;
     window.__walletResets = 0;
     window.WhateverData.resetWallet = () => { window.__walletResets++; reset?.(); };
   });
-  await page.evaluate((address) => window.__walletHandlers.accountsChanged([address]), next);
+  await wallet.switchTo(page, 'second account');
   await expect(page.locator('.test-app-account')).toHaveText(next);
-  await page.evaluate(() => window.__walletHandlers.accountsChanged([]));
+  // Revoking the site's access in the wallet disconnects it here too.
+  await wallet.switchTo(page, null);
   await expect(page.locator('.test-app-account')).toHaveText('No wallet connected');
+  // Every account change forgets what the earlier account had signed.
   expect(await page.evaluate(() => window.__walletResets)).toBe(2);
-  expect(await page.evaluate(() => window.__walletMethods)).toEqual(['eth_accounts']);
+  expect(wallet.calls()).toEqual([{ method: 'connect', silent: true }]);
+  // A wallet that shares no account on an explicit connection leaves the app disconnected.
   await page.getByRole('button', { name: 'Connect in app', exact: true }).click();
+  await expect.poll(() => wallet.calls().length).toBe(2);
+  expect(wallet.calls()[1]).toEqual({ method: 'connect', silent: false });
   await expect(page.locator('.test-app-account')).toHaveText('No wallet connected');
-  expect(await page.evaluate(() => window.__walletMethods)).toEqual(['eth_accounts', 'eth_requestAccounts']);
+  expect(await page.evaluate(() => window.OTTWallet.state().connected)).toBe(false);
 });
 
 test('an unknown app screen stays in app home while an unknown website route returns to the homepage', async ({ page }) => {

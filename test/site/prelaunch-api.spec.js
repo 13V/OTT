@@ -6,11 +6,16 @@ const { spawn } = require('node:child_process');
 
 test.use({ serviceWorkers: 'block' });
 
-const ADDRESS = '0x4444444444444444444444444444444444444444';
+// A Solana wallet address (base58), and the published prelaunch config: no coin, token program,
+// treasury or incinerator account yet.
+const ADDRESS = require('./support/wallet').walletAddress();
+const PUBLISHED = require('../../site/config/esim.json');
+const CFG = { ...PUBLISHED, chain: 'solana', coin: '', tokenProgram: '', treasury: '', membership: { ...PUBLISHED.membership, burnAccount: '' } };
 const WEEK = Math.floor((Date.now() / 1000 - 345600) / 604800);
-const CFG = { ...require('../../site/config/esim.json'), coin: '', curve: '', treasury: '' };
-const ALLOWANCES = { asOf: Math.floor(Date.now() / 1000), week: WEEK, weekEnd: 345600 + (WEEK + 1) * 604800,
-  coin: '', curve: '', holders: 0, budgetUsd: 0, circulating: '0', decimals: 18, wallets: {} };
+// The prelaunch ledger, as docs/membership.md describes it.
+const ALLOWANCES = { asOf: Math.floor(Date.now() / 1000), slot: 400000000, chain: 'solana', week: WEEK,
+  weekStart: 345600 + WEEK * 604800, weekEnd: 345600 + (WEEK + 1) * 604800, coin: '', tokenProgram: '', decimals: 6, treasury: '',
+  budgetUsd: 0, budgetSource: 'the coin is not launched yet', membership: null, members: {}, joins: {}, holders: 0, memberTokens: '0', wallets: {} };
 let ledger;
 let ledgerOrigin;
 let backend;
@@ -71,7 +76,7 @@ async function useBackend(page) {
   });
   await page.route('**/config/esim.json', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(CFG) }));
   await page.route('**/config/app.json', route => route.fulfill({ contentType: 'application/json',
-    body: JSON.stringify({ walletConnect: { projectId: '' }, apiBaseUrl: apiOrigin }) }));
+    body: JSON.stringify({ apiBaseUrl: apiOrigin }) }));
 }
 
 test('the real local prelaunch API renders Status across origins and refuses browser purchase requests', async ({ page }) => {
@@ -86,7 +91,11 @@ test('the real local prelaunch API renders Status across origins and refuses bro
   const response = await statusResponse;
   expect(response.status()).toBe(200);
   expect(response.headers()['access-control-allow-origin']).toBe(frontendOrigin);
-  expect(await response.json()).toMatchObject({ config: { launched: false }, redemption: { enabled: false, ready: false } });
+  expect(await response.json()).toMatchObject({
+    config: { chain: 'solana', launched: false, coin: '', tokenProgram: '', treasury: '',
+      membership: { configured: true, burnUsd: 5, burnOwner: '1nc1nerator11111111111111111111111111111111', burnAccount: '' } },
+    redemption: { enabled: false, ready: false },
+  });
   await expect(page.locator('.status-summary')).toContainText('PRELAUNCH');
   const gate = page.locator('.status-row').filter({ has: page.locator('b', { hasText: 'Data redemption' }) });
   await expect(gate).toContainText('Prelaunch. Data redemption is disabled.');
@@ -98,10 +107,15 @@ test('the real local prelaunch API renders Status across origins and refuses bro
     const read = await fetch(apiOrigin + '/api/redeem?address=' + address, { credentials: 'omit' });
     const purchase = await fetch(apiOrigin + '/api/redeem', { method: 'POST', credentials: 'omit',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address, packageCode: 'fixture-package', n: 0 }) });
-    return { read: { status: read.status, body: await read.json() }, purchase: { status: purchase.status, body: await purchase.json() } };
+    const welcome = await fetch(apiOrigin + '/api/redeem', { method: 'POST', credentials: 'omit',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address, welcome: true, packageCode: 'fixture-package' }) });
+    return { read: { status: read.status, body: await read.json() }, purchase: { status: purchase.status, body: await purchase.json() },
+      welcome: { status: welcome.status, body: await welcome.json() } };
   }, { apiOrigin, address: ADDRESS });
   expect(result.read).toEqual({ status: 409, body: { ok: false, error: 'coin not launched yet' } });
   expect(result.purchase).toEqual({ status: 409, body: { ok: false, error: 'coin not launched yet' } });
+  // A welcome claim is refused the same way: nobody can join before the coin exists.
+  expect(result.welcome).toEqual({ status: 409, body: { ok: false, error: 'coin not launched yet' } });
   expect(errors).toEqual([]);
 });
 

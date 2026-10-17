@@ -1,10 +1,13 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { stubNetwork } = require('./support/network');
+const { installWallet, walletAddress } = require('./support/wallet');
+const { COIN, TREASURY, TOKEN_2022, INCINERATOR, BURN_ACCOUNT, signatureFrom } = require('./support/solana');
 const CFG = require('../../site/config/esim.json');
 const json = value => ({ contentType: 'application/json', body: JSON.stringify(value) });
 test.use({ serviceWorkers: 'block' });
 
+/** Help is read-only: a wallet is installed but never connected here, and nothing may touch it, storage or the API. */
 async function readOnlyFixture(page) {
   stubNetwork(page);
   const apiRequests = [];
@@ -12,7 +15,6 @@ async function readOnlyFixture(page) {
     if (new URL(request.url()).pathname.includes('/api/')) apiRequests.push(request.url());
   });
   await page.addInitScript(() => {
-    window.fixtureHelpWalletMethods = [];
     window.fixtureHelpStorageWrites = [];
     for (const name of ['setItem', 'removeItem', 'clear']) {
       const original = Storage.prototype[name];
@@ -21,17 +23,13 @@ async function readOnlyFixture(page) {
         return original.apply(this, args);
       };
     }
-    window.ethereum = { request: async ({ method }) => {
-      window.fixtureHelpWalletMethods.push(method);
-      if (method === 'eth_accounts') return [];
-      throw new Error('Help must not request a wallet action');
-    } };
   });
-  return apiRequests;
+  const wallet = await installWallet(page);
+  return { apiRequests, wallet };
 }
 
-async function checkReadOnly(page, apiRequests) {
-  expect(await page.evaluate(() => window.fixtureHelpWalletMethods)).toEqual(['eth_accounts']);
+async function checkReadOnly(page, { apiRequests, wallet }) {
+  expect(wallet.calls()).toEqual([]);
   expect(await page.evaluate(() => window.fixtureHelpStorageWrites)).toEqual([]);
   expect(apiRequests).toEqual([]);
 }
@@ -41,7 +39,7 @@ async function fitsDialog(sheet) {
 }
 
 test('offline troubleshooting gives phone-specific checks and returns keyboard focus without wallet or account activity', async ({ page }) => {
-  const apiRequests = await readOnlyFixture(page);
+  const fixture = await readOnlyFixture(page);
   await page.route('**/config/esim.json', route => route.abort());
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto('/#/app/help');
@@ -72,11 +70,11 @@ test('offline troubleshooting gives phone-specific checks and returns keyboard f
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
   await expect(source).toBeFocused();
-  await checkReadOnly(page, apiRequests);
+  await checkReadOnly(page, fixture);
 });
 
 test('package review opens compatibility guidance and preserves its selection and focus on small phones', async ({ page }) => {
-  const apiRequests = await readOnlyFixture(page);
+  const fixture = await readOnlyFixture(page);
   const pkg = CFG.packages.find(value => value.slug === 'japan' && value.gb === 10);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
@@ -110,11 +108,11 @@ test('package review opens compatibility guidance and preserves its selection an
     await expect(reviewSource).toBeFocused();
     await expect(page.getByRole('button', { name: /^10 GB,/ })).toHaveAttribute('aria-pressed', 'true');
   }
-  await checkReadOnly(page, apiRequests);
+  await checkReadOnly(page, fixture);
 });
 
 test('sample troubleshooting explains that sample eSIMs cannot connect and makes no account request', async ({ page }) => {
-  const apiRequests = await readOnlyFixture(page);
+  const fixture = await readOnlyFixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/app');
   await page.getByRole('button', { name: 'Try the app preview', exact: true }).click();
@@ -127,34 +125,32 @@ test('sample troubleshooting explains that sample eSIMs cannot connect and makes
   await fitsDialog(sheet);
   await sheet.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(page.locator('.om-preview-banner')).toContainText('No real orders.');
-  await checkReadOnly(page, apiRequests);
+  await checkReadOnly(page, fixture);
 });
 
 test('authorized setup can open troubleshooting and return to its final step without another signature or order', async ({ page }) => {
   stubNetwork(page);
-  const address = '0x4444444444444444444444444444444444444444';
+  const address = walletAddress();
   const week = Math.floor((Date.now() / 1000 - 345600) / 604800);
+  const units = '180000000000';
+  const membership = { configured: true, coin: COIN, tokenProgram: TOKEN_2022, decimals: 6, burnOwner: INCINERATOR, burnAccount: BURN_ACCOUNT,
+    burnUsd: 5, requirement: { week, burnTokens: '180000', burnUnits: units, priceUsd: 0.0000278 }, burned: units,
+    welcome: CFG.membership.welcome, capMultiple: 3, member: true, sharing: true,
+    memberSince: { at: Math.floor(Date.now() / 1000) - 86400, slot: 399000000, tx: signatureFrom('setup-help join') },
+    welcomeOrder: null, enrolment: { open: true, reason: '' } };
   const order = { n: 0, week, transactionId: 'fixture-help', packageCode: 'fixed_5GB_30D_US', priceUsd: 7.99,
     iccid: 'fixture-help-iccid', stage: 'done', pending: false, codes: false, createdAt: new Date().toISOString() };
   const posts = [];
-  await page.route('**/config/esim.json', route => route.fulfill(json({ ...CFG, coin: '0x1111111111111111111111111111111111111111',
-    curve: '0x2222222222222222222222222222222222222222', treasury: '0x3333333333333333333333333333333333333333' })));
+  await page.route('**/config/esim.json', route => route.fulfill(json({ ...CFG, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022,
+    treasury: TREASURY, membership: { ...CFG.membership, burnAccount: BURN_ACCOUNT } })));
   await page.route('**/api/redeem**', route => {
     const signed = route.request().method() === 'POST';
     if (signed) posts.push(route.request().postDataJSON());
-    return route.fulfill(json({ ok: true, address, week, weekEnd: 345600 + (week + 1) * 604800, tokens: '1234000000000000000000',
-      share: 0.01, allowanceUsd: 20, decimals: 18, redeemedUsd: 7.99, remainingUsd: 12.01, stale: false,
-      orders: [signed ? { ...order, codes: true, ac: 'LPA:1$smdp.fixture.example$FAKE-HELP-CODE' } : order], history: [], sims: [] }));
+    return route.fulfill(json({ ok: true, address, week, weekEnd: 345600 + (week + 1) * 604800, tokens: '1234000000',
+      share: 0.01, allowanceUsd: 20, decimals: 6, redeemedUsd: 7.99, remainingUsd: 12.01, stale: false, allowancesWeek: week,
+      orders: [signed ? { ...order, codes: true, ac: 'LPA:1$smdp.fixture.example$FAKE-HELP-CODE' } : order], history: [], sims: [], membership }));
   });
-  await page.addInitScript(address => {
-    window.fixtureHelpSignatures = 0;
-    window.ethereum = { request: async ({ method }) => {
-      if (method === 'eth_accounts') return [address];
-      if (method === 'eth_chainId') return '0x1237';
-      if (method === 'personal_sign') { window.fixtureHelpSignatures++; return '0xfixture-help-signature'; }
-      throw new Error('Unexpected fixture wallet request: ' + method);
-    } };
-  }, address);
+  const wallet = await installWallet(page, { trusted: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/app/esims');
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
@@ -176,5 +172,7 @@ test('authorized setup can open troubleshooting and return to its final step wit
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(posts).toHaveLength(1);
   expect(posts[0]).not.toHaveProperty('packageCode');
-  expect(await page.evaluate(() => window.fixtureHelpSignatures)).toBe(1);
+  expect(wallet.verify(posts[0].message, posts[0].signature)).toBe(true);
+  expect(wallet.calls('signMessage')).toHaveLength(1);
+  expect(wallet.calls('signAndSendTransaction')).toEqual([]);
 });
