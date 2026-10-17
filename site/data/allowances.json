@@ -1,6 +1,6 @@
 {
- "asOf": 1791764195,
- "block": 86246472,
+ "asOf": 1792245186,
+ "block": 90976368,
  "week": 2962,
  "weekStart": 1791763200,
  "weekEnd": 1792368000,
@@ -12,5 +12,7 @@
  "circulating": "0",
  "decimals": 18,
  "holders": 0,
+ "membership": null,
+ "members": {},
  "wallets": {}
 }
