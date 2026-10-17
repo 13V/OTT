@@ -1,0 +1,232 @@
+{
+ "blockTime": 1785354765,
+ "meta": {
+  "computeUnitsConsumed": 22778,
+  "costUnits": 24768,
+  "err": null,
+  "fee": 5000,
+  "innerInstructions": [
+   {
+    "index": 0,
+    "instructions": [
+     {
+      "parsed": {
+       "info": {
+        "extensionTypes": [
+         "immutableOwner"
+        ],
+        "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump"
+       },
+       "type": "getAccountDataSize"
+      },
+      "program": "spl-token",
+      "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "stackHeight": 2
+     },
+     {
+      "parsed": {
+       "info": {
+        "lamports": 2074080,
+        "newAccount": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF",
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "source": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+        "space": 170
+       },
+       "type": "createAccount"
+      },
+      "program": "system",
+      "programId": "11111111111111111111111111111111",
+      "stackHeight": 2
+     },
+     {
+      "parsed": {
+       "info": {
+        "account": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF"
+       },
+       "type": "initializeImmutableOwner"
+      },
+      "program": "spl-token",
+      "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "stackHeight": 2
+     },
+     {
+      "parsed": {
+       "info": {
+        "account": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF",
+        "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+        "owner": "1nc1nerator11111111111111111111111111111111"
+       },
+       "type": "initializeAccount3"
+      },
+      "program": "spl-token",
+      "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "stackHeight": 2
+     }
+    ]
+   }
+  ],
+  "postBalances": [
+   5842840,
+   2074080,
+   2074080,
+   1,
+   0,
+   3388605256,
+   3786240,
+   70128637
+  ],
+  "postTokenBalances": [
+   {
+    "accountIndex": 1,
+    "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+    "owner": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+    "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "uiTokenAmount": {
+     "amount": "8560",
+     "decimals": 6,
+     "uiAmount": 0.00856,
+     "uiAmountString": "0.00856"
+    }
+   },
+   {
+    "accountIndex": 2,
+    "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+    "owner": "1nc1nerator11111111111111111111111111111111",
+    "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "uiTokenAmount": {
+     "amount": "64194000000",
+     "decimals": 6,
+     "uiAmount": 64194,
+     "uiAmountString": "64194"
+    }
+   }
+  ],
+  "preBalances": [
+   7921920,
+   2074080,
+   0,
+   1,
+   0,
+   3388605256,
+   3786240,
+   70128637
+  ],
+  "preTokenBalances": [
+   {
+    "accountIndex": 1,
+    "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+    "owner": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+    "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "uiTokenAmount": {
+     "amount": "64194008560",
+     "decimals": 6,
+     "uiAmount": 64194.00856,
+     "uiAmountString": "64194.00856"
+    }
+   }
+  ],
+  "rewards": [],
+  "status": {
+   "Ok": null
+  }
+ },
+ "slot": 436010238,
+ "transaction": {
+  "message": {
+   "accountKeys": [
+    {
+     "pubkey": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+     "signer": true,
+     "source": "transaction",
+     "writable": true
+    },
+    {
+     "pubkey": "DyK5diJGfHrdE2DcwJimxG5brSJoEDMbpdG83JeB3rAT",
+     "signer": false,
+     "source": "transaction",
+     "writable": true
+    },
+    {
+     "pubkey": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF",
+     "signer": false,
+     "source": "transaction",
+     "writable": true
+    },
+    {
+     "pubkey": "11111111111111111111111111111111",
+     "signer": false,
+     "source": "transaction",
+     "writable": false
+    },
+    {
+     "pubkey": "1nc1nerator11111111111111111111111111111111",
+     "signer": false,
+     "source": "transaction",
+     "writable": false
+    },
+    {
+     "pubkey": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+     "signer": false,
+     "source": "transaction",
+     "writable": false
+    },
+    {
+     "pubkey": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+     "signer": false,
+     "source": "transaction",
+     "writable": false
+    },
+    {
+     "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "signer": false,
+     "source": "transaction",
+     "writable": false
+    }
+   ],
+   "instructions": [
+    {
+     "parsed": {
+      "info": {
+       "account": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF",
+       "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+       "source": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+       "systemProgram": "11111111111111111111111111111111",
+       "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "wallet": "1nc1nerator11111111111111111111111111111111"
+      },
+      "type": "createIdempotent"
+     },
+     "program": "spl-associated-token-account",
+     "programId": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+     "stackHeight": 1
+    },
+    {
+     "parsed": {
+      "info": {
+       "authority": "GWUESs5wHvAqLR9gNLS6G4BKPqnCZ2iCe91o311EqMpR",
+       "destination": "HzCqVi2hcNUgDhrPGc8VMY9EEaEVRTgArrEHgSk6VocF",
+       "mint": "FNk5o1McVyZT8nEw5uBkEvVtRPvsnqrP7jQC9K7Qpump",
+       "source": "DyK5diJGfHrdE2DcwJimxG5brSJoEDMbpdG83JeB3rAT",
+       "tokenAmount": {
+        "amount": "64194000000",
+        "decimals": 6,
+        "uiAmount": 64194,
+        "uiAmountString": "64194"
+       }
+      },
+      "type": "transferChecked"
+     },
+     "program": "spl-token",
+     "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "stackHeight": 1
+    }
+   ],
+   "recentBlockhash": "D6ndzDmgY6nPU5pSK1BefnEiDxCR3SRRjZmS8mUYLrMd"
+  },
+  "signatures": [
+   "4KSCFBZaucsQJVZEVLACAGrFAdZKYoezUrQegSAVLje2VstfBuSwAmw9tAZsWHUnLETv534UWrzpBrCJQTeQD97T"
+  ]
+ },
+ "transactionIndex": 1265,
+ "version": "legacy"
+}

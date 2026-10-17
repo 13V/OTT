@@ -1,0 +1,132 @@
+{
+ "note": "Real mainnet accounts read on 2026-10-17, for offline tests of the pump.fun readers.",
+ "curveCoin": {
+  "mint": "5BeGsXbyNPF8FmN6eUojqzEVVVf4G84Y7fDJcv1Qpump",
+  "mintAccount": {
+   "data": [
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACNSf0aBwAGAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARIAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4os4Q2r3k3D8C8GOgGRHT7gBnSxu6CWWhpeuP8kyr/EwCkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPiizhDaveTcPwLwY6AZEdPuAGdLG7oJZaGl64/yTKv8LAAAAZGVhdGggcmlkZXIGAAAAUkVBUEVSQwAAAGh0dHBzOi8vaXBmcy5pby9pcGZzL1FtZUJ0UlRwN3o0dVJKelhTS2IxVVBOUmJhdUVFVXhOR1R3OXFVelFLWDZMcWIAAAAA",
+    "base64"
+   ],
+   "executable": false,
+   "lamports": 2692400,
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "rentEpoch": 18446744073709552000,
+   "space": 402
+  },
+  "curve": "AY8vEr1PyWLttnebBhutsuWuRqS9JRBLmhHYE6uFa47W",
+  "curveAccount": {
+   "data": [
+    "F7f4N2DYrGAPpWqou4UCAFSfgAIAAAAADw1YXCqHAQD2D1MAAAAAAACAxqR+jQMAAAW8Sm4CeG0kS7ZCuqiMz93kANX1mkoL8vzQ81lzWMd4AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACsI/wGAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "base64"
+   ],
+   "executable": false,
+   "lamports": 6937094,
+   "owner": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+   "rentEpoch": 18446744073709552000,
+   "space": 166
+  }
+ },
+ "graduatedCoin": {
+  "mint": "GetLnVcK3csLW6aTb5mBTHaw9V4vN3fx9oMWQrQxpump",
+  "mintAccount": {
+   "data": [
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAnBMnvzd+AwAGAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARIAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOiT2Gy4gqU1BMZ2VYokjZkr9zFfCtqHyzCxpzVrEvNfEwCvAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6JPYbLiCpTUExnZViiSNmSv3MV8K2ofLMLGnNWsS818KAAAARGVnZW4gQ29pbgUAAABERUdFTlAAAABodHRwczovL2lwZnMuaW8vaXBmcy9iYWZrcmVpYmJla2R2cXk1c25yNnp2cW4yeTVrZTdhdWpzcjc3Nm0yZzVidHZ2dmwza2lza2xoa25xYQAAAAA=",
+    "base64"
+   ],
+   "executable": false,
+   "lamports": 2748280,
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "rentEpoch": 18446744073709552000,
+   "space": 413
+  },
+  "curve": "Gu2Jb2ZwTKSRXoHJSrbGqvPDZZ3aPMnzDGUHHzQAnojf",
+  "curveAccount": {
+   "data": [
+    "F7f4N2DYrGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAxqR+jQMAAZzuLCyduThEhoR4sO/SimzPzZhL4qqnhdS38vDcvylbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACsI/wGAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "base64"
+   ],
+   "executable": false,
+   "lamports": 1493520,
+   "owner": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+   "rentEpoch": 18446744073709552000,
+   "space": 166
+  },
+  "pool": "FVWfAEANVt2VzCShusFRfNKu3negBLgAj8gky6tpoRne",
+  "poolAccount": {
+   "data": [
+    "8ZptBBGxbbz+AABcETXHd9BD1+Ry+WDiknUHXdzoVakv8Ubh9Q/pRsKNwuiT2Gy4gqU1BMZ2VYokjZkr9zFfCtqHyzCxpzVrEvNfBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEucPhlwfKIk8OFS6wzoj8Q2t7kBZxaEWX0RyDzp+v+94OGeHbfoooTMuJkbuXcLQktYGRlkvaCkwEIvx3cdpbwCgGXdw8x2J+G6Z54oLlHgFtzmIBfzgmR3if2Ncr40Kk2Q2tZ0AMAAJzuLCyduThEhoR4sO/SimzPzZhL4qqnhdS38vDcvylbAADD/WQXBAAAAAAAAAAAAAAAAAAAAAAAAAAAAKrABAAAAAAAXIO0AAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "base64"
+   ],
+   "executable": false,
+   "lamports": 2179320,
+   "owner": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+   "rentEpoch": 18446744073709552000,
+   "space": 301
+  },
+  "baseVault": "9rRLRTFHQixww2SpKQoRpgi62WkHHUM3nwC4ob9jrbwd",
+  "baseVaultAccount": {
+   "data": {
+    "parsed": {
+     "info": {
+      "extensions": [
+       {
+        "extension": "immutableOwner"
+       }
+      ],
+      "isNative": false,
+      "mint": "GetLnVcK3csLW6aTb5mBTHaw9V4vN3fx9oMWQrQxpump",
+      "owner": "FVWfAEANVt2VzCShusFRfNKu3negBLgAj8gky6tpoRne",
+      "state": "initialized",
+      "tokenAmount": {
+       "amount": "124592866965434",
+       "decimals": 6,
+       "uiAmount": 124592866.965434,
+       "uiAmountString": "124592866.965434"
+      }
+     },
+     "type": "account"
+    },
+    "program": "spl-token-2022",
+    "space": 170
+   },
+   "executable": false,
+   "lamports": 1513840,
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "rentEpoch": 18446744073709552000,
+   "space": 170
+  },
+  "quoteVault": "g4V7N4smPN21fGDhojMdLxv4dgVMjuCRAuKYMjQywhJ",
+  "quoteVaultAccount": {
+   "data": {
+    "parsed": {
+     "info": {
+      "isNative": true,
+      "mint": "So11111111111111111111111111111111111111112",
+      "owner": "FVWfAEANVt2VzCShusFRfNKu3negBLgAj8gky6tpoRne",
+      "rentExemptReserve": {
+       "amount": "1488440",
+       "decimals": 9,
+       "uiAmount": 0.00148844,
+       "uiAmountString": "0.00148844"
+      },
+      "state": "initialized",
+      "tokenAmount": {
+       "amount": "133200879633",
+       "decimals": 9,
+       "uiAmount": 133.200879633,
+       "uiAmountString": "133.200879633"
+      }
+     },
+     "type": "account"
+    },
+    "program": "spl-token",
+    "space": 165
+   },
+   "executable": false,
+   "lamports": 133202368073,
+   "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+   "rentEpoch": 18446744073709552000,
+   "space": 165
+  }
+ }
+}

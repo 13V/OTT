@@ -66,5 +66,35 @@ if (addrFiles.every((f) => fs.existsSync(f))) {
   problems.push(`one of ${ADDR_PAIR.join(' / ')} is missing; both are meant to exist`);
 }
 
-if (problems.length) { problems.forEach((p) => console.error('  ' + p)); console.error(`lint: ${problems.length} problem(s)`); process.exit(1); }
-console.log(`lint: ${checked} file(s) OK (syntax and config JSON only — no style rules, no new dependency)`);
+// The launch addresses in site/config/esim.json are filled in by hand on launch day, and a typo
+// in one of them sends members' OTT or the treasury's fees somewhere nobody can reach. Each must
+// be a Solana address (or still empty), and burnAccount must be exactly the incinerator's
+// associated account for the coin, re-derived here.
+async function launchConfigProblems() {
+  const S = require(path.join(root, 'site', 'solana.js'));
+  let esim;
+  try { esim = JSON.parse(fs.readFileSync(path.join(root, 'site', 'config', 'esim.json'), 'utf8')); } catch (e) { return []; }
+  const out = [];
+  if (esim.chain !== 'solana') out.push('site/config/esim.json: "chain" must be "solana"');
+  const m = esim.membership || {};
+  const fields = { coin: esim.coin, tokenProgram: esim.tokenProgram, treasury: esim.treasury, 'membership.burnAccount': m.burnAccount };
+  for (const [name, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== '' && !S.isAddress(value)) out.push(`site/config/esim.json: ${name} is not a Solana address`);
+  }
+  if (esim.tokenProgram && !S.TOKEN_PROGRAMS.includes(esim.tokenProgram)) out.push('site/config/esim.json: tokenProgram must be the Token or Token-2022 program');
+  if (m.burnOwner !== undefined && m.burnOwner !== S.INCINERATOR) out.push('site/config/esim.json: membership.burnOwner must be the incinerator, ' + S.INCINERATOR);
+  const filled = Object.values(fields).filter((v) => v);
+  if (filled.length && filled.length < Object.keys(fields).length) out.push('site/config/esim.json: coin, tokenProgram, treasury and membership.burnAccount go in together; some are still empty');
+  if (!out.length && S.isAddress(esim.coin) && S.TOKEN_PROGRAMS.includes(esim.tokenProgram) && m.burnAccount) {
+    const want = await S.associatedTokenAddress(S.INCINERATOR, esim.coin, esim.tokenProgram);
+    if (m.burnAccount !== want) out.push(`site/config/esim.json: membership.burnAccount must be the incinerator's account for the coin, ${want}`);
+  }
+  return out;
+}
+
+launchConfigProblems().then((more) => {
+  problems.push(...more);
+  if (!more.length) checked++;
+  if (problems.length) { problems.forEach((p) => console.error('  ' + p)); console.error(`lint: ${problems.length} problem(s)`); process.exit(1); }
+  console.log(`lint: ${checked} file(s) OK (syntax, config JSON and launch addresses — no style rules, no new dependency)`);
+}).catch((e) => { console.error('lint: the launch config check failed: ' + e.message); process.exit(1); });

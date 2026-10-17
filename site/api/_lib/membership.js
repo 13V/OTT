@@ -1,24 +1,27 @@
 'use strict';
 /**
- * membership — the rules of OT+T membership, in one place for the weekly indexer
+ * membership — the rules of OT+T membership on Solana, in one place for the weekly ledger
  * (scripts/allowances.js) and the API (site/api/redeem.js). docs/membership.md explains them.
  *
- *   - A wallet joins by burning at least `burnTokens` OTT: a Transfer from it to the burn address,
- *     or to the zero address for a token whose burn() emits one. Burns from one wallet add up.
+ *   - A wallet joins by sending OTT to the incinerator's token account (`burnAccount`). The amount
+ *     is about `burnUsd` dollars of OTT, set once a week from the coin's price (burnTokensFor()).
+ *     Sends from one wallet add up; a send is judged against the amount of the week it landed in
+ *     (requirementFor()).
  *   - Each member can claim one welcome eSIM from the plans welcomeEligible() accepts.
  *   - Each week's member budget is split by holdings among the members at the snapshot, with no
  *     member above `capMultiple` times the average (cappedShares()).
  *
- * Everything here is pure: logs, receipts and numbers in, decisions out.
+ * Everything here is pure: transactions and numbers in, decisions out.
  */
-const { keccak256Hex } = require('./keccak');
+const S = require('../../solana.js');
+const { weekOf, weekStart } = require('./week');
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-const TRANSFER_TOPIC = keccak256Hex('Transfer(address,address,uint256)');
+// A send in the first ten minutes of a week may use the previous week's amount if it is lower:
+// a holder who signed just before Monday must not be caught out by the new figure.
+const GRACE_S = 10 * 60;
+// The app refuses a join amount above this share of the supply, whatever the API says.
+const MAX_BURN_SHARE_BPS = 200;
 
-const lower = (value) => String(value || '').toLowerCase();
-const isAddress = (value) => /^0x[0-9a-fA-F]{40}$/.test(String(value || ''));
-const unpad = (word) => '0x' + String(word || '').slice(-40).toLowerCase();
 // Dollar shares are rounded DOWN to a hundredth of a cent, so the shares can never add up to more
 // than the budget and no rounded share can creep above the cap.
 const floor4 = (n) => Math.floor(n * 1e4 + 1e-6) / 1e4;
@@ -26,18 +29,19 @@ const round4 = (n) => Math.round(n * 1e4) / 1e4;
 
 /**
  * The validated membership settings from esim.json, or null when the config has none. A block
- * that is present but wrong throws, because guessing at a burn amount or a cap would quietly
- * change who gets what.
+ * that is present but wrong throws, because guessing at an amount, a destination or a cap would
+ * quietly change who gets what. `burnAccount` may be empty before launch.
  */
 function membershipConfig(config) {
   const m = config && config.membership;
   if (m === undefined || m === null) return null;
   const bad = (what) => { throw new Error('esim.json membership needs ' + what); };
   if (typeof m !== 'object' || Array.isArray(m)) bad('to be an object');
-  // A string, never a JSON number: large token amounts lose precision as floats.
-  const burnTokens = m.burnTokens;
-  if (typeof burnTokens !== 'string' || !/^\d+(\.\d+)?$/.test(burnTokens) || !/[1-9]/.test(burnTokens)) bad('a positive burnTokens amount, written as a string');
-  if (!isAddress(m.burnAddress) || /^0x0{40}$/.test(m.burnAddress)) bad('a non-zero burnAddress');
+  const burnUsd = Number(m.burnUsd);
+  if (typeof m.burnUsd !== 'number' || !(burnUsd > 0) || burnUsd > 1000) bad('a burnUsd above 0 and at most 1000 dollars');
+  if (m.burnOwner !== S.INCINERATOR) bad('burnOwner to be the incinerator, ' + S.INCINERATOR);
+  const burnAccount = m.burnAccount === undefined || m.burnAccount === null ? '' : m.burnAccount;
+  if (burnAccount !== '' && !S.isAddress(burnAccount)) bad('a burnAccount that is a Solana address, or empty before launch');
   const capMultiple = Number(m.capMultiple);
   if (!Number.isFinite(capMultiple) || capMultiple < 1) bad('a capMultiple of at least 1');
   const w = m.welcome || {};
@@ -45,54 +49,109 @@ function membershipConfig(config) {
   if (!(welcome.gb > 0) || !Number.isSafeInteger(welcome.days) || welcome.days <= 0 || !(welcome.maxUsd > 0)) {
     bad('a welcome plan with positive gb, whole days and maxUsd');
   }
-  const burnAddress = lower(m.burnAddress);
-  return { burnTokens, burnAddress, destinations: [burnAddress, ZERO_ADDRESS], capMultiple, welcome };
+  return { burnUsd, burnOwner: S.INCINERATOR, burnAccount, capMultiple, welcome };
 }
-
-/** A decimal token amount ("100000", "0.5") in the token's base units, exactly. */
-function unitsOf(tokens, decimals) {
-  const d = Number(decimals);
-  if (!Number.isSafeInteger(d) || d < 0 || d > 36) throw new Error('token decimals must be a whole number from 0 to 36');
-  const [whole, fraction = ''] = String(tokens).split('.');
-  if (!/^\d+$/.test(whole) || !/^\d*$/.test(fraction)) throw new Error('not a token amount: ' + tokens);
-  if (fraction.replace(/0+$/, '').length > d) throw new Error(tokens + ' has more decimal places than the token');
-  return BigInt(whole) * 10n ** BigInt(d) + BigInt((fraction + '0'.repeat(d)).slice(0, d) || '0');
-}
-
-const blockOf = (log) => Number(BigInt(log.blockNumber));
-const indexOf = (log) => (log.logIndex === undefined || log.logIndex === null ? 0 : Number(BigInt(log.logIndex)));
 
 /**
- * Every wallet's running total of OTT sent to a burn destination, from the coin's Transfer logs.
- * When `threshold` is given, each entry also records the burn that first took the wallet to it:
- * that log's block and transaction. Logs are taken in chain order whatever order they arrive in.
+ * Whole tokens worth `burnUsd` at `priceUsd` a token, rounded UP to two significant figures:
+ * $5 at $0.0000029 is 1,724,138 tokens, published as 1,800,000. Rounding up keeps the amount at
+ * or above the dollar figure, and two figures keep it readable.
  */
-function foldBurns(logs, destinations, threshold = null) {
-  const to = new Set(destinations.map(lower));
-  const ordered = logs.filter((log) => log && Array.isArray(log.topics) && log.topics.length >= 3 && !log.removed
-    && lower(log.topics[0]) === TRANSFER_TOPIC && to.has(unpad(log.topics[2])))
-    .slice().sort((a, b) => blockOf(a) - blockOf(b) || indexOf(a) - indexOf(b));
-  const burns = new Map();
-  for (const log of ordered) {
-    const from = unpad(log.topics[1]);
-    if (from === ZERO_ADDRESS || to.has(from)) continue;
-    const entry = burns.get(from) || { burned: 0n, sinceBlock: null, tx: null };
-    const before = entry.burned;
-    entry.burned = before + BigInt(log.data);
-    if (threshold !== null && before < threshold && entry.burned >= threshold) {
-      entry.sinceBlock = blockOf(log);
-      entry.tx = lower(log.transactionHash) || null;
-    }
-    burns.set(from, entry);
-  }
-  return burns;
+function burnTokensFor(burnUsd, priceUsd) {
+  const raw = Number(burnUsd) / Number(priceUsd);
+  if (!Number.isFinite(raw) || !(raw > 0)) throw new Error('the join amount needs a positive price');
+  const whole = Math.ceil(raw - 1e-9);
+  if (whole <= 99) return String(Math.max(1, whole));
+  const scale = 10 ** (String(whole).length - 2);
+  return String(Math.ceil(raw / scale - 1e-9) * scale);
 }
 
-/** The members among folded burns: every wallet whose total reached `threshold`. */
-function membersFrom(burns, threshold) {
-  const members = new Map();
-  for (const [address, entry] of burns) if (entry.burned >= threshold) members.set(address, entry);
-  return members;
+/** A week's amount in base units from a `requirements` map, or null. */
+function weekAmount(requirements, week) {
+  const raw = requirements && requirements[String(week)];
+  if (typeof raw !== 'string' || !/^\d{1,40}$/.test(raw)) return null;
+  const units = BigInt(raw);
+  return units > 0n ? units : null;
+}
+
+/**
+ * The amount a send that landed at `at` (unix seconds) must reach: its week's amount, or in the
+ * first GRACE_S of a week the lower of that and the previous week's. null when its week has no
+ * amount yet, which means the send cannot be judged until the keeper prices that week.
+ */
+function requirementFor(requirements, at) {
+  const t = Number(at);
+  if (!Number.isFinite(t)) return null;
+  const week = weekOf(t);
+  const own = weekAmount(requirements, week);
+  if (own === null) return null;
+  if (t - weekStart(week) < GRACE_S) {
+    const previous = weekAmount(requirements, week - 1);
+    if (previous !== null && previous < own) return previous;
+  }
+  return own;
+}
+
+/** An ordinary wallet: a canonical address that is a point on the ed25519 curve, so not a program account. */
+function isWallet(address) {
+  const bytes = S.addressBytes(address);
+  return !!bytes && S.isOnCurve(bytes);
+}
+
+/**
+ * What one transaction did for membership: null when it moved no OTT into `burnAccount`;
+ * { skip: reason } when it did but no single wallet can be credited; otherwise
+ * { wallet, amount, tx, slot, at } with `amount` the OTT (base units) the incinerator's account
+ * gained. `exclude` lists wallets that are never members (the treasury).
+ */
+function joinFromTransaction(tx, { coin, burnAccount, exclude = [] }) {
+  if (!tx || !S.succeeded(tx) || !coin || !burnAccount) return null;
+  const changes = S.tokenChanges(tx, coin);
+  const dest = changes.find((c) => c.account === burnAccount);
+  if (!dest || dest.post <= dest.pre) return null;
+  const amount = dest.post - dest.pre;
+  const meta = {
+    tx: (tx.transaction && Array.isArray(tx.transaction.signatures) && tx.transaction.signatures[0]) || null,
+    slot: Number(tx.slot), at: Number(tx.blockTime),
+  };
+  const owners = [...new Set(changes.filter((c) => c.account !== burnAccount && c.post < c.pre).map((c) => c.owner))];
+  if (owners.length !== 1 || !owners[0]) return Object.assign({ skip: owners.length ? 'several senders' : 'no sender', amount }, meta);
+  const wallet = owners[0];
+  if (!isWallet(wallet)) return Object.assign({ skip: 'the sender is not an ordinary wallet', wallet, amount }, meta);
+  if (exclude.includes(wallet)) return Object.assign({ skip: 'the sender is a project wallet', wallet, amount }, meta);
+  return Object.assign({ wallet, amount }, meta);
+}
+
+/**
+ * Fold joins, in chain order, into the ledger's `members` and `joins` maps (copies are returned;
+ * the inputs are not changed). A wallet becomes a member at the first send that takes its running
+ * total to the amount for that send's week. Folding stops at the first send whose week has no
+ * amount yet; `stoppedAt` is its index (or the length of `events` when every send was folded),
+ * so the caller's cursor never moves past a send that was not judged.
+ */
+function foldJoins({ members = {}, joins = {} }, events, requirements) {
+  const outMembers = {};
+  for (const [wallet, row] of Object.entries(members)) outMembers[wallet] = Object.assign({}, row);
+  const outJoins = {};
+  for (const [wallet, row] of Object.entries(joins)) outJoins[wallet] = Object.assign({}, row);
+  let stoppedAt = events.length;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const amount = BigInt(e.amount);
+    const member = outMembers[e.wallet];
+    if (member) { member.burned = (BigInt(member.burned) + amount).toString(); continue; }
+    const need = requirementFor(requirements, e.at);
+    if (need === null) { stoppedAt = i; break; }
+    const total = BigInt((outJoins[e.wallet] && outJoins[e.wallet].burned) || '0') + amount;
+    const at = { at: e.at, slot: e.slot, tx: e.tx };
+    if (total >= need) {
+      outMembers[e.wallet] = { burned: total.toString(), since: at };
+      delete outJoins[e.wallet];
+    } else {
+      outJoins[e.wallet] = { burned: total.toString(), last: at };
+    }
+  }
+  return { members: outMembers, joins: outJoins, stoppedAt };
 }
 
 /**
@@ -145,23 +204,7 @@ function welcomeEligible(pkg, welcome) {
     && Number.isFinite(price) && price > 0 && price <= Number(welcome.maxUsd) + 1e-9;
 }
 
-/**
- * How much of `coin` one transaction receipt shows `address` burning: the sum of its Transfer
- * logs from that wallet to a burn destination. 0n for a failed, missing or unrelated receipt.
- */
-function burnedInReceipt(receipt, { coin, address, destinations }) {
-  if (!receipt || typeof receipt !== 'object' || lower(receipt.status) !== '0x1' || !Array.isArray(receipt.logs)) return 0n;
-  const to = new Set(destinations.map(lower));
-  let burned = 0n;
-  for (const log of receipt.logs) {
-    if (!log || log.removed || lower(log.address) !== lower(coin) || !Array.isArray(log.topics) || log.topics.length < 3) continue;
-    if (lower(log.topics[0]) !== TRANSFER_TOPIC || unpad(log.topics[1]) !== lower(address) || !to.has(unpad(log.topics[2]))) continue;
-    try { burned += BigInt(log.data); } catch (e) { /* not an amount: not a burn */ }
-  }
-  return burned;
-}
-
 module.exports = {
-  ZERO_ADDRESS, TRANSFER_TOPIC, membershipConfig, unitsOf, foldBurns, membersFrom, cappedShares,
-  welcomeEligible, burnedInReceipt, floor4,
+  GRACE_S, MAX_BURN_SHARE_BPS, membershipConfig, burnTokensFor, weekAmount, requirementFor, isWallet,
+  joinFromTransaction, foldJoins, cappedShares, welcomeEligible, unitsOf: S.unitsOf, floor4, round4,
 };
