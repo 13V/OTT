@@ -4,14 +4,15 @@ The homepage, About page, app prelaunch introduction and sample account describe
 model: a one-time OTT burn enrols a member and includes their first eSIM, and collected trading
 fees then fund ongoing member data, with no further burn for each package.
 
-On 17 October 2026 the operator settled the open terms, and the backend now implements them. The
+On 17 October 2026 the operator settled the open terms, and moved the launch to pump.fun on Solana the same day. The backend implements both. The
 rules and the data contract are in [membership.md](membership.md):
 
-- **Burn:** 100,000 OTT, sent straight to the burn address. There is no escrow, so a burn can't
-  be refunded. The app offers the burn only while the reserve can pay for a welcome eSIM.
+- **Burn:** about $5 of OTT, sent to Solana's incinerator, which nobody holds the key to, so a
+  burn can't be refunded. The amount in OTT is set each Monday from the coin's price. The app
+  offers the burn only while the reserve can pay for a welcome eSIM.
 - **First eSIM:** any 1 GB, 7-day plan costing $4 or less.
-- **Ongoing data:** 80% of each week's tax, split among members by holdings, with no member above
-  3× the average share.
+- **Ongoing data:** 80% of the pump.fun creator fees collected each week, split among members by
+  holdings, with no member above 3× the average share.
 - **Membership:** one per wallet, and it doesn't expire.
 
 The earlier calculator illustrated an equal split: daily fees × 7 × data allocation ÷ enrolled

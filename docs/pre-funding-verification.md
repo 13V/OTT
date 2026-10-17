@@ -3,15 +3,16 @@
 Verified locally on 6 October 2026. This prepares the app for a limited operator
 test; it does not certify live purchases, phone connectivity or token launch.
 
-Phantom [Solana sign-in](solana-login.md) is also implemented. It verifies wallet
-ownership with a one-time message and keeps Solana identity separate from EVM
-holder credit, redemption and the operator funding route.
+> **17 October 2026: the launch moved to pump.fun on Solana.** The app, the API and the keepers
+> now use Solana wallets, Solana transactions and pump.fun's creator fees; the Robinhood Chain
+> wallet, WalletConnect, the separate Phantom sign-in and the Solana-to-EVM wallet link are
+> removed. The payment-recovery, privacy and storage findings below are unchanged, because the
+> supplier, Lightning and Redis side didn't change. "Remaining before public launch" at the end
+> is current.
 
 The [holder experience](holder-experience.md) adds confirmed-credit plan matching,
 saved catalogue destinations and explicit repeat-destination package review.
-Solana users can link one Robinhood Chain holder wallet with fresh proofs from
-both wallets. This permits public credit display only; it creates no allocation
-or payment authority. Redemptions remain disabled in production.
+Redemptions remain disabled in production.
 
 ## App and installation flow
 
@@ -198,13 +199,15 @@ Follow [the operator guide](operator-phone-test.md). Keep public
 ## Remaining before public launch
 
 The [customer account audit](customer-account-audit.md) records the live visitor
-walkthrough, cryptographically signed local API journey, account-race fixes,
-body limits, signature timing and remaining real-wallet verification.
+walkthrough, the signed local API journey, account-race fixes, body limits and
+signature timing.
 
-Token, curve and treasury addresses are still blank. Allocation now follows the
-membership rules in [membership.md](membership.md): members are wallets that burned
-100,000 OTT, and they share 80% of each week's tax by holdings, capped at 3× the
-average. The earlier proposals for a $50 entry allowance and a 40 GB weekly maximum
-are not implemented and must not be advertised. Launch also needs a current funded
-allocation ledger and a reviewed operating policy before the public purchase gate
-can be enabled.
+The coin is not created yet, so the four launch fields in `site/config/esim.json`
+(`coin`, `tokenProgram`, `treasury` and `membership.burnAccount`) are still blank.
+Allocation follows the membership rules in [membership.md](membership.md): members
+are wallets that burned about $5 of OTT (the amount in OTT is set each Monday from
+the price), and they share 80% of the creator fees collected each week by holdings,
+capped at 3× the average. The earlier proposals for a $50 entry allowance and a
+40 GB weekly maximum are not implemented and must not be advertised. Launch also
+needs a current funded allocation ledger, a confirmed FixedFloat code for native
+SOL, and a reviewed operating policy before the public purchase gate can be enabled.

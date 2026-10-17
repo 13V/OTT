@@ -1,23 +1,29 @@
 # OT+T
 
 OT+T (Onchain Telephone + Telegraph, ticker OTT) is a prelaunch project that turns token trading
-fees into mobile-data credit for members. The planned token uses Pons on Robinhood Chain
-(chain id 4663) with a 10% creator tax. A wallet joins by burning 100,000 OTT, which also earns it
-a welcome eSIM: any 1 GB, 7-day plan up to $4. Each week, 80% of the previous week's tax is split
-among members by how much OTT they hold, with no member above 3× the average share. The rest
-stays in the pool as a reserve for welcome eSIMs and fees. Members use that credit for eSIM
-packages at home or abroad. The verified catalogue currently includes 84 packages across 28
-countries and regions. [docs/membership.md](docs/membership.md) sets out the rules and the data
-contract.
+fees into mobile-data credit for members. The coin will launch on [pump.fun](https://pump.fun) on
+Solana, paired with SOL. pump.fun pays the coin's creator a fee on every trade: 0.30% while the
+coin is on its bonding curve, then, after it graduates to PumpSwap, 0.95% at 420–1,470 SOL market
+cap, falling to 0.05% for the largest coins. OT+T's treasury is that creator.
 
-**Current status:** OTT has not launched. The public app offers a sample account and phone setup
-guidance; weekly holder credit and real eSIM redemption are unavailable. Production purchases
-remain disabled during setup. See [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
-for the remaining hosting, storage and mobile wallet configuration.
+A wallet joins by burning about $5 of OTT once, which also earns it a welcome eSIM: any 1 GB,
+7-day plan up to $4. The burn is a transfer to Solana's incinerator, which nobody holds the key
+to, and the amount in OTT is set each Monday from the coin's price. Each week, 80% of the creator
+fees collected the week before is split among members by how much OTT they hold at the Monday
+snapshot, with no member above 3× the average share. The rest stays in the pool as a reserve for
+welcome eSIMs and fees. Members use that credit for eSIM packages at home or abroad. The verified
+catalogue currently includes 84 packages across 28 countries and regions.
+[docs/membership.md](docs/membership.md) sets out the rules and the data contract.
+
+**Current status:** OTT has not launched. The site, the API and the keepers are built for
+pump.fun on Solana; the coin is created on launch day, and then four addresses go into
+`site/config/esim.json` (see [To turn it on](#to-turn-it-on)). The public app offers a sample
+account and phone setup guidance; weekly holder credit and real eSIM redemption are unavailable,
+and production purchases stay disabled until launch (`REDEMPTIONS_ENABLED=0`).
 
 The allowance expires at the end of the week. That is not meanness, it is what makes the promise
-affordable: the pool never owes more than one week of tax it has already collected, so there is no
-accruing claim on a treasury funded by a tax that may stop.
+affordable: the pool never owes more than one week of fees it has already collected, so there is
+no accruing claim on a treasury funded by trading that may stop.
 
 The name is built the way AT&T's was: a formal corporate name, Onchain Telephone + Telegraph, worn
 down to the initialism people actually say — the same way American Telephone and Telegraph wore
@@ -26,44 +32,56 @@ a ticker has no room for.
 
 ## How a trade becomes data
 
-Pons takes the coin's creator tax — 10% — on every buy and sell against its bonding curve, and holds
-it in a fee escrow until somebody claims it. `scripts/claim.js` does that once a day
-(`.github/workflows/claim.yml`), sweeping the escrow into a treasury wallet that holds nothing else.
-That is what makes it safe to keep the treasury's key as a repository secret: the daily sweep is also
-what keeps the escrow from ever holding more than a day's tax.
+pump.fun keeps the creator fee on the bonding curve, and after graduation in the PumpSwap pool,
+until someone pays it out. Paying out is permissionless and can only ever pay the creator.
+`scripts/claim.js` does it once a day (`.github/workflows/claim.yml`): one transaction sweeps
+whatever is waiting and pays it to the treasury, a wallet that holds nothing but fee income. That
+is what makes it acceptable to keep the treasury's key as a repository secret, and the daily
+collection is what keeps more than a day's fees from waiting. The transaction is simulated before
+it is sent, and `--rehearse <mint>` builds the same transaction for any live pump.fun coin and
+simulates it unsigned, which is how the account lists were checked before OTT existed.
 
-Straight after, `scripts/fund.js` moves what just landed into the wallet wholesale is actually paid
-from, over three hops, each with an API: a Blink invoice for the sats to receive; a FixedFloat
-fixed-rate order, USDC (Base) → BTC (Lightning), that pays it; and an Across deposit of the
-treasury's USDG on Robinhood Chain, filled as exactly that USDC on Base and delivered straight to
-FixedFloat's address — no wallet on Base, no gas spent there. Every quote is checked against Blink's
-own BTC price before anything moves, and the deposit is simulated before it is sent.
+Straight after, `scripts/fund.js` moves what just landed into the Lightning wallet wholesale is
+paid from: a Blink invoice for the sats to receive, then a FixedFloat fixed-rate order, SOL → BTC
+(Lightning), that pays it. FixedFloat answers with the SOL to send and a one-off deposit address,
+and the treasury sends exactly that in one plain transfer. The quote is checked against Blink's own
+BTC price and SOL's market price before anything moves, the order is checked against the quote,
+and the transfer is simulated before it is sent.
 
-Meanwhile `scripts/allowances.js` re-derives the week's plan. It sums the coin's own `Transfer`
-logs to fold every wallet's balance as of the week's first block — a log sum rather than an archive
-`eth_call`, because this chain's public endpoints cannot be relied on to answer a historical block
-tag, and folding transfers is exact on any endpoint that can serve `eth_getLogs`. The circulating
-supply excludes the curve, the fee escrow, the factory, the hook, the treasury and the burn
-address: the curve holds all the unsold supply before graduation, so counting it would hand most
-of every week's budget to a contract. The budget itself is 80% of the USDG the curve paid into the
-fee escrow during the previous week. The same logs show who has burned 100,000 OTT, and so who is
-a member. The budget is split among the members at the snapshot by their holdings, capped at 3×
-the average, and project contracts can never be members. Nothing is stored on top of chain data;
-`site/data/allowances.json` is rebuilt from logs on every run.
+Meanwhile `scripts/allowances.js` re-derives the week's plan from the chain:
+
+- **The join amount.** At its first run each week it prices OTT from the bonding curve (or the
+  pool once the coin has graduated) and SOL's dollar price, and sets the week's amount: $5 of OTT,
+  rounded up to two significant figures and never more than 2% of the supply. Every week's amount
+  is kept in the file, and a burn is judged against the amount for the week it was sent in.
+- **Members.** Every burn is a transfer into the incinerator's OTT account, so that account's
+  history is the full list of joins. A wallet becomes a member once its burns add up to the
+  amount. The treasury can never be a member, and a transfer with no single ordinary wallet behind
+  it is skipped and logged.
+- **The snapshot.** Each member's OTT at the start of the week (Monday 00:00 UTC) is read from
+  each of its token accounts' history, not from a live balance.
+- **The budget.** 80% of the dollar value of the creator fees collected into the treasury during
+  the previous week, each collection valued at SOL's price in the hour it landed.
+- **The split.** The budget is shared among the members at the snapshot by their holdings, capped
+  at 3× the average, with `cappedShares()` in `site/api/_lib/membership.js`.
+
+Nothing is stored on top of chain data; `site/data/allowances.json` is rebuilt every 30 minutes
+(`.github/workflows/data.yml`).
 
 Taking the snapshot at the week boundary rather than at the moment of redemption is deliberate: an
 allowance computed from a live balance can be taken by borrowing a large position, redeeming the
-biggest share, and returning it in the same block. `scripts/treasury.js` reads what the sweep and the top-up left behind — the
-Lightning wallet's balance, the last 30 days of what redemptions actually cost, the runway they
-imply — into `site/data/treasury.json`, which is where the pool's status (funded, low, empty,
-unknown) comes from.
+biggest share, and returning it straight after. `scripts/treasury.js` reads what the collection
+and the top-up left behind — the treasury's SOL, the fees still waiting on pump.fun, the Lightning
+wallet's balance, the last 30 days of what redemptions actually cost, the runway they imply — into
+`site/data/treasury.json`, which is where the pool's status (funded, low, behind, empty, unknown)
+comes from.
 
-A member spends the week's allowance at `/api/redeem`: sign in with a wallet signature, pick a
+A member spends the week's allowance at `/api/redeem`: sign a message with a Solana wallet, pick a
 wholesale package, and it places the order — invoice, payment and completion, all against the
 Lightning wallet `fund.js` keeps stocked — and hands back the ICCID, the QR and the install links
 wholesale returns. The welcome eSIM goes through the same endpoint, as one signed claim under a
-fixed id of its own. The ledger proves membership, or, for a burn newer than the ledger, that
-burn's transaction receipt does.
+fixed id of its own. The ledger proves membership, or, for a burn newer than the ledger, the burn
+transaction itself does: the API reads it from the chain and applies the same rule the ledger does.
 
 ## Why dollars, and not gigabytes
 
@@ -79,8 +97,8 @@ It is a weekly usage allowance, funded by the coin's own tax, spendable only on 
 expires. It is not a dividend: nothing is paid out in money, nothing accrues, and holding the coin
 is not a claim on the treasury. That distinction is the whole reason the allowance expires weekly
 and is denominated in data rather than dollars paid out — a pool of other people's fees paid to
-whoever holds, in cash and without limit, is a shape worth not having on a chain run by a US
-broker. The burn is the subscription; what it entitles you to is a welcome eSIM and a share of
+whoever holds, in cash and without limit, is a shape worth not having. The burn is the
+subscription; what it entitles you to is a welcome eSIM and a share of
 one week of data at a time, and if you do not use a week's share, it is gone.
 
 ## What is verified, and what is guaranteed
@@ -143,7 +161,9 @@ stale.
 | `site/` | The front end: plain files, no build step |
 | `site/index.html` | The one HTML shell; a hash router picks what fills it |
 | `site/app.js` | The hash router: mounts `site/home.js` at `#/`, `site/esim.js` at `#/data`, `site/status.js` at `#/status`, `site/holders.js` at `#/holders`, `site/mobile-app.js` at `#/app`, and draws About at `#/about` |
-| `site/esim.js` | Destination discovery and catalogue (`#/`), the holder dashboard (`#/data`), credit and eSIM display, and the redeem flow |
+| `site/esim.js` | Destination discovery and catalogue, the holder dashboard (`#/data`), credit and eSIM display, the redeem flow, and the burn that joins |
+| `site/solana.js` | Base58, program and token-account addresses, the token and compute-budget instructions, transaction messages and a Solana JSON-RPC client, with no dependencies; the site, the API and the keepers all load it |
+| `site/wallet.js` | The Solana wallet connection: Wallet Standard wallets (Phantom, Solflare, Backpack and others), with Phantom's injected provider as a fallback |
 | `site/status.js` | The status dashboard (`#/status`): the whole machine on one screen — what's running, what isn't, and every number behind it |
 | `site/ui.js`, `site/ui.css` | Shared visual components: the token badge, the delta pill, the small charts |
 | `site/style.css` | Site-wide styles and the colour palette |
@@ -155,29 +175,32 @@ stale.
 | `site/api/_lib/providers/` | `wholesale.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
 | `site/api/_lib/payers/` | `blink.js` pays and prices in Lightning through Blink's API; `mock.js`, for tests |
 | `site/api/_lib/store.js` | The wholesale provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
-| `site/api/_lib/membership.js` | The membership rules — burns, the capped split by holdings, welcome-plan eligibility, the burn-receipt check — shared by the indexer and the redeem API |
-| `site/api/_lib/rpc.js` | The redeem API's few chain reads: a welcome claim's burn receipt, and the coin's decimals before the ledger knows them |
+| `site/api/_lib/membership.js` | The membership rules — the weekly join amount, which transfers count as a burn, folding burns into members, the capped split by holdings, welcome-plan eligibility — shared by the ledger keeper and the redeem API |
+| `site/api/_lib/rpc.js` | The redeem API's few chain reads: a welcome claim's burn transaction, and the coin's decimals before the ledger knows them |
+| `site/api/_lib/solana-auth.js` | Verifies the ed25519 signature on a signed request |
 | `site/api/_lib/bolt11.js` | Decodes a Lightning invoice far enough to check its amount and payment hash before it's paid |
-| `site/api/_lib/eip191.js`, `site/api/_lib/secp256k1.js`, `site/api/_lib/keccak.js` | Verify the wallet signature a redeem signs in with |
-| `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from wholesale |
-| `site/config/addresses.json` | Chain id, RPC endpoints, USDG, the Pons factory and its friends — the copy the site and the API read |
-| `site/data/allowances.json` | The week's plan: members, and each wallet's balance, share and allowance — written by `scripts/allowances.js` |
-| `site/data/claims.json` | A log of every sweep out of the fee escrow — written by `scripts/claim.js` |
+| `site/api/_lib/keccak.js` | keccak256, for the fixed order ids every past order is found by |
+| `site/config/esim.json` | The coin, its token program, the treasury and the incinerator's OTT account (all empty until launch day), the terms, the brand, and the dated catalogue from wholesale |
+| `site/config/addresses.json` | The Solana RPC endpoints (server and browser), the explorer and the launchpad — the copy the site and the API read |
+| `site/data/allowances.json` | The week's plan: the join amount, members, and each sharing member's holding, share and allowance — written by `scripts/allowances.js` |
+| `site/data/claims.json` | A log of every collection of creator fees — written by `scripts/claim.js` |
 | `site/data/funding.json` | A log of every top-up of the Lightning wallet — written by `scripts/fund.js` |
-| `site/data/treasury.json` | The pool card's numbers: balance, 30-day spend, runway, status — written by `scripts/treasury.js` |
-| `scripts/allowances.js` | Re-derives members and every member's credit from the coin's and USDG's `Transfer` logs |
+| `site/data/treasury.json` | The pool card's numbers: treasury SOL, fees waiting, Lightning balance, 30-day spend, runway, status — written by `scripts/treasury.js` |
+| `scripts/allowances.js` | Sets the week's join amount and re-derives members and every member's credit from the chain |
+| `scripts/solana-chain.js` | The keepers' Solana toolkit: paced RPC, transaction history, balances at a moment, pump.fun's accounts and price, SOL's price, keys and sending |
+| `scripts/pump-fees.js` | How much creator fee is waiting, and the instructions that collect it |
 | `scripts/catalogue.js` | Regenerates the package list in `site/config/esim.json` from wholesale's portfolio |
-| `scripts/claim.js` | Sweeps the creator tax from Pons's escrow into the treasury; simulates before it sends |
-| `scripts/fund.js` | Tops the Lightning wallet up from the treasury's USDG, over FixedFloat and Across |
-| `scripts/treasury.js` | Pool balance, 30-day spend at what was actually paid, runway, last claim |
-| `scripts/chain.js`, `scripts/keccak.js`, `scripts/secp256k1.js` | Dependency-free JSON-RPC, hashing and signing, carried over from [13V/manna](https://github.com/13V/manna), same author, same style, MIT |
-| `scripts/lint.js` | The cheapest check there is: every script parses, every config is JSON |
+| `scripts/claim.js` | Collects the creator fees from pump.fun into the treasury; simulates before it sends |
+| `scripts/fund.js` | Tops the Lightning wallet up from the treasury's SOL, over FixedFloat |
+| `scripts/treasury.js` | Pool balance, fees waiting, 30-day spend at what was actually paid, runway, last claim |
+| `scripts/lint.js` | The cheapest check there is: every script parses, every config is JSON, and the launch addresses agree with each other |
 | `config/addresses.json` | The same chain config as `site/config/addresses.json`, for the scripts that run outside the deployment |
 | `.github/workflows/data.yml` | Every 30 minutes: the allowances ledger and treasury file, commit if changed, issue if the pool is low; the API reads those published files |
-| `.github/workflows/claim.yml` | Daily: claim, fund the pool, refresh the treasury file, commit |
+| `.github/workflows/claim.yml` | Daily: collect fees, fund the pool, refresh the treasury file, commit |
 | `test/*.test.js` | The offline suite, one file per unit — see Running it |
+| `test/fixtures/solana/` | Real mainnet transactions and pump.fun accounts, and the pump.fun IDL entries the claim is checked against |
 | `test/support/fake-wholesale.js` | A fake wholesale server the wholesale-dependent tests run against instead of the real one |
-| `test/site/` | The browser suite (Playwright), maintained alongside the front end |
+| `test/site/` | The browser suite (Playwright), with a fake Wallet Standard wallet in `test/site/support/wallet.js` |
 
 ## Running it
 
@@ -199,16 +222,19 @@ Configuration, current ledgers, APIs, wallet signatures, eSIM credentials and or
 cached. Previously viewed interface/help files can open offline; credit and redemption require a
 live connection. Signed orders are never queued for later delivery.
 
-The app supports injected wallets and a locally bundled WalletConnect connector for mobile
-browsers and the installed PWA. The SDK loads only for an explicit mobile connection or a
-remembered session. Home reads spendable credit, usage and expiry from the live API without a
-signature. A missing API displays **Credit unavailable**; an old weekly ledger displays
-**Awaiting allocation**. Neither is replaced with sample credit. **Wallet settings** lets a holder
-copy their address or disconnect. Account, chain and session changes clear private installation
-details and invalidate pending signatures. Reading installation codes and redeeming a package use
-separate wallet approvals. Remaining-GB telemetry is not implemented, so package sizes are not
-presented as live usage readings. Physical-device wallet handoff and real eSIM installation still
-need testing after live configuration.
+The site connects Solana wallets through the Wallet Standard, the way Phantom, Solflare and
+Backpack announce themselves to a page, with Phantom's older injected provider as a fallback. With
+more than one wallet installed it asks which to use. On a phone without a wallet in the browser it
+offers to open OT+T inside Phantom's or Solflare's own browser, where the wallet can connect. A
+reload reconnects the wallet last used without a prompt, only if that wallet still trusts the site.
+Home reads spendable credit, usage and expiry from the live API without a signature. A missing API
+displays **Credit unavailable**; an old weekly ledger displays **Awaiting allocation**. Neither is
+replaced with sample credit. **Wallet settings** lets a holder copy their address or disconnect.
+Account and wallet changes clear private installation details and invalidate pending signatures.
+Reading installation codes and redeeming a package use separate wallet approvals; each signs a
+plain-text message that names what it authorises. Remaining-GB telemetry is not implemented, so
+package sizes are not presented as live usage readings. Physical-device wallet handoff and real
+eSIM installation still need testing after launch.
 
 Each authorized eSIM in the app offers **Set up this eSIM**, a three-step guide for iPhone or
 Android. It uses only provider-supplied installation links, QR codes and manual details; links
@@ -221,35 +247,24 @@ Pending issuance can be refreshed without approving another order or signing aga
 An order approval reveals installation details only for that order's eSIM profile. Other
 profiles remain redacted until the holder separately approves an account read.
 
-Set the public settings in `site/config/app.json`:
+Set the public backend address in `site/config/app.json`:
 
-`npm run configure:app -- --project-id YOUR_PUBLIC_REOWN_PROJECT_ID --api-origin https://YOUR_BACKEND_HOST`
-validates and saves these public values while preserving other settings. Either option can be
-supplied on its own. The command accepts no provider credentials; run launch checks and deploy
-after saving the settings.
+`npm run configure:app -- --api-origin https://YOUR_BACKEND_HOST` validates and saves it while
+preserving other settings. The command accepts no provider credentials; run launch checks and
+deploy after saving.
 
 ```json
 {
-  "walletConnect": { "projectId": "YOUR_PUBLIC_REOWN_PROJECT_ID" },
   "apiBaseUrl": "https://YOUR_BACKEND_HOST"
 }
 ```
 
-Create a Reown project and allow `https://13v.github.io` as the frontend origin. The project ID is
-public; it is not a provider secret. The checked-in configuration now contains OTT's public Reown
-project ID and the backend origin `https://ott-prelaunch.vercel.app`. Mobile pairing is configured;
-injected wallets are also supported. See the official [EthereumProvider documentation](https://docs.reown.com/advanced/providers/ethereum).
+The checked-in configuration uses the backend origin `https://ott-prelaunch.vercel.app`.
 `apiBaseUrl` is a HTTPS origin without a path, query or credentials. An empty value keeps APIs on
 the frontend's own origin; GitHub Pages cannot answer those API requests. HTTP is allowed only
 between local development origins. Invalid settings fail before asking for a signature. The
 client sends no cookies to the API and refuses redirects of signed requests. Configuration and
 live account data remain outside the service-worker cache.
-
-`npm ci && npm run build:wallet` reproduces the checked-in SDK. OTT's application code remains
-MIT-licensed; the bundled SDK has separate terms, including Reown's Community License. Its full
-dependency notices are in [site/vendor/walletconnect-NOTICES.txt](site/vendor/walletconnect-NOTICES.txt)
-and [site/vendor/walletconnect.js.LEGAL.txt](site/vendor/walletconnect.js.LEGAL.txt). Check those
-terms for production use and applicable usage thresholds.
 
 GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committing changes, run
 `npm run deploy:pages` to publish the committed `site/` tree on `gh-pages`. It excludes `api/`,
@@ -271,58 +286,66 @@ current-ledger URLs and deployment checks. No backend host or private credential
 by publishing the frontend.
 
 ```
-node scripts/lint.js                                # every script parses, every config is JSON
+node scripts/lint.js                                 # every script parses, every config is JSON, the launch addresses agree
 npm test                                             # the ledger, the redeem function, both providers,
-                                                      # the invoice check, the store, and the keepers — offline
+                                                     # the invoice check, the store, and the keepers — offline
 
 npm run allowances                                   # rebuild this week's plan from chain
-npm run allowances -- --week 2957                    # rebuild a specific week
 npm run catalogue -- --write                         # rebuild site/config/esim.json's package list from wholesale's portfolio
 npm run check:prelaunch -- --remote                  # verify setup with redemption disabled; no funding required
+npm run launch:config -- <mint>                      # launch day: the four launch values, read from the new coin
 npm run treasury                                     # rebuild treasury status; pool reads need ESIM_PROVIDER and BLINK_API_KEY
-PRIVATE_KEY=<treasury> npm run claim -- --dry-run    # what the sweep would do
-PRIVATE_KEY=<treasury> npm run fund -- --dry-run     # what the next top-up would move, nothing sent
+npm run claim -- --dry-run                           # what the collection would do, simulated, nothing sent
+npm run claim -- --rehearse <mint>                   # the same transaction for any live pump.fun coin, simulated unsigned
+npm run fund -- --dry-run                            # what the next top-up would move, nothing sent
 
 npm run serve                                        # serve site/ on http://127.0.0.1:4174
 npm run test:site                                    # the browser suite (needs `npm install` for @playwright/test first)
 ```
 
-The chain reads in `allowances` and the public portfolio read in `catalogue` need no API key.
+The chain reads in `allowances` and the public portfolio read in `catalogue` need no API key, but
+public Solana endpoints rate-limit, so the workflows read through `SOLANA_RPC_URL` when it is set.
 `WHOLESALE_BASE_URL` or `WHOLESALE_PORTFOLIO_URL` can override the catalogue endpoint. The
 Lightning pool read in `treasury` requires `BLINK_API_KEY` on the host; without it the pool is
 reported as unknown. These commands update local files but do not buy eSIMs or move funds.
-`claim` and `fund` need `PRIVATE_KEY` even for a dry run. The commands shown above explicitly use
-`--dry-run`; keep that flag until live transactions are intended. Before token launch, `allowances`
-and `treasury` can publish an empty ledger and an unknown pool without inventing holder credit.
+`fund` needs `TREASURY_PRIVATE_KEY` even for a dry run, plus the Blink and FixedFloat keys for its
+quotes; `claim --dry-run` simulates unsigned without a key. Keep `--dry-run` until live
+transactions are intended. Before launch, `allowances` and `treasury` publish an empty ledger and
+an unknown pool without inventing holder credit, and `claim` and `fund` say there is nothing to do
+and stop cleanly.
 
 ## To turn it on
 
 In the backend host's project settings: `ESIM_PROVIDER=wholesale`, `WHOLESALE_BASE_URL`, `BLINK_API_KEY`,
-`KV_REST_API_URL` and `KV_REST_API_TOKEN` (the Redis REST endpoint and its server-only token).
-The Render Blueprint selects nadanada's public base `https://nadanada.me/api/v2`; an operator-specific
-override belongs in the host's environment settings. For the Pages frontend set `FRONTEND_ORIGINS=https://13v.github.io`
-and `SIGNIN_HOST=13v.github.io`. The origin has no `/OTT/` path, and the signed host is the frontend
-host even when the API uses another host. CORS permits that exact origin, accepts only the
-supported preflight methods and JSON content header, and never uses a wildcard or cookies.
-Set `NODE_ENV=production` (Vercel production deployments also set `VERCEL_ENV=production`).
-Production refuses missing/mock providers, mock payers, memory stores and unsigned-host
-configuration. `WHOLESALE_ALLOW_MEMORY_STORE` cannot bypass that production requirement. As
-repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY`, `BLINK_API_KEY`,
-`KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY` and `FIXEDFLOAT_API_SECRET`.
-The GitHub treasury refreshes only read Redis orders and can use Upstash's read-only REST token
-for `KV_REST_API_TOKEN`. Vercel needs the standard read/write token for recording orders and its
-storage probe. A Blink credential has not been configured yet.
-The published data and claim workflows use the adapter's default Redis namespace `wf:`. Vercel
-Production uses `STORE_PREFIX=wf:` so treasury reporting reads the same order records; Preview
-uses `STORE_PREFIX=ott:preview:`. The published workflows do not consume a `STORE_PREFIX`
-repository variable. Any future namespace change must keep the backend and published workflow
-settings in agreement and preserve paid order history.
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` (the Redis REST endpoint and its server-only token), and
+`SOLANA_RPC_URL` if you have a dedicated Solana endpoint (the API reads a welcome claim's burn from
+the chain). The Render Blueprint selects nadanada's public base `https://nadanada.me/api/v2`; an
+operator-specific override belongs in the host's environment settings. For the Pages frontend set
+`FRONTEND_ORIGINS=https://13v.github.io` and `SIGNIN_HOST=13v.github.io`. The origin has no `/OTT/`
+path, and the signed host is the frontend host even when the API uses another host. CORS permits
+that exact origin, accepts only the supported preflight methods and JSON content header, and never
+uses a wildcard or cookies. Set `NODE_ENV=production` (Vercel production deployments also set
+`VERCEL_ENV=production`). Production refuses missing/mock providers, mock payers, memory stores and
+unsigned-host configuration. `WHOLESALE_ALLOW_MEMORY_STORE` cannot bypass that production
+requirement.
+
+As repository secrets, for the two workflows: `TREASURY_PRIVATE_KEY` (the treasury wallet's Solana
+secret key, base58 as Phantom exports it, or a JSON byte array), `BLINK_API_KEY`,
+`KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIXEDFLOAT_API_KEY`, `FIXEDFLOAT_API_SECRET`, and
+`SOLANA_RPC_URL` (recommended: public endpoints rate-limit the ledger's history reads). The GitHub
+treasury refreshes only read Redis orders and can use Upstash's read-only REST token for
+`KV_REST_API_TOKEN`. Vercel needs the standard read/write token for recording orders and its
+storage probe. The published data and claim workflows use the adapter's default Redis namespace
+`wf:`. Vercel Production uses `STORE_PREFIX=wf:` so treasury reporting reads the same order
+records; Preview uses `STORE_PREFIX=ott:preview:`. The published workflows do not consume a
+`STORE_PREFIX` repository variable. Any future namespace change must keep the backend and
+published workflow settings in agreement and preserve paid order history.
 
 New purchases also default to closed in production. Keep `REDEMPTIONS_ENABLED=0` through setup;
 only exact `1` permits orders. Account and signed installation reads remain available while closed.
 Joining needs no separate switch. The app offers the burn once purchases are on, the weekly
-ledger knows the coin, and the treasury reports the pool funded with room for a welcome eSIM
-beyond what the week owes.
+ledger knows the coin and has priced this week's amount, and the treasury reports the pool funded
+with room for a welcome eSIM beyond what the week owes.
 `npm run check:prelaunch -- --remote` verifies setup without treating wallet funding or token launch
 as completed. Follow [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
 before enabling live redemption.
@@ -335,49 +358,56 @@ ALLOWANCES_URL=https://raw.githubusercontent.com/13V/OTT/main/site/data/allowanc
 TREASURY_URL=https://raw.githubusercontent.com/13V/OTT/main/site/data/treasury.json
 ```
 
-If the frontend itself is hosted on Vercel, its CSP includes the SDK's Reown endpoints. Add the
-chosen separate API origin to `connect-src` before using it from that deployment. GitHub Pages
-does not apply `site/vercel.json` headers. Neither hosting the frontend nor setting a project ID
-creates holder credit: launched coin addresses, fresh funded allocations, the durable store and
-the real provider/payer must all be configured. Weekly credit goes to members by holdings,
-capped at 3× the average member share (`membership.capMultiple`). The earlier proposals for a $50
-entry allowance and a 40 GB weekly cap are not implemented or promised by the app.
+If the frontend itself is hosted on Vercel, its CSP allows the browser's Solana endpoint
+(`https://solana-rpc.publicnode.com`); add a separate API origin to `connect-src` before using it
+from that deployment. GitHub Pages does not apply `site/vercel.json` headers. Hosting the frontend
+creates no holder credit: launched coin addresses, fresh funded allocations, the durable store and
+the real provider/payer must all be configured. Weekly credit goes to members by holdings, capped
+at 3× the average member share (`membership.capMultiple`). The earlier proposals for a $50 entry
+allowance and a 40 GB weekly cap are not implemented or promised by the app.
 
-Then `site/config/esim.json`, in this order, because the order matters:
+### Launch day
 
-1. **`treasury`** — the wallet whose key is in `TREASURY_PRIVATE_KEY`. Both keepers refuse to run if
-   the two disagree, which is the right behaviour and also a silent one: `claim.js` reports "nothing
-   above the floor" every day whether the escrow is genuinely empty or the address is simply wrong.
-   Nothing in this repo can tell those apart, because the fee recipient was chosen outside it when
-   the coin was created. **Check by hand on launch day, and again a week in**, against what Pons
-   says the coin's fee recipient is — a treasury that has never claimed anything looks exactly like
-   a quiet week.
-2. **`coin` and `curve`, together.** The indexer needs only `coin` — the factory tells it the curve —
-   but the site treats "launched" as both, so filling one in and not the other publishes a real
-   ledger, with real holders and real dollar allowances, that every one of those holders is then
-   told they cannot spend. `scripts/allowances.js` now says so, loudly, with the address to paste;
-   it is still easier not to do it.
+1. **Create the coin on pump.fun from the treasury wallet**: a fresh wallet used for nothing else,
+   whose secret key becomes `TREASURY_PRIVATE_KEY`. pump.fun pays the creator fee to the wallet
+   that creates the coin, so the treasury must be the creator. Keep the coin paired with SOL, and
+   leave Holder Rewards, Cashback, Mayhem mode and fee sharing off: each sends some or all of the
+   creator fee elsewhere, or changes who can collect it.
+2. **Fill in the four launch values from the coin itself**:
+   `npm run launch:config -- <mint> --treasury <treasury wallet>` reads the coin from Solana,
+   refuses one the keepers can't serve (not on pump.fun, not paired with SOL, Holder Rewards or
+   Cashback on, fee sharing set up, a live mint or freeze authority, or a creator other than the
+   treasury), and prints `coin`, `tokenProgram`, `treasury` and `membership.burnAccount` (the
+   incinerator's token account for the coin). Run it again with `--write` to put them in
+   `site/config/esim.json`. The site treats the coin as launched only when all four are set, and
+   `npm run lint` refuses a config where some are set and others aren't, or where `burnAccount`
+   isn't the incinerator's account for that coin and token program.
+3. **Check the creator by hand** as well, on pump.fun's coin page or Solscan, against `treasury`: a
+   treasury that has never collected anything looks exactly like a quiet week.
+4. Commit and push (production deploys from `main`), publish Pages with `npm run deploy:pages`,
+   add the repository secrets above, then switch purchases on with `REDEMPTIONS_ENABLED=1`.
 
 Until then the deploy answers with the rules and "coin not launched yet", and the workflows say what
 they skipped rather than failing. Week one publishes a budget of zero, honestly and without
-crashing: there is no previous week's tax to make one from.
+crashing: there were no fees the week before to make one from. The join amount is priced from the
+first run after launch, so joining opens within half an hour of the coin going live.
 
 Two things to know about how it runs once it is on. The funding keeper aims at what the week still
-owes its holders — the published budget less what has been redeemed — rather than a flat target, so
+owes its members — the published budget less what has been redeemed — rather than a flat target, so
 a big week pulls more across; it is bounded by a ceiling on the standing Lightning balance
 (`--max-pool`), a per-run cap on a single FixedFloat order (`--max`), and the treasury's own
-balance, and it says which of the three stopped it. With membership on, it also keeps room for
-five welcome eSIMs at the $4 maximum on top of what the week owes (`--reserve` overrides that),
-because the API stops offering the burn once the pool can't pay for one. And
-`site/data/treasury.json` carries a
-`behind` status, for a pool that is not low by any backward-looking measure and still cannot cover
-what this week has already promised.
+balance less the SOL it always keeps for fees and rent (`--keep-sol`), and it says which stopped
+it. It also keeps room for five welcome eSIMs at the $4 maximum on top of what the week owes
+(`--reserve` overrides that), because the API stops offering the burn once the pool can't pay for
+one. And `site/data/treasury.json` carries a `behind` status, for a pool that is not low by any
+backward-looking measure and still cannot cover what this week has already promised.
 
 ## What v1 doesn't do
 
-Two things are narrow on purpose, and both are stated on the page itself. Only trades made against
-the bonding curve count: once a coin graduates, trading moves to a DEX pool this ledger does not
-read, so volume from there on doesn't earn credit. And only a USDG-paired coin is countable at all —
-the ledger is built by reading USDG `Transfer` events, and a coin paired with native ETH moves no
-ERC-20 when it trades, so `scripts/allowances.js` refuses to run against one rather than publish a
-ledger of zeros that would look like nobody had traded.
+A few things are narrow on purpose. Only a SOL-paired pump.fun coin is supported, with a plain
+wallet as its creator: the claim, the price and the treasury report all read pump.fun's own SOL
+accounts. The app doesn't sell OTT; it links to the coin's pump.fun page. The join amount is set
+once a week from the price at Monday's first ledger run, so its dollar cost drifts with the price
+until the next Monday. And the welcome claim for a burn newer than the ledger is checked against
+the chain at claim time, while weekly credit follows the ledger, so a new member shares from the
+first Monday snapshot after their burn.

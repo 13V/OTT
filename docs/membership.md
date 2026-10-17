@@ -42,15 +42,17 @@ creator tax). Nothing here is live until the coin launches and purchases are swi
 
 - At its first run each week, the ledger keeper reads OTT's price from pump.fun on chain (the
   bonding curve before graduation, the PumpSwap pool after) and SOL's price in dollars, and sets
-  `burnTokens = burnUsd / priceUsd`, rounded **up** to two significant figures, in whole tokens.
-  The week's amount never changes after that.
+  `burnTokens = burnUsd / priceUsd`, rounded **up** to two significant figures, in whole tokens,
+  and never more than 2% of the supply. The week's amount never changes after that.
 - A send counts against the amount of the week it landed in (its block time). In the first ten
   minutes of a week, the lower of that week's and the previous week's amounts applies, so a send
   signed just before Monday isn't caught out by the new amount.
 - A wallet becomes a member at the first send after which its running total reaches the amount
   for that send's week. Later sends only add to `burned`.
 - A send made in a week the keeper never priced counts against the most recent earlier week's
-  amount.
+  amount, or, before the first week ever priced (a coin launched late on a Sunday, say), the first
+  amount priced. The keeper records those filled-in weeks in `requirements` too, so the API judges
+  a send the same way.
 
 ### The money
 
@@ -90,6 +92,21 @@ creator vaults, valued at SOL's hourly price when it landed.
   and `tokenProgram`. `npm run lint` re-derives it and fails on a mismatch.
 - The coin counts as launched when `coin`, `tokenProgram`, `treasury` and `burnAccount` are all
   filled in.
+
+## Reading the chain
+
+The keeper reads three histories: the incinerator account's (joins), each member's token
+accounts' (holdings at the snapshot) and the treasury's (collected fees). Those reads need an RPC
+endpoint that keeps the whole ledger. PublicNode keeps about two days and answers an older
+history with an empty list rather than an error, which would read as no members and no fees. So
+the keeper asks each endpoint for its first available block and sends history reads only to
+endpoints that keep everything (`api.mainnet-beta.solana.com` does), spaced out and retried on
+rate limits. With none available it refuses to run rather than publish a wrong ledger. Set
+`SOLANA_RPC_URL` to a dedicated full-history endpoint for production.
+
+A run that only moves a cursor (`membership.cursor`, `fees.cursor`) doesn't rewrite the file, so
+unrelated transactions on those accounts don't commit every half hour; the next run reads them
+again and finds nothing new.
 
 ## Where each rule lives
 
@@ -160,9 +177,10 @@ creator vaults, valued at SOL's hourly price when it landed.
   reads only what came after it. `fees.cursor` is the same for the treasury's history.
 - `wallets` lists only the members at the snapshot: `tokens` is the OTT the wallet held at the
   snapshot, `share` its fraction of `memberTokens` (all those members' OTT together) and
-  `allowanceUsd` its capped share of `budgetUsd`.
-- Before launch, the empty ledger has `"membership": null`, `"members": {}`, `"joins": {}` and
-  `"wallets": {}`.
+  `allowanceUsd` its capped share of `budgetUsd`. A member that held no OTT at the snapshot is
+  listed with `tokens` "0" and no allowance.
+- Before launch, the empty ledger has `"membership": null`, `"fees": null`, `"members": {}`,
+  `"joins": {}`, `"wallets": {}`, and empty `coin`, `tokenProgram` and `treasury`.
 
 Who counts as the sender: in a successful transaction, the incinerator's account (`burnAccount`)
 gains OTT, and exactly one owner's OTT accounts lose OTT. That owner is credited with the amount

@@ -1,15 +1,22 @@
 # Customer account audit — 6 October 2026
 
-OTT holder accounts use an Ethereum-compatible (EVM) wallet on Robinhood Chain. There
+> **Superseded in part, 17 October 2026.** OTT now launches on pump.fun on Solana. Holder
+> accounts use a Solana wallet, found through the Wallet Standard, and every approval is an
+> ed25519 signature over a plain-text message (see [membership.md](membership.md#signed-requests)).
+> WalletConnect, EIP-191 `personal_sign` and the separate Phantom sign-in described below are
+> gone. The account rules this audit checked still hold: connecting shares only a public address,
+> viewing credit needs no signature, and installation details and redemption each need their own
+> approval. `test/site/customer-account.spec.js` now drives the real frontend and API with a fake
+> Solana wallet that signs with a real ed25519 key.
+
+OTT holder accounts used an Ethereum-compatible (EVM) wallet on Robinhood Chain. There
 is no email/password registration, custodial customer wallet, or private-key
 entry in OTT. Connecting shares a public address; viewing credit needs no
 signature. Installation details and redemption each require wallet approval.
 USDC on Solana is the proposed operator funding source, a separate flow.
 
-The subsequent [Solana login change](solana-login.md) adds Phantom message
-authentication as a separate identity with zero holder credit. Its server
-sessions have explicit expiry and logout; the EVM signed-read limits described
-below still apply to EVM installation details.
+A later change added Phantom message authentication as a separate identity with zero holder
+credit; it was removed on 17 October 2026, when the Solana wallet became the holder wallet.
 
 ## Customer journey exercised
 

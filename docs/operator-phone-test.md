@@ -38,8 +38,9 @@ Two distinct tests are possible:
   [lists USDC on Solana and BTC Lightning](https://ff.io/about), but availability, minimum amount,
   exchange costs and the exact receiving invoice must be verified before any transfer.
 
-The existing `scripts/fund.js` route starts with USDG on Robinhood Chain and uses USDC on Base.
-It is not a Solana USDC funding implementation. Do not run it expecting it to use a Solana wallet.
+Since 17 October 2026 `scripts/fund.js` funds the public pool from the treasury's SOL (SOL →
+BTC Lightning through FixedFloat, paying a Blink invoice). It is the public keeper, not this
+operator test's funding route, and it never uses the operator's test wallet.
 Direct automated USDC settlement remains unverified. No funds have moved and no real eSIM has
 been ordered as part of this preparation. Blink API access still requires private credential
 handoff and a successful read-only preflight.

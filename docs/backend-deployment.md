@@ -2,7 +2,7 @@
 
 GitHub Pages serves the app interface. A separate Node backend runs the account, signed installation-detail and redemption handlers. `scripts/serve-api.js` provides a portable HTTP server using Node's standard library; it needs Node 22 or newer and no runtime npm dependencies.
 
-The server exposes only `/api/status`, `/api/redeem` and `/api/auth`. It does not serve the website, configuration files, repository contents or environment files. There is no separate public health route: use `GET /api/status` for hosting checks, then examine its readiness fields. HTTP 200 means the status response loaded; it does not mean the programme is ready to issue eSIMs.
+The server exposes only `/api/status` and `/api/redeem`. It does not serve the website, configuration files, repository contents or environment files. There is no separate public health route: use `GET /api/status` for hosting checks, then examine its readiness fields. HTTP 200 means the status response loaded; it does not mean the programme is ready to issue eSIMs.
 
 ## Local checks
 
@@ -81,7 +81,7 @@ For the current GitHub Pages frontend, preserve `FRONTEND_ORIGINS=https://13v.gi
 `SIGNIN_HOST=13v.github.io`. Record Vercel's actual public production origin, configure it as the
 app's `apiBaseUrl`, republish Pages, and run `npm run check:prelaunch -- --remote`. A protected
 preview deployment is not a usable public API origin. If moving the canonical frontend to a
-Vercel domain later, update the exact origin, signed hostname and Reown allowlist together.
+Vercel domain later, update the exact origin and signed hostname together.
 
 ## Alternative Render prelaunch setup
 
@@ -95,19 +95,18 @@ Automatic deployments are off. When you change API code or the bundled catalogue
 
 This free service is for setup and preview. It sleeps after 15 idle minutes and can take about a minute to wake up, so the app's short request timeout may require retrying after the service wakes. Render advises against using free instances for production. Move live redemption to suitable hosting before enabling provider orders. [Render's free-service limits](https://render.com/docs/free) describe its sleep, restart and usage behavior.
 
-Before live use, add `BLINK_API_KEY`, `KV_REST_API_URL` and `KV_REST_API_TOKEN` through the service's environment settings. Confirm an externally durable Redis REST store and a funded payer. If your provider supplies a different endpoint, override `WHOLESALE_BASE_URL` there; preserve the privacy of any operator-specific endpoint. Render's native Key Value connection string is not the HTTP REST endpoint this adapter expects, and its free Key Value tier loses data on restart. Keep secrets out of the Blueprint. Configure the real public `coin`, `curve` and `treasury` addresses, refresh the catalogue, and publish a funded current-week ledger. A Reown project ID is separately required for mobile wallet connections. The prelaunch namespace must not be reused as a shortcut to reset any later live order history.
+Before live use, add `BLINK_API_KEY`, `KV_REST_API_URL` and `KV_REST_API_TOKEN` through the service's environment settings. Confirm an externally durable Redis REST store and a funded payer. If your provider supplies a different endpoint, override `WHOLESALE_BASE_URL` there; preserve the privacy of any operator-specific endpoint. Render's native Key Value connection string is not the HTTP REST endpoint this adapter expects, and its free Key Value tier loses data on restart. Keep secrets out of the Blueprint. Configure the four public launch fields (`coin`, `tokenProgram`, `treasury` and `membership.burnAccount`), refresh the catalogue, and publish a funded current-week ledger. The prelaunch namespace must not be reused as a shortcut to reset any later live order history.
 
 ## Complete setup before funding
 
-A Lightning balance is not needed to deploy the API, verify the provider catalogue, connect persistent storage, configure mobile wallet pairing or publish the app. These steps can be completed while the token addresses remain empty and redemption is disabled:
+A Lightning balance is not needed to deploy the API, verify the provider catalogue, connect persistent storage or publish the app. These steps can be completed while the token addresses remain empty and redemption is disabled:
 
 1. Deploy the Vercel project or alternative Render Blueprint above. Keep `REDEMPTIONS_ENABLED=0`. Record the HTTPS production origin the host actually assigns.
 2. Create persistent Redis through Vercel Marketplace or the [Upstash Console](https://console.upstash.com/). Review its plan before creation. Connect its HTTPS REST URL and standard read/write REST token to the backend. The [REST documentation](https://upstash.com/docs/redis/features/restapi) explains these credentials. A read-only token cannot record orders or pass the storage probe. A temporary database that expires after 72 hours is suitable only for a separate integration test, never the order ledger.
-3. Create a dedicated OTT project in [Reown](https://dashboard.reown.com/), and allow the frontend origin `https://13v.github.io`. Copy the public project ID. [Reown's origin allowlist documentation](https://docs.reown.com/cloud/relay) says changes can take 15 minutes to apply. Project IDs are client identifiers; provider and storage credentials never belong in the client configuration.
-4. Run `npm run configure:app -- --project-id YOUR_PUBLIC_PROJECT_ID --api-origin https://YOUR_ACTUAL_API_HOST`. Commit these public settings and republish Pages. No backend or Reown value is invented by this command.
-5. Run `npm run check:prelaunch -- --remote`. It checks the current frontend settings, matching prelaunch backend, paused redemption, actual provider catalogue access, durable storage and the Pages CORS preflight. It performs only a status GET and an OPTIONS request against the API. The backend's status probe also tests one disposable storage key. The wallet can still be absent or empty; no payment or eSIM order is created.
+3. Run `npm run configure:app -- --api-origin https://YOUR_ACTUAL_API_HOST`. Commit this public setting and republish Pages. The command invents no backend value. Solana wallets need no project ID or allowlist: the site finds installed wallets through the Wallet Standard.
+4. Run `npm run check:prelaunch -- --remote`. It checks the current frontend settings, matching prelaunch backend, paused redemption, actual provider catalogue access, durable storage and the Pages CORS preflight. It performs only a status GET and an OPTIONS request against the API. The backend's status probe also tests one disposable storage key. The wallet can still be absent or empty; no payment or eSIM order is created.
 
-The prelaunch report explicitly defers token launch, wallet funding/payment validation, funded holder allocations and installation on a real phone. A passing prelaunch report does not allow live redemption. Keep the public `coin`, `curve` and `treasury` fields empty until the actual token launches.
+The prelaunch report explicitly defers token launch, wallet funding/payment validation, funded holder allocations and installation on a real phone. A passing prelaunch report does not allow live redemption. Keep the four public launch fields (`coin`, `tokenProgram`, `treasury` and `membership.burnAccount`) empty until the coin is created on pump.fun.
 
 The storage status probe also checks the atomic Redis comparisons used to recover payment leases
 and advance orders safely. A connection that accepts ordinary reads and writes but refuses these
@@ -144,10 +143,11 @@ Keep the following settings in the host's environment manager. Public values may
 | `STORE_PREFIX` | `wf:` in Production; `ott:preview:` in Preview |
 | `ALLOWANCES_URL` | URL of the current published weekly ledger |
 | `TREASURY_URL` | URL of the current published treasury report |
+| `SOLANA_RPC_URL` | Optional Solana JSON-RPC endpoint, tried before the public ones in `config/addresses.json`; the API reads a welcome claim's burn transaction through it |
 
 `FRONTEND_ORIGINS` accepts a comma-separated list of exact origins. Use the scheme and hostname, without `/OTT/` or another path. Wildcards are refused. Do not grant extra origins merely to get around an error. `SIGNIN_HOST` binds the wallet's signed message to the frontend hostname; CORS permission does not replace signature validation.
 
-`ESIM_CONFIG_URL` can optionally override the bundled `site/config/esim.json`, for example when staging has a separately published catalogue. Leave it unset to use the bundled config. A real deployment must configure its public `coin`, `curve` and `treasury` addresses in that catalogue. The backend does not invent these values.
+`ESIM_CONFIG_URL` can optionally override the bundled `site/config/esim.json`, for example when staging has a separately published catalogue. Leave it unset to use the bundled config. A real deployment must configure its four public launch fields in that catalogue. The backend does not invent these values.
 
 For the alternative `esimaccess` provider, use `ESIM_PROVIDER=esimaccess` and its server-only `ESIMACCESS_ACCESS_CODE`. The current catalogue and funding pipeline target `wholesale`; switching providers requires confirming the package codes, pricing and funding arrangement before enabling redemption.
 
@@ -176,11 +176,13 @@ can use Upstash's read-only REST token. The Vercel backend needs the standard re
 record orders and complete the disposable-key storage probe. The credentials stay in the respective
 environment managers; they are not public frontend settings. No Blink credential is configured yet.
 
-The allocation script currently divides last week's collected tax in proportion to eligible token holdings. The proposed entry allowance and 40 GB weekly cap are not implemented. Do not publish those as guaranteed benefits until the funding and allocation policy has been validated.
+The allocation script divides 80% of the creator fees collected the week before among members, by their OTT at the Monday snapshot, with no member above 3× the average. The proposed entry allowance and 40 GB weekly cap are not implemented. Do not publish those as guaranteed benefits until the funding and allocation policy has been validated.
 
-The preferred operator funding currency is now USDC on Solana. Direct automated settlement with
-the supplier remains unverified; its documented purchase API lists Lightning and Stripe. The
-deployed payer and existing USDG-to-USDC-on-Base funding script have not been switched. See the
+The funding keeper pays the supplier over Lightning, as before: it turns the treasury's SOL into
+sats with a FixedFloat order (SOL → BTC over Lightning) paying a Blink invoice. FixedFloat's code
+for native SOL is taken to be `SOL` (`FIXEDFLOAT_FROM_CCY` overrides it), and the keeper refuses an
+order whose currency, network or deposit address doesn't match. Confirm the code with one call to
+FixedFloat's `/ccies` endpoint using the real keys before the first top-up. See the
 [private operator phone-test guide](operator-phone-test.md) for the verified payment options and
 the isolated test tooling. No payment or real phone installation has been performed.
 
@@ -194,10 +196,9 @@ configuration, account data and arbitrary query URLs must continue to bypass it.
 
 After the host has issued its real HTTPS API origin, put that origin in the public `apiBaseUrl` field of `site/config/app.json`. Use only the origin, without `/api`, a query, credentials or a fragment. The app resolves the two API paths against it and refuses redirects for account requests.
 
-Mobile WalletConnect also needs the separate public Reown project ID in the same file. The checked-in
-configuration now contains OTT's public Reown project ID and `https://ott-prelaunch.vercel.app` as
-the API origin. All 15 remote prelaunch checks have passed with redemption disabled and durable
-Redis connected. Token launch, wallet funding, a real payment and installation on a phone remain
+Solana wallets need no project ID: the site finds installed wallets through the Wallet Standard,
+and on a phone without one it offers to open itself in Phantom's or Solflare's own browser. The
+checked-in configuration uses `https://ott-prelaunch.vercel.app` as the API origin. Token launch, wallet funding, a real payment and installation on a phone remain
 deferred; these preparation checks do not establish live readiness.
 
 ## Verify before enabling live redemption
