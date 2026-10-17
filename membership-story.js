@@ -14,7 +14,8 @@
   // still reads correctly when one is missing, and none of them invents a figure.
   function terms(cfg) {
     const m = cfg && cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
-    const burn = /^\d{1,30}$/.test(String(m.burnTokens || '')) ? Number(m.burnTokens).toLocaleString('en-US') + ' OTT' : '';
+    // The join amount is set in dollars and turned into OTT each week, so the story quotes dollars.
+    const burn = Number(m.burnUsd) > 0 ? 'about $' + Number(m.burnUsd) + ' of OTT' : '';
     const w = m.welcome && typeof m.welcome === 'object' ? m.welcome : null;
     const welcome = w && [w.gb, w.days, w.maxUsd].every((v) => Number.isFinite(Number(v)) && Number(v) > 0)
       ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan up to ' + money(Number(w.maxUsd)) : '';
@@ -157,7 +158,7 @@
             item('01', 'Publish the exact rules.', [t.burn ? 'Burn ' + t.burn + ' once.' : 'One burn to join.', t.welcome ? 'Welcome eSIM: ' + t.welcome + '.' : '',
               t.share ? t.share + '% of collected fees to member data.' : '', t.cap ? 'Weekly shares follow holdings, capped at ' + t.cap + '× the average.' : ''].filter(Boolean).join(' '), 'Rules published'),
             item('02', 'Protect the first delivery.', 'The app offers the burn only while the reserve can pay for a welcome eSIM. A delayed claim can be retried without another burn.', 'Reserve check built'),
-            item('03', 'Launch the token.', 'Publish the coin, curve and treasury addresses. Enrolment and purchases stay closed until then.', launched ? 'Token launched' : 'Launch pending'),
+            item('03', 'Launch the token.', 'Launch OTT on pump.fun and publish the coin and treasury addresses. Joining and purchases stay closed until then.', launched ? 'Token launched' : 'Launch pending'),
             item('04', 'Prove the phone connection.', 'A supplier eSIM has been installed and used for mobile data on a real phone. OTT’s own automated purchase is verified at launch.', 'Automated test pending')))),
       h('div', { class: 'ott-trust-visibility' },
         h('div', {}, h('h3', {}, 'Public money trail.'), h('p', {}, 'The status page shows fees received, the data budget, spending and the pool balance, and the weekly ledger lists every member. Burns and other on-chain movements can be checked on the explorer; payment-provider balances are labelled as reported figures.')),

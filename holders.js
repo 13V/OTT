@@ -1,22 +1,17 @@
 'use strict';
 /**
- * OT+T — the Holders route (#/holders).
+ * OT+T — the Holders route (#/holders): this week's members.
  *
- * The week's ledger in full: every wallet that holds OTT, what it holds, what share of the
- * circulating supply that is, and the dollars of data allowance that share buys this week. It is
- * the same file the programme card on #/status reads a top five out of — data/allowances.json,
- * written by scripts/allowances.js — shown whole rather than trimmed.
+ * The week's ledger in full: every member in this week's split, the OTT it held at the Monday
+ * snapshot, its share of all those members' OTT, and the dollars of data allowance it gets after
+ * the cap. It is the same file the programme card on #/status reads a top five out of —
+ * data/allowances.json, written by scripts/allowances.js — shown whole rather than trimmed.
  *
- * Nothing here is a claim in the sense scripts/claim.js means it. That script sweeps the coin's
- * creator tax out of the fee escrow into the treasury, and its log (data/claims.json) is the
- * keeper's business, not a holder's. A holder never claims: the allowance is allocated by the
- * weekly snapshot whether or not anyone asks for it, and what a holder does with it is redeem.
- * This page is the allocation, not the spend.
- *
- * Everything on it is public chain data — balances folded from the coin's own Transfer logs — so
- * there is nothing here that a block explorer would not also show. What the page never carries is
- * anything from the redemption store: no order, no ICCID and above all no activation code, which
- * only ever travels back to a signed request from the wallet that earned it.
+ * Everything on it is public chain data — members found from their sends to the incinerator,
+ * holdings read from their token accounts' own history — so there is nothing here that a block
+ * explorer would not also show. What the page never carries is anything from the redemption store:
+ * no order, no ICCID and above all no activation code, which only ever travels back to a signed
+ * request from the wallet that earned it.
  */
 (function () {
   // The same helpers site/esim.js exports and site/status.js already borrows, so all three files
@@ -65,12 +60,12 @@
     const { h, notice } = ctx;
 
     view.appendChild(h('div', { class: 'page-head' },
-      h('div', { class: 'label' }, 'OT+T · HOLDERS'),
-      h('h1', {}, 'Who holds, and what it buys them.'),
+      h('div', { class: 'label' }, 'OT+T · MEMBERS'),
+      h('h1', {}, 'Who shares this week, and what it buys them.'),
       h('p', { class: 'page-lede' },
-        'Every wallet holding OTT at the start of this week, the share of the circulating supply it '
-        + 'held, and the data allowance that share is worth. Folded from the coin’s own Transfer '
-        + 'logs — the same ledger the status page reads a top five out of.')));
+        'Every member in this week’s split: the OTT it held at Monday’s snapshot, its share of all '
+        + 'members’ OTT, and the data allowance that share is worth after the cap. Read from public '
+        + 'Solana transactions — the same ledger the status page reads a top five out of.')));
 
     const body = h('div', {}, notice('Reading the week’s ledger…', 'plain'));
     view.appendChild(body);
@@ -104,15 +99,17 @@
     const budgetUsd = numOr(allow.budgetUsd);
     const holders = Number.isFinite(Number(allow.holders)) ? Number(allow.holders) : rows.length;
     const weekLabel = fmtDate(allow.weekStart);
-    const circulating = unitsFromDecimalStr(allow.circulating, allow.decimals);
+    const memberTokens = unitsFromDecimalStr(allow.memberTokens, allow.decimals);
+    const allMembers = allow.members && typeof allow.members === 'object' ? Object.keys(allow.members).length : 0;
 
     const tiles = h('div', { class: 'stat-grid' },
       ctx.tile('This week’s budget', Number.isFinite(budgetUsd) ? fmtMoney(budgetUsd) : '—',
-        allow.budgetSource ? String(allow.budgetSource) : 'last week’s creator tax', 'coins'),
-      ctx.tile('Holders', String(holders),
-        holders === 1 ? 'wallet with a share of the supply' : 'wallets with a share of the supply', 'shield'),
-      ctx.tile('Circulating supply', Number.isFinite(circulating) ? fmtTokens(circulating) + ' OTT' : '—',
-        'excludes the curve, escrow, factory, hook and treasury', 'coins'),
+        allow.budgetSource ? String(allow.budgetSource) : 'last week’s collected creator fees', 'coins'),
+      ctx.tile('Members sharing', String(holders),
+        holders === 1 ? 'member in this week’s split' : 'members in this week’s split', 'shield'),
+      ctx.tile('Members in all', String(allMembers), 'including those who joined since Monday', 'arrows'),
+      ctx.tile('Members’ OTT', Number.isFinite(memberTokens) ? fmtTokens(memberTokens) + ' OTT' : '—',
+        'held by this week’s members at the snapshot', 'coins'),
       ctx.tile('Week of', weekLabel || '—',
         weekLabel ? 'the week this allowance is for' : 'not recorded in the ledger', 'clock'));
 
@@ -123,10 +120,9 @@
   }
 
   /**
-   * How tightly the supply is held. A weekly budget split by share means concentration is the one
-   * number that decides whether the programme funds many small allowances or a few large ones, and
-   * it is not readable from a top-five table — five rows look much the same whether they hold 9% of
-   * the supply or 90% of it.
+   * How tightly the members' OTT is held. The cap limits what any one member can take, but
+   * concentration still decides how the rest is shared, and it is not readable from a top-five
+   * table — five rows look much the same whether they hold 9% of it or 90%.
    */
   function concentration(ctx, rows) {
     const { h } = ctx;
@@ -144,7 +140,7 @@
         return h('div', { class: 'conc-item' },
           h('div', { class: 'conc-label' }, label + ' of ' + Math.min(n, shares.length)),
           h('div', { class: 'conc-bar' }, h('i', { style: 'width:' + (pct * 100).toFixed(2) + '%' })),
-          h('div', { class: 'conc-val' }, fmtSharePct(pct) + ' of supply'));
+          h('div', { class: 'conc-val' }, fmtSharePct(pct) + ' of members’ OTT'));
       })));
   }
 
@@ -152,7 +148,7 @@
   function ledger(ctx, allow, rows) {
     const { h } = ctx;
     const u = UI();
-    const me = (ctx.currentAccount && ctx.currentAccount() || '').toLowerCase();
+    const me = ctx.currentAccount && ctx.currentAccount() || '';
 
     const state = { key: 'allowanceUsd', dir: 'desc', q: '', shown: PAGE };
 
@@ -178,7 +174,7 @@
       const page = list.slice(0, state.shown);
       clear(tbody);
       page.forEach((r, i) => {
-        const mine = me && r.addr.toLowerCase() === me;
+        const mine = me && r.addr === me;
         tbody.appendChild(h('tr', { class: mine ? 'holder-you' : null },
           h('td', { class: 'holders-rank num' }, String(i + 1)),
           h('td', { class: 'mono' }, shortAddr(r.addr), mine ? h('span', { class: 'holders-you-tag' }, 'you') : null),
@@ -189,8 +185,8 @@
       clear(count);
       count.appendChild(document.createTextNode(
         list.length === rows.length
-          ? 'Showing ' + page.length + ' of ' + rows.length + (rows.length === 1 ? ' holder' : ' holders')
-          : 'Showing ' + page.length + ' of ' + list.length + ' matching ' + rows.length + ' holders'));
+          ? 'Showing ' + page.length + ' of ' + rows.length + (rows.length === 1 ? ' member' : ' members')
+          : 'Showing ' + page.length + ' of ' + list.length + ' matching ' + rows.length + ' members'));
       more.hidden = page.length >= list.length;
       if (!list.length) {
         tbody.appendChild(h('tr', {}, h('td', { colspan: '5', class: 'holders-none' }, 'No wallet matches that address.')));
@@ -232,10 +228,10 @@
       h('div', { class: 'section-head' }, h('h2', { class: 'section-title' }, 'The week’s ledger')),
       card,
       h('p', { class: 'holders-note' },
-        'Balances are taken at the first block of the week, not at the moment of redemption — an '
-        + 'allowance computed from a live balance could be taken by borrowing a large position, '
-        + 'redeeming against it and returning it in the same block. Unspent allowance expires when '
-        + 'the week does.')));
+        'Holdings are read at Monday 00:00 UTC, not at the moment of redemption — an allowance '
+        + 'computed from a live balance could be taken by borrowing a large position, redeeming '
+        + 'against it and returning it. No member gets more than the cap. Unspent allowance expires '
+        + 'when the week does.')));
   }
 
   function emptyState(ctx, allow) {
@@ -243,11 +239,11 @@
     const why = allow.budgetSource ? String(allow.budgetSource) : 'the coin is not launched yet';
     return h('div', { class: 'section' }, h('div', { class: 'wrap' },
       h('div', { class: 'card' },
-        h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'No holders yet')),
+        h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'No members in this week’s split yet')),
         h('p', { class: 'small' },
-          'The ledger is empty: ' + why + '. Once OTT trades, scripts/allowances.js folds the coin’s '
-          + 'Transfer logs into every wallet’s balance at the week’s first block and this page fills '
-          + 'itself from that file — nothing here is stored on top of chain data.'))));
+          'The ledger is empty: ' + why + '. Once OTT trades and members join, the weekly ledger '
+          + 'lists every member who joined before Monday’s snapshot, with what they held then, and '
+          + 'this page fills itself from that file — nothing here is stored on top of chain data.'))));
   }
 
   window.OTTHolders = { render };

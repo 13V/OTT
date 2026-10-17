@@ -2,7 +2,7 @@
 /** The public OTT story. Account balances and redemption remain in esim.js. */
 (function () {
   const money = (value) => Number.isFinite(Number(value)) ? '$' + Number(value).toFixed(2) : '—';
-  const isAddress = (value) => /^0x[0-9a-fA-F]{40}$/.test(String(value || ''));
+  const isAddress = (value) => !!window.OTTSolana && window.OTTSolana.isAddress(value);
   const asset = (name) => './assets/ott/' + name + '.webp';
   const entries = (cfg) => Array.isArray(cfg.packages) ? cfg.packages.filter((p) => p && p.code && p.slug && Number(p.gb) > 0 && Number(p.priceUsd) > 0) : [];
   const places = (cfg) => [...new Map(entries(cfg).map((p) => [p.slug, { slug: p.slug, name: p.name, kind: p.kind, flag: p.flag || '' }])).values()];
@@ -18,7 +18,8 @@
     const w = m.welcome && typeof m.welcome === 'object' ? m.welcome : null;
     const bps = Number(cfg.budgetBps);
     return {
-      burn: /^\d{1,30}$/.test(String(m.burnTokens || '')) ? Number(m.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT',
+      // The join amount is set in dollars and turned into OTT each week, so the story quotes dollars.
+      burn: Number(m.burnUsd) > 0 ? 'about $' + Number(m.burnUsd) + ' of OTT' : 'OTT',
       welcome: w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0) ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan up to ' + money(w.maxUsd) : 'a welcome eSIM',
       cap: Number(m.capMultiple) > 0 ? Number(m.capMultiple) : null,
       share: bps > 0 && bps <= 10000 ? bps / 100 + '%' : 'a published share',
@@ -26,7 +27,7 @@
   }
   function hero(h, launched, cfg, network) {
     const ticker = String(cfg.brand?.ticker || 'OTT');
-    const knownNetwork = Number(network?.chainId) === 4663;
+    const knownNetwork = network?.chain === 'solana';
     return h('section', { class: 'ott-hero section' }, h('div', { class: 'ott-hero-inner wrap' },
       h('div', { class: 'ott-hero-copy' },
         h('p', { class: 'ott-company-name' }, 'ONCHAIN TELEPHONE + TELEGRAPH'),
@@ -46,7 +47,7 @@
       h('div', { class: 'ott-token-strip', 'aria-label': 'OTT token information' },
         h('dl', { class: 'ott-token-facts' },
           h('div', { class: 'ott-token-fact' }, h('dt', {}, 'TOKEN'), h('dd', {}, ticker)),
-          knownNetwork ? h('div', { class: 'ott-token-fact' }, h('dt', {}, 'NETWORK'), h('dd', {}, 'Robinhood Chain')) : null,
+          knownNetwork ? h('div', { class: 'ott-token-fact' }, h('dt', {}, 'NETWORK'), h('dd', {}, 'Solana · pump.fun')) : null,
           h('div', { class: 'ott-token-fact' }, h('dt', {}, 'PROGRAMME'), h('dd', {}, h('a', { href: '#/status', class: 'ott-token-status' }, h('span', { class: 'ott-status-dot', 'aria-hidden': 'true' }), launched ? 'Programme configured' : 'Prelaunch', ' ↗')))),
         h('a', { class: 'ott-token-rules', href: '#/about' }, 'Membership & data rules ↗'))));
   }
@@ -226,7 +227,7 @@
       return;
     }
     if (ctx.isCurrent && !ctx.isCurrent()) return;
-    const launched = isAddress(cfg.coin) && isAddress(cfg.curve) && isAddress(cfg.treasury);
+    const launched = !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
     view.appendChild(hero(h, launched, cfg, ctx.cfg));
     const travelSection = travel(h);
     const catalogueSection = catalogue(h, cfg, launched);

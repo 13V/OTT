@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OT+T — a memecoin with a data plan</title>
-<meta name="description" content="OT+T plans one OTT burn to enrol for an eSIM, with collected trading fees funding ongoing member data. Explore the plans, shared-pool example and safeguards before launch.">
+<meta name="description" content="OT+T is a memecoin on pump.fun with a data plan: burn about $5 of OTT once to join and get an eSIM, then collected trading fees fund members’ weekly mobile data.">
 <meta name="theme-color" content="#F4F0E7">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="./home.css?v=20261007-membership">
 <link rel="stylesheet" href="./membership-story.css?v=20261007-membership">
 <link rel="stylesheet" href="./account-preview.css">
-<link rel="stylesheet" href="./mobile-app.css?v=20261017-burn">
+<link rel="stylesheet" href="./mobile-app.css?v=20261017-solana">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./assets/app/icon-180.png">
 </head>
@@ -63,13 +63,13 @@
         <a href="#/data">My data</a>
         <a href="#/app">Open app</a>
         <a href="#/status">Status</a>
-        <a href="#/holders">Holders</a>
+        <a href="#/holders">Members</a>
         <a href="#/about">How it works</a>
         <a href="#trust">Before you burn</a>
       </nav>
       <nav class="foot-col" aria-label="Network">
         <p class="foot-col-title">Network</p>
-        <a id="foot-explorer" href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Explorer</a>
+        <a id="foot-explorer" href="https://solscan.io" target="_blank" rel="noopener">Explorer</a>
         <a href="#/status">Programme status</a>
       </nav>
       <nav class="foot-col" aria-label="Source">
@@ -79,12 +79,12 @@
     </div>
     <div class="foot-bottom">
       <p class="disclaimer">
-        Burn 100,000 OTT once to join and claim a welcome eSIM; collected trading fees then fund
-        weekly member data, shared by holdings with a cap. A burn is final and can’t be refunded.
-        Enrolment opens when OTT launches, and data depends on fees actually collected. See Status
-        for current availability. A memecoin can go to zero; nothing here is financial advice.
+        Burn about $5 of OTT once to join and claim a welcome eSIM; collected pump.fun creator fees
+        then fund weekly member data, shared by holdings with a cap. A burn is final and can’t be
+        refunded. Joining opens when OTT launches, and data depends on fees actually collected. See
+        Status for current availability. A memecoin can go to zero; nothing here is financial advice.
       </p>
-      <p class="foot-meta"><span id="foot-chain">Robinhood Chain · 4663</span> · © 2026 OT+T</p>
+      <p class="foot-meta"><span id="foot-chain">Solana · pump.fun</span> · © 2026 OT+T</p>
     </div>
   </div>
 </footer>
@@ -94,22 +94,23 @@
      of its own. It defines window.WhateverQr and does nothing on its own, so loading it here costs
      the page nothing until a redemption actually needs it. -->
 <script src="./qr.js"></script>
-<script src="./client-config.js?v=20261006-holders"></script>
-<script src="./wallet.js?v=20261006-holders"></script>
-<script src="./solana-login.js?v=20261006-holders"></script>
+<script src="./client-config.js?v=20261017-solana"></script>
+<!-- Solana primitives (window.OTTSolana): addresses, the join transaction, reading transactions. -->
+<script src="./solana.js?v=20261017-solana"></script>
+<script src="./wallet.js?v=20261017-solana"></script>
 <script src="./holder-tools.js?v=20261006-holders"></script>
 <!-- My data and redemption stay in esim.js; home.js renders the public homepage. -->
-<script src="./esim.js?v=20261017-burn"></script>
+<script src="./esim.js?v=20261017-solana"></script>
 <script src="./clay-type.js"></script>
 <script src="./account-preview.js?v=20261017-burn"></script>
-<script src="./membership-story.js?v=20261017-burn"></script>
-<script src="./home.js?v=20261017-burn"></script>
+<script src="./membership-story.js?v=20261017-solana"></script>
+<script src="./home.js?v=20261017-solana"></script>
 <!-- The Status route (#/status): the network status page and the operator's dashboard. Same wiring
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
-<script src="./status.js"></script>
-<script src="./holders.js"></script>
-<script src="./mobile-app.js?v=20261017-burn"></script>
+<script src="./status.js?v=20261017-solana"></script>
+<script src="./holders.js?v=20261017-solana"></script>
+<script src="./mobile-app.js?v=20261017-solana"></script>
 <script src="./pwa.js"></script>
-<script src="./app.js?v=20261017-burn"></script>
+<script src="./app.js?v=20261017-solana"></script>
 </body>
 </html>

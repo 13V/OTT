@@ -1,67 +1,34 @@
 'use strict';
 /**
- * Selected EVM or Solana transport for the whole site. Injected wallets stay dependency-free;
- * the locally bundled WalletConnect SDK is loaded only for an explicit mobile
- * connection or a remembered WalletConnect session. No account or signature is
- * stored here. WalletConnect owns its encrypted pairing/session storage.
+ * The Solana wallet connection for the whole site. Wallets are found through the Wallet Standard
+ * (https://github.com/wallet-standard/wallet-standard): the page announces itself with a
+ * `wallet-standard:app-ready` event and installed wallets (Phantom, Solflare, Backpack and others)
+ * register through `wallet-standard:register-wallet`. Phantom's older injected provider is the
+ * fallback when no standard wallet has registered. Nothing here is stored but the name of the
+ * wallet last connected, so a reload can reconnect it silently.
+ *
+ *   OTTWallet.wallets()                 -> [{ name, icon }] installed wallets
+ *   OTTWallet.connect({ wallet })       -> [address]
+ *   OTTWallet.restore()                 -> [address] or [] (silent; never prompts)
+ *   OTTWallet.signMessage(text)         -> base58 signature over the UTF-8 bytes of `text`
+ *   OTTWallet.signAndSendTransaction(wire, message) -> base58 transaction signature
+ *   OTTWallet.disconnect(), on(event, fn), off(event, fn), state(), available(), openIn(name)
+ *
+ * Events: 'accountsChanged' ([address] or []), 'disconnect', 'walletsChanged'.
  */
 (function () {
   const BASE = new URL('./', document.currentScript?.src || location.href);
-  const STORAGE_KEY = 'ott-wallet-transport:' + BASE.pathname;
+  const STORAGE_KEY = 'ott-solana-wallet:' + BASE.pathname;
+  const CHAIN = 'solana:mainnet';
   const listeners = new Map();
-  let settings = {};
-  let provider = null;
-  let remote = null;
-  let transport = null;
+  const standard = new Set();
+  let selected = null;       // { name, icon, adapter }
   let accounts = [];
   let generation = 0;
-  let accountRevision = 0;
-  let lifecycle = 0;
-  let bindings = [];
-  let loadingSdk = null;
-  let initializingRemote = null;
+  let unbind = null;
   let connecting = null;
-  let linkSignerLease = null;
 
-  function injected() {
-    return window.ethereum && typeof window.ethereum.request === 'function' ? window.ethereum : null;
-  }
-  function solana() {
-    const selected = window.phantom?.solana?.isPhantom ? window.phantom.solana : window.solana?.isPhantom ? window.solana : null;
-    return selected && typeof selected.connect === 'function' ? selected : null;
-  }
-  // A Solana public key is exactly 32 bytes of base58 and is case-sensitive.
-  function solanaAddress(value) {
-    try {
-      const address = typeof value === 'string' ? value : value?.toString?.();
-      if (typeof address !== 'string' || address.length < 32 || address.length > 44) return null;
-      const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-      let number = 0n;
-      for (const character of address) {
-        const digit = alphabet.indexOf(character);
-        if (digit < 0) return null;
-        number = number * 58n + BigInt(digit);
-      }
-      let bytes = 0;
-      while (number > 0n) { bytes++; number >>= 8n; }
-      let leading = 0;
-      while (address[leading] === '1') leading++;
-      return bytes + leading === 32 ? address : null;
-    } catch (_) { return null; }
-  }
-  function accountKey(value, kind = transport) {
-    const joined = value.join(',');
-    return kind === 'solana' ? joined : joined.toLowerCase();
-  }
-  function remembered() {
-    try { return localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
-  }
-  function remember(value) {
-    try { localStorage.setItem(STORAGE_KEY, value); } catch (_) { /* Connection still works without storage. */ }
-  }
-  function normalize(value) {
-    return Array.isArray(value) ? value.filter((a) => typeof a === 'string' && /^0x[\da-f]{40}$/i.test(a)) : [];
-  }
+  const S = () => window.OTTSolana;
   function failure(message, code) {
     const error = new Error(message);
     error.code = code;
@@ -72,365 +39,261 @@
       try { callback(value); } catch (error) { console.error('Wallet listener failed', error); }
     }
   }
-  function detach() {
-    for (const [source, event, callback] of bindings) {
-      if (typeof source.removeListener === 'function') source.removeListener(event, callback);
-      else source.off?.(event, callback);
-    }
-    bindings = [];
+  const remembered = () => { try { return localStorage.getItem(STORAGE_KEY); } catch (_) { return null; } };
+  const remember = (value) => { try { if (value) localStorage.setItem(STORAGE_KEY, value); else localStorage.removeItem(STORAGE_KEY); } catch (_) { /* works without storage */ } };
+  const validAddress = (value) => (typeof value === 'string' && S()?.isAddress(value) ? value : null);
+  const rejected = (error) => error && (error.code === 4001 || /reject|denied|cancel|declin/i.test(String(error.message || error)));
+
+  // ============================================================================ discovery
+  function isSolanaWallet(wallet) {
+    const f = wallet && wallet.features;
+    return !!f && Array.isArray(wallet.chains) && wallet.chains.includes(CHAIN)
+      && !!f['standard:connect'] && !!f['solana:signMessage'] && !!f['solana:signAndSendTransaction'];
   }
-  function clearCurrent(reason) {
+  const registry = Object.freeze({
+    register(...wallets) {
+      const added = wallets.filter(isSolanaWallet);
+      added.forEach((w) => standard.add(w));
+      if (added.length) emit('walletsChanged', list());
+      return () => { added.forEach((w) => standard.delete(w)); emit('walletsChanged', list()); };
+    },
+  });
+  window.addEventListener('wallet-standard:register-wallet', (event) => {
+    try { if (typeof event.detail === 'function') event.detail(registry); } catch (_) { /* a broken wallet must not break the page */ }
+  });
+  try { window.dispatchEvent(new CustomEvent('wallet-standard:app-ready', { detail: registry })); } catch (_) { /* old browsers */ }
+
+  /** A standard wallet behind the four calls this site makes. */
+  function standardAdapter(wallet) {
+    const f = wallet.features;
+    let account = null;
+    const pick = (list) => (Array.isArray(list) ? list.find((a) => a && validAddress(a.address) && (!a.chains || a.chains.includes(CHAIN))) : null) || null;
+    return {
+      kind: 'standard',
+      async connect(silent) {
+        const out = await f['standard:connect'].connect(silent ? { silent: true } : undefined);
+        account = pick(out && out.accounts) || pick(wallet.accounts);
+        return account ? [account.address] : [];
+      },
+      async disconnect() { await f['standard:disconnect']?.disconnect?.(); account = null; },
+      async signMessage(bytes) {
+        if (!account) throw failure('Connect your wallet first.', 4900);
+        const [out] = await f['solana:signMessage'].signMessage({ account, message: bytes });
+        if (!out || !(out.signature instanceof Uint8Array) || out.signature.length !== 64) throw failure('The wallet returned an invalid signature.', 'INVALID_SIGNATURE');
+        if (out.signedMessage && S().encodeBase64(out.signedMessage) !== S().encodeBase64(bytes)) throw failure('The wallet signed a different message. Nothing was sent.', 'INVALID_SIGNATURE');
+        return out.signature;
+      },
+      async signAndSendTransaction(wire) {
+        if (!account) throw failure('Connect your wallet first.', 4900);
+        const [out] = await f['solana:signAndSendTransaction'].signAndSendTransaction({ account, chain: CHAIN, transaction: wire, options: { commitment: 'confirmed' } });
+        if (!out || !(out.signature instanceof Uint8Array) || out.signature.length !== 64) throw failure('The wallet did not return a transaction signature. Check your wallet before trying again.', 'INVALID_SIGNATURE');
+        return out.signature;
+      },
+      subscribe(onAccounts) {
+        const off = f['standard:events']?.on?.('change', (change) => {
+          if (change && 'accounts' in change) {
+            account = pick(change.accounts);
+            onAccounts(account ? [account.address] : []);
+          }
+        });
+        return typeof off === 'function' ? off : () => {};
+      },
+    };
+  }
+
+  /** Phantom's injected provider, for browsers where it has not registered as a standard wallet. */
+  function legacyPhantom() {
+    const p = window.phantom?.solana?.isPhantom ? window.phantom.solana : window.solana?.isPhantom ? window.solana : null;
+    return p && typeof p.connect === 'function' && typeof p.signMessage === 'function' ? p : null;
+  }
+  function legacyAdapter(provider) {
+    const keyOf = (value) => validAddress(typeof value === 'string' ? value : value?.toString?.());
+    return {
+      kind: 'legacy',
+      async connect(silent) {
+        const out = await provider.connect(silent ? { onlyIfTrusted: true } : undefined);
+        const address = keyOf(out?.publicKey || provider.publicKey);
+        return address ? [address] : [];
+      },
+      async disconnect() { await provider.disconnect?.(); },
+      async signMessage(bytes) {
+        const out = await provider.signMessage(bytes, 'utf8');
+        const sig = out && out.signature;
+        if (!(sig instanceof Uint8Array) || sig.length !== 64) throw failure('The wallet returned an invalid signature.', 'INVALID_SIGNATURE');
+        return sig;
+      },
+      async signAndSendTransaction(wire, message) {
+        const out = await provider.request({ method: 'signAndSendTransaction', params: { message: S().encodeBase58(message) } });
+        const sig = out && out.signature;
+        if (typeof sig !== 'string' || !S().isSignature(sig)) throw failure('The wallet did not return a transaction signature. Check your wallet before trying again.', 'INVALID_SIGNATURE');
+        return S().decodeBase58(sig);
+      },
+      subscribe(onAccounts) {
+        const changed = (value) => { const a = keyOf(value); onAccounts(a ? [a] : []); };
+        const gone = () => onAccounts([]);
+        provider.on?.('accountChanged', changed);
+        provider.on?.('disconnect', gone);
+        return () => { provider.removeListener?.('accountChanged', changed); provider.removeListener?.('disconnect', gone); };
+      },
+    };
+  }
+
+  /** Installed wallets, standard ones first; Phantom's injected provider only if Phantom did not register. */
+  function list() {
+    const out = [...standard].map((w) => ({ name: String(w.name || 'Wallet'), icon: typeof w.icon === 'string' && /^data:image\//.test(w.icon) ? w.icon : '', wallet: w }));
+    if (!out.some((w) => /phantom/i.test(w.name)) && legacyPhantom()) out.push({ name: 'Phantom', icon: '', legacy: legacyPhantom() });
+    return out;
+  }
+  function adapterFor(name) {
+    const entries = list();
+    const entry = (name && entries.find((w) => w.name === name)) || (entries.length === 1 ? entries[0] : null);
+    if (!entry) return null;
+    return { name: entry.name, icon: entry.icon, adapter: entry.legacy ? legacyAdapter(entry.legacy) : standardAdapter(entry.wallet) };
+  }
+
+  // ============================================================================ connection
+  function bind(choice) {
+    if (unbind) unbind();
+    selected = choice;
+    const own = choice;
+    unbind = choice.adapter.subscribe((next) => {
+      if (selected !== own) return;
+      generation++;
+      accounts = next.slice(0, 1);
+      if (!accounts.length) { remember(null); clear({ code: 4900, message: 'Wallet access was removed.' }); return; }
+      emit('accountsChanged', accounts.slice());
+    });
+  }
+  function clear(reason) {
     generation++;
-    accountRevision++;
-    lifecycle++;
-    detach();
-    provider = null;
-    transport = null;
+    if (unbind) unbind();
+    unbind = null;
+    selected = null;
     accounts = [];
     emit('accountsChanged', []);
     emit('disconnect', reason || { code: 4900, message: 'Wallet disconnected.' });
   }
-  function bind(source, kind) {
-    detach();
-    provider = source;
-    transport = kind;
-    function listen(event, callback) {
-      if (typeof source.on !== 'function') return;
-      source.on(event, callback);
-      bindings.push([source, event, callback]);
-    }
-    listen(kind === 'solana' ? 'accountChanged' : 'accountsChanged', (value) => {
-      if (provider !== source) return;
-      generation++;
-      accountRevision++;
-      const address = kind === 'solana' ? solanaAddress(value) : null;
-      accounts = kind === 'solana' ? address ? [address] : [] : normalize(value);
-      if (!accounts.length) {
-        remember('disconnected');
-        clearCurrent({ code: 4900, message: 'Wallet access was removed.' });
-        return;
-      }
-      emit('accountsChanged', accounts.slice());
-    });
-    if (kind !== 'solana') listen('chainChanged', (value) => {
-      if (provider !== source) return;
-      generation++;
-      emit('chainChanged', value);
-    });
-    listen('disconnect', (reason) => {
-      if (provider !== source) return;
-      remember('disconnected');
-      clearCurrent(reason);
-    });
-    // EthereumProvider normally translates session_delete into disconnect. Some
-    // compatible providers expose the original event too; never retain access.
-    listen('session_delete', (reason) => {
-      if (provider !== source) return;
-      remember('disconnected');
-      clearCurrent(reason);
-    });
-    listen('session_update', (value) => {
-      if (provider !== source || kind !== 'walletconnect') return;
-      const namespaces = value?.params?.namespaces || value?.namespaces || source.session?.namespaces;
-      if (!namespaces) return;
-      const approved = normalize(Object.entries(namespaces).filter(([name]) => name === 'eip155' || name.startsWith('eip155:'))
-        .flatMap(([, namespace]) => namespace.accounts || []).map((account) => typeof account === 'string' ? account.split(':').pop() : null));
-      const retained = accounts.filter((account) => approved.some((a) => a.toLowerCase() === account.toLowerCase()));
-      generation++;
-      accountRevision++;
-      accounts = retained;
-      // Even unchanged accounts may have lost signing permissions. Invalidate
-      // private reads and let the next user action check the updated session.
-      if (!accounts.length) {
-        remember('disconnected');
-        clearCurrent({ code: 4900, message: 'The wallet session no longer includes this account.' });
-        return;
-      }
-      emit('accountsChanged', accounts.slice());
-    });
-  }
-  function configure(config) {
-    settings = Object.assign({}, config || {});
-  }
-  function remoteAvailable() {
-    return typeof settings.projectId === 'string' && /^[\da-f]{32}$/i.test(settings.projectId.trim()) &&
-      Number.isSafeInteger(Number(settings.chainId)) && Number(settings.chainId) > 0 && typeof settings.rpc === 'string' && /^https:\/\//.test(settings.rpc);
-  }
-  async function sdk() {
-    if (window.OTTWalletConnectSDK?.init) return window.OTTWalletConnectSDK;
-    if (!loadingSdk) loadingSdk = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = new URL('vendor/walletconnect.js', BASE).href;
-      script.async = true;
-      script.onload = () => window.OTTWalletConnectSDK?.init ? resolve(window.OTTWalletConnectSDK) : reject(failure('The wallet connector could not start. Refresh and try again.', 'SDK_UNAVAILABLE'));
-      script.onerror = () => { script.remove(); reject(failure('The mobile wallet connector could not load. Go online and try again.', 'SDK_UNAVAILABLE')); };
-      document.head.appendChild(script);
-    }).catch((error) => { loadingSdk = null; throw error; });
-    return loadingSdk;
-  }
-  async function getRemote() {
-    if (remote) return remote;
-    if (!remoteAvailable()) throw failure('Mobile wallet connection needs a Reown project ID and network settings. Open OTT in your wallet browser for now.', 'WALLETCONNECT_UNCONFIGURED');
-    if (!initializingRemote) initializingRemote = (async () => {
-      const factory = await sdk();
-      remote = await factory.init({
-        projectId: settings.projectId.trim(),
-        chainId: Number(settings.chainId),
-        rpc: settings.rpc,
-        explorer: settings.explorer || '',
-        metadata: {
-          name: 'OT+T',
-          description: 'Mobile data for eligible OTT holders.',
-          url: BASE.href,
-          icons: [new URL('assets/app/icon-192.png', BASE).href],
-        },
-      });
-      return remote;
-    })().finally(() => { initializingRemote = null; });
-    return initializingRemote;
-  }
-  async function restore() {
-    if (remembered() === 'disconnected') return [];
-    const op = generation;
-    let source = null;
-    let kind = null;
-    let restored = [];
-    if (remembered() === 'solana') {
-      source = solana();
-      kind = 'solana';
-      if (!source) return [];
-      try {
-        const result = await source.connect({ onlyIfTrusted: true });
-        const address = solanaAddress(result?.publicKey || source.publicKey);
-        // Phantom updates publicKey on account changes/revocation even before
-        // this boot restoration has installed its normal event listeners.
-        if ('publicKey' in source && solanaAddress(source.publicKey) !== address) return [];
-        restored = address ? [address] : [];
-      } catch { return []; }
-    } else if (remembered() === 'walletconnect' && remoteAvailable()) {
-      source = await getRemote();
-      kind = 'walletconnect';
-      restored = source.session ? normalize(source.accounts) : [];
-    } else if (injected()) {
-      source = injected();
-      kind = 'injected';
-      restored = normalize(await source.request({ method: 'eth_accounts' }));
-    }
-    if (op !== generation || !source || !restored.length) return [];
-    bind(source, kind);
-    accounts = restored;
-    return accounts.slice();
-  }
+
   async function connect(options) {
-    if (linkSignerLease) throw failure('Finish or cancel wallet linking before changing wallets.', 'LINK_IN_PROGRESS');
     if (connecting) return connecting;
     connecting = (async () => {
-      const choice = options?.transport || 'auto';
-      if (!['auto', 'injected', 'walletconnect', 'solana'].includes(choice)) throw failure('Unknown wallet connection method.', 'INVALID_TRANSPORT');
-      const kind = choice === 'auto' ? (provider && transport !== 'solana' ? transport : injected() ? 'injected' : 'walletconnect') : choice;
-      // A deliberate new connection supersedes an unfinished boot restoration
-      // and any private request started under the previous selection.
-      const opening = ++lifecycle;
-      generation++;
-      const source = kind === 'injected' ? injected() : kind === 'solana' ? solana() : await getRemote();
-      if (opening !== lifecycle) throw failure('Wallet connection was cancelled. Please connect again.', 4900);
-      if (!source) throw failure(kind === 'solana' ? 'Open OTT in Phantom’s browser or install Phantom to sign in with Solana.'
-        : 'No browser wallet was found. Open OTT in your wallet browser, or choose a mobile wallet.', 'WALLET_UNAVAILABLE');
-      if (provider && provider !== source) {
-        const releasing = disconnect();
-        const released = lifecycle;
-        await releasing;
-        if (released !== lifecycle) throw failure('Wallet connection was cancelled. Please connect again.', 4900);
+      const name = options && options.wallet;
+      const choice = adapterFor(name);
+      // A wallet named by the chooser must be the one that connects, not whichever is installed.
+      if (choice && name && choice.name !== name) throw failure(name + ' is no longer available. Choose another wallet.', 'WALLET_UNAVAILABLE');
+      if (!choice) {
+        throw failure(list().length > 1 ? 'Choose which wallet to connect.' : 'No Solana wallet was found. Open OTT in Phantom or Solflare, or install a Solana wallet.', 'WALLET_UNAVAILABLE');
       }
-      // Bind before the prompt so that revocations during connection clear state.
-      bind(source, kind);
-      const op = lifecycle;
-      const openingAccounts = accountRevision;
-      try {
-        const result = kind === 'injected' ? await source.request({ method: 'eth_requestAccounts' }) : await source.connect();
-        if (provider !== source || op !== lifecycle) throw failure('Wallet connection changed. Please connect again.', 4900);
-        const address = kind === 'solana' ? solanaAddress(result?.publicKey || source.publicKey) : null;
-        const next = kind === 'solana' ? address ? [address] : [] : normalize(kind === 'injected' ? result : source.accounts);
-        if (!next.length) throw failure('The wallet did not share an account.', 4900);
-        // Sharing the requested account may emit accountsChanged normally. A
-        // different event-selected account must not be overwritten by an older
-        // approval result. Network events alone do not change this selection.
-        if (accountRevision !== openingAccounts && accountKey(accounts, kind) !== accountKey(next, kind)) {
-          throw failure('Your wallet changed while connecting. Check the connected account and try again.', 4900);
-        }
-        accounts = next;
-        remember(kind);
-        return accounts.slice();
-      } catch (error) {
-        // Keep user rejection visible. Never quietly connect through another wallet.
-        if (provider === source && !accounts.length) { detach(); provider = null; transport = null; }
-        throw error;
-      }
+      const opening = ++generation;
+      let next;
+      try { next = await choice.adapter.connect(false); }
+      catch (error) { throw rejected(error) ? failure('The connection was not approved.', 4001) : error; }
+      if (opening !== generation) throw failure('Wallet connection was cancelled. Please connect again.', 4900);
+      if (!next.length) throw failure('The wallet did not share an account.', 4900);
+      bind(choice);
+      accounts = next.slice(0, 1);
+      remember(choice.name);
+      return accounts.slice();
     })().finally(() => { connecting = null; });
     return connecting;
   }
-  async function evmLinkSigner(options) {
-    if (linkSignerLease || connecting) throw failure('A wallet connection or link approval is already in progress.', 'LINK_IN_PROGRESS');
-    if (transport !== 'solana' || !provider || accounts.length !== 1) throw failure('Sign in with your Solana wallet before linking an EVM wallet.', 'SOLANA_REQUIRED');
-    const choice = options?.transport || 'auto';
-    if (!['auto', 'injected', 'walletconnect'].includes(choice)) throw failure('Unknown EVM wallet connection method.', 'INVALID_TRANSPORT');
-    const kind = choice === 'auto' ? injected() ? 'injected' : 'walletconnect' : choice;
-    const owner = provider;
-    const ownerAccount = accounts[0];
-    const ownerGeneration = generation;
-    const ownerLifecycle = lifecycle;
-    const lease = {};
-    linkSignerLease = lease;
-    let source = null;
-    let released = false;
-    let releasePromise = null;
-    let hadSession = true;
-    let cancelled = false;
-    let proofAddress = null;
-    let eventAccounts = null;
-    let updatedNamespaces = null;
-    let revision = 0;
-    let signing = false;
-    const proofBindings = [];
-    function listen(target, event, callback) {
-      if (typeof target.on !== 'function') return;
-      target.on(event, callback);
-      proofBindings.push([target, event, callback]);
-    }
-    function valid() {
-      if (released || cancelled || provider !== owner || transport !== 'solana' || accounts[0] !== ownerAccount
-        || generation !== ownerGeneration || lifecycle !== ownerLifecycle) throw failure('Your wallet changed during linking. Start the link again.', 4900);
-      if (proofAddress && kind === 'walletconnect' && normalize(source.accounts)[0]?.toLowerCase() !== proofAddress) throw failure('Your EVM wallet changed during linking. Start the link again.', 4900);
-    }
-    function sessionPermits(address, namespaces) {
-      return Object.entries(namespaces).filter(([name]) => name === 'eip155' || name.startsWith('eip155:'))
-        .some(([, namespace]) => Array.isArray(namespace.methods) && namespace.methods.includes('personal_sign')
-          && Array.isArray(namespace.accounts) && namespace.accounts.some(account => typeof account === 'string' && account.split(':').pop().toLowerCase() === address));
-    }
-    async function release() {
-      if (releasePromise) return releasePromise;
-      released = true;
-      for (const [target, event, callback] of proofBindings) {
-        if (typeof target.removeListener === 'function') target.removeListener(event, callback);
-        else target.off?.(event, callback);
-      }
-      proofBindings.length = 0;
-      releasePromise = (async () => {
-        try {
-          // Preserve preexisting sessions and any provider selected after this
-          // proof. Only this lease's new, isolated mobile session is closed.
-          if (kind === 'walletconnect' && !hadSession && source?.session && source !== provider) await source.disconnect?.();
-        } catch (_) {
-          if (source === remote) remote = null;
-        } finally {
-          if (linkSignerLease === lease) linkSignerLease = null;
-        }
-      })();
-      return releasePromise;
-    }
+
+  /** Reconnect the remembered wallet without a prompt. Wallets that cannot do that silently answer []. */
+  async function restore() {
+    const name = remembered();
+    if (!name) return [];
+    // Wallets can register a moment after the page; give them that moment.
+    for (let i = 0; i < 10 && !list().some((w) => w.name === name); i++) await new Promise((r) => setTimeout(r, 100));
+    const choice = adapterFor(name);
+    if (!choice || choice.name !== name) return [];
+    const opening = ++generation;
     try {
-      source = kind === 'injected' ? injected() : await getRemote();
-      valid();
-      if (!source) throw failure('Open OTT in your EVM wallet’s browser, or install a browser wallet to link it.', 'WALLET_UNAVAILABLE');
-      if (source === owner) throw failure('Choose a separate EVM provider for wallet linking.', 'WRONG_WALLET_CHAIN');
-      hadSession = kind !== 'walletconnect' || !!source.session;
-      listen(source, 'accountsChanged', value => {
-        revision++;
-        eventAccounts = normalize(value);
-        if (!eventAccounts.length || proofAddress && eventAccounts[0].toLowerCase() !== proofAddress) cancelled = true;
-      });
-      listen(source, 'chainChanged', () => { revision++; if (proofAddress) cancelled = true; });
-      listen(source, 'disconnect', () => { revision++; cancelled = true; });
-      listen(source, 'session_delete', () => { revision++; cancelled = true; });
-      listen(source, 'session_update', value => {
-        revision++;
-        const namespaces = value?.params?.namespaces || value?.namespaces || source.session?.namespaces;
-        if (!namespaces) { cancelled = true; return; }
-        updatedNamespaces = namespaces;
-        if (proofAddress && !sessionPermits(proofAddress, namespaces)) cancelled = true;
-      });
-      const result = kind === 'injected' ? await source.request({ method: 'eth_requestAccounts' }) : await source.connect();
-      valid();
-      const selected = normalize(kind === 'injected' ? result : source.accounts);
-      if (!selected.length) throw failure('The EVM wallet did not share an account.', 4900);
-      proofAddress = selected[0].toLowerCase();
-      if (eventAccounts && eventAccounts[0]?.toLowerCase() !== proofAddress) throw failure('Your EVM wallet changed while connecting. Start the link again.', 4900);
-      if (updatedNamespaces && !sessionPermits(proofAddress, updatedNamespaces)) throw failure('The EVM wallet no longer permits this link approval.', 4900);
-      valid();
-      return Object.freeze({ address: proofAddress, release, async sign(message) {
-        valid();
-        if (signing) throw failure('An EVM link approval is already in progress.', 'LINK_IN_PROGRESS');
-        if (typeof message !== 'string' || !message.length) throw failure('The wallet link message is invalid.', 'INVALID_LINK_MESSAGE');
-        const bytes = new TextEncoder().encode(message);
-        if (bytes.length > 4096) throw failure('The wallet link message is too long.', 'INVALID_LINK_MESSAGE');
-        const hex = '0x' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-        const signingRevision = revision;
-        signing = true;
-        try {
-          const signature = await source.request({ method: 'personal_sign', params: [hex, proofAddress] });
-          valid();
-          if (revision !== signingRevision) throw failure('Your EVM wallet changed during approval. Start the link again.', 4900);
-          if (typeof signature !== 'string' || !/^0x[\da-f]{130}$/i.test(signature)) throw failure('The EVM wallet returned an invalid link signature.', 'INVALID_LINK_SIGNATURE');
-          return signature;
-        } finally { signing = false; }
-      } });
-    } catch (error) {
-      await release();
+      const next = await choice.adapter.connect(true);
+      if (opening !== generation || !next.length) return [];
+      bind(choice);
+      accounts = next.slice(0, 1);
+      return accounts.slice();
+    } catch (_) { return []; }
+  }
+
+  async function disconnect() {
+    const previous = selected;
+    remember(null);
+    clear();
+    try { await previous?.adapter.disconnect(); } catch (_) { /* the page has already forgotten it */ }
+  }
+
+  /** Runs `work` against the selected wallet and refuses its result if the wallet changed meanwhile. */
+  async function guarded(work) {
+    const choice = selected;
+    const op = generation;
+    const account = accounts[0];
+    if (!choice || !account) throw failure('Connect your wallet first.', 4900);
+    let out;
+    try { out = await work(choice.adapter, account); }
+    catch (error) { throw rejected(error) ? failure('The request was not approved in your wallet.', 4001) : error; }
+    if (selected !== choice || op !== generation || accounts[0] !== account) {
+      const changed = failure('Your wallet changed. Please try again.', 4900);
+      // What the wallet answered anyway, and for which account: a sent transaction can still land.
+      changed.result = out;
+      changed.account = account;
+      throw changed;
+    }
+    return out;
+  }
+
+  async function signMessage(text) {
+    if (typeof text !== 'string' || !text.length || text.length > 2048) throw failure('The message to sign is invalid.', 'INVALID_MESSAGE');
+    let signature;
+    try { signature = await guarded((adapter) => adapter.signMessage(S().utf8(text))); }
+    catch (error) {
+      // A message signature for an account the page has left is simply dropped.
+      if (error) { delete error.result; delete error.account; }
       throw error;
     }
+    return S().encodeBase58(signature);
   }
-  async function request(args) {
-    const selected = provider;
-    const kind = transport;
-    const op = generation;
-    const originalAccounts = accountKey(accounts, kind);
-    if (!selected) throw failure('Connect your wallet first.', 4900);
-    if (kind === 'solana') {
-      if (args?.method !== 'solana_signIn') throw failure('This action requires an EVM wallet. Choose the Robinhood Chain connection.', 'WRONG_WALLET_CHAIN');
-      if (typeof selected.signIn !== 'function') throw failure('Update Phantom to use Sign In With Solana, then try again.', 'SOLANA_SIGNIN_UNAVAILABLE');
-      const input = args.params;
-      if (!input || typeof input !== 'object' || Array.isArray(input)) throw failure('The Solana sign-in request is invalid. Please try again.', 'INVALID_SIGNIN');
-      if (input.address && input.address !== accounts[0]) throw failure('The Solana sign-in request belongs to another account.', 'ACCOUNT_MISMATCH');
-      const result = await selected.signIn(input);
-      if (provider !== selected || transport !== kind || originalAccounts !== accountKey(accounts, kind) || op !== generation) throw failure('Wallet connection changed. Please try again.', 4900);
-      const address = solanaAddress(result?.account?.address);
-      if (!address || address !== accounts[0]) throw failure('The wallet signed in with another Solana account. Please reconnect and try again.', 'ACCOUNT_MISMATCH');
-      if (!(result.signedMessage instanceof Uint8Array) || !result.signedMessage.length || !(result.signature instanceof Uint8Array) || result.signature.length !== 64
-        || result.signatureType && result.signatureType !== 'ed25519') throw failure('The wallet returned an invalid Solana sign-in response.', 'INVALID_SIGNIN');
-      return { address, signedMessage: result.signedMessage, signature: result.signature, signatureType: result.signatureType || 'ed25519' };
+
+  /**
+   * Sends through the wallet and returns the transaction's signature. If the wallet or account
+   * changed while it was asking, the send may still land, so the error carries `signature` and
+   * the `account` that sent it: the caller must treat that as sent, never offer it again.
+   */
+  async function signAndSendTransaction(wire, message) {
+    if (!(wire instanceof Uint8Array) || !(message instanceof Uint8Array)) throw failure('The transaction is invalid.', 'INVALID_TRANSACTION');
+    let signature;
+    try { signature = await guarded((adapter) => adapter.signAndSendTransaction(wire, message)); }
+    catch (error) {
+      if (error && error.code === 4900 && error.result instanceof Uint8Array && error.result.length === 64) {
+        error.signature = S().encodeBase58(error.result);
+        error.message = 'Your wallet changed while the transaction was being sent. It may still go through.';
+      }
+      if (error) delete error.result;
+      throw error;
     }
-    if (args?.method === 'solana_signIn') throw failure('Connect a Solana wallet to sign in with Solana.', 'WRONG_WALLET_CHAIN');
-    const result = await selected.request(args);
-    // Switching networks deliberately emits chainChanged while this request is
-    // pending. Signatures and other results must still match the original wallet.
-    const switching = args?.method === 'wallet_switchEthereumChain' || args?.method === 'wallet_addEthereumChain';
-    if (provider !== selected || originalAccounts !== accountKey(accounts, kind) || op !== generation && !switching) throw failure('Wallet connection changed. Please try again.', 4900);
-    return result;
+    return S().encodeBase58(signature);
   }
-  async function disconnect() {
-    const previous = provider;
-    const kind = transport;
-    remember('disconnected');
-    clearCurrent();
-    if (kind === 'walletconnect') {
-      // Clear the selected account before waiting for any relay acknowledgement.
-      // A disconnected provider is safe to reuse for a new explicit connection;
-      // keeping it avoids duplicate AppKit instances and relay subscriptions.
-      try { await previous?.disconnect?.(); } catch (error) { remote = null; throw error; }
-    } else if (kind === 'solana') await previous?.disconnect?.();
+
+  /** A link that opens `url` inside a mobile wallet's own browser, where the wallet can connect. */
+  function openIn(name, url = location.href) {
+    const target = encodeURIComponent(url);
+    const ref = encodeURIComponent(location.origin);
+    if (/solflare/i.test(name)) return 'https://solflare.com/ul/v1/browse/' + target + '?ref=' + ref;
+    return 'https://phantom.app/ul/browse/' + target + '?ref=' + ref;
   }
+
   function on(event, callback) {
     if (!listeners.has(event)) listeners.set(event, new Set());
     listeners.get(event).add(callback);
     return () => off(event, callback);
   }
   function off(event, callback) { listeners.get(event)?.delete(callback); }
+
   window.OTTWallet = {
-    configure, restore, connect, request, disconnect, on, off, remoteAvailable, evmLinkSigner,
-    solanaAvailable: () => !!solana(),
-    available: () => !!injected() || remoteAvailable(),
-    getProvider: () => provider,
-    state: () => ({ transport, chain: transport === 'solana' ? 'solana' : transport ? 'evm' : null,
-      accounts: accounts.slice(), connected: !!provider && !!accounts.length, remoteAvailable: remoteAvailable() }),
+    configure() { /* nothing to configure: Solana mainnet only */ },
+    wallets: () => list().map(({ name, icon }) => ({ name, icon })),
+    available: () => list().length > 0,
+    connect, restore, disconnect, signMessage, signAndSendTransaction, openIn, on, off,
+    state: () => ({ chain: 'solana', wallet: selected ? selected.name : null, accounts: accounts.slice(), connected: !!selected && !!accounts.length }),
   };
 })();

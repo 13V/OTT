@@ -3,51 +3,31 @@
  * whatever.fun — the Status route (#/status): the network status page and the operator's
  * dashboard, in one screen.
  *
- * OT+T is a phone carrier built out of several moving parts that either work or do not: a coin
- * with a creator tax, an indexer that turns last week's tax and this week's holders into a data
- * budget, a Lightning wallet that pays wholesale for eSIMs, a store that remembers what was ordered,
- * and two keepers — one that sweeps the tax out of Pons's escrow, one that tops the Lightning
- * wallet up from it. Nothing here is marketing copy; it is the same six files and one HTTP call
- * every other route reads, laid out so an operator (or a holder wondering why a redeem failed) can
- * see which of those parts is actually running without opening a terminal.
+ * OT+T is a phone carrier built out of several moving parts that either work or do not: a coin on
+ * pump.fun whose creator fees fund the programme, a ledger keeper that turns last week's collected
+ * fees and this week's members into a data budget, a Lightning wallet that pays wholesale for
+ * eSIMs, a store that remembers what was ordered, and two keepers — one that collects the creator
+ * fees into the treasury, one that converts them to Lightning. Nothing here is marketing copy; it
+ * is the same six files and one HTTP call every other route reads, laid out so an operator (or a
+ * holder wondering why a redeem failed) can see which of those parts is running.
  *
  * Six independent reads, each allowed to fail on its own:
- *   - ./api/status         — site/api/status.js (owned by another change; this file only consumes
- *                             the shape it documents: ok, asOf, brand, config, wiring, ready,
- *                             checks, pool). It may not exist at all on a static host with no
- *                             functions deployed, which is not a bug and is handled the same as any
- *                             other missing source: a warn row, not an exception.
- *   - ./config/esim.json   — the coin's addresses and the eSIM catalogue (site/esim.js reads the
- *                             same file for the same reasons).
+ *   - ./api/status         — site/api/status.js. It may not exist on a static host with no
+ *                             functions deployed, which is handled like any other missing source:
+ *                             a warn row, not an exception.
+ *   - ./config/esim.json   — the coin's addresses and the eSIM catalogue.
  *   - ./data/allowances.json, ./data/treasury.json, ./data/claims.json, ./data/funding.json —
  *                             written by scripts/allowances.js, scripts/treasury.js,
- *                             scripts/claim.js and scripts/fund.js. A fresh checkout has all four
- *                             (a launch writes empty ones), so "missing" here mostly means "404",
- *                             which this page treats exactly like a real network failure.
+ *                             scripts/claim.js and scripts/fund.js.
  *
- * Like site/esim.js, this is a route module: app.js owns the router, the RPC rotation and the DOM
- * helper and hands them in as `ctx`; this file exposes exactly one global, window.WhateverStatus,
- * with one method, render(view, ctx). The chain read for the coin's own numbers reuses
- * window.WhateverData.SEL (esim.js's exported selector map) rather than naming the selectors a
- * second time, because esim.js is already loaded first and the two files reading the same view
- * functions under different literals is exactly the kind of drift a health page exists to catch.
+ * Plus one chain read, the coin's pump.fun bonding curve, for its progress and raised SOL.
+ * Like site/esim.js, this is a route module: app.js hands in `ctx`, and this file exposes exactly
+ * one global, window.WhateverStatus, with one method, render(view, ctx).
  */
 (function () {
-  // esim.js exports these on window.WhateverData.SEL; reusing them means this file and esim.js
-  // cannot silently disagree about which selector reads which view function on the curve. The
-  // object below is copied only as a fallback for the (untested) case this script is ever loaded
-  // before esim.js — every key it needs is also a key WhateverData.SEL carries.
-  const SEL = (window.WhateverData && window.WhateverData.SEL) || {
-    realQuoteReserve: '0x4f1f58fd',       // realQuoteReserve()    — curve
-    graduationThreshold: '0x8b0bc501',    // graduationThreshold() — curve
-    graduated: '0xe7c2b772',              // graduated()           — curve
-    creatorTaxBps: '0xc1bb8901',          // creatorTaxBps()       — curve
-    creatorTaxBalance: '0xdb2bd533',      // creatorTaxBalance()   — curve
-  };
-  // esim.js exports these too, for the same reason it exports SEL: the wallets table below reads a
-  // token balance and a share the same way esim.js's own dashboard does, and the two files cannot
-  // silently disagree about how one is formatted. The fallbacks are only for the (untested) case
-  // this script loads before esim.js.
+  // esim.js exports these, for the same reason: the wallets table below reads a token balance and
+  // a share the same way esim.js's own dashboard does. The fallbacks are only for the (untested)
+  // case this script loads before esim.js.
   const WD = window.WhateverData || {};
   const unitsFromDecimalStr = WD.unitsFromDecimalStr || function (s, decimals) {
     try { return Number(BigInt(String(s === null || s === undefined ? '0' : s))) / Math.pow(10, Number(decimals) || 0); }
@@ -62,7 +42,9 @@
     const digits = pct >= 100 ? 0 : Math.min(6, Math.max(0, 2 - Math.floor(Math.log10(pct))));
     return pct.toFixed(digits) + '%';
   };
-  const USDG_DECIMALS = 6;
+  // pump.fun's bonding curve sells 793.1 million tokens (six decimals) before it graduates.
+  const CURVE_SALE_UNITS = 793100000000000n;
+  const BONDING_CURVE_DISC = [23, 183, 248, 55, 96, 216, 172, 96];
 
   // How long a keeper can go quiet before its row turns from ok to warn, read off the cron
   // schedules that actually drive them (.github/workflows/allowances.yml, claim.yml): the indexer
@@ -73,13 +55,13 @@
   const FUND_STALE_S = 48 * 60 * 60;
 
   // ============================================================================ small helpers
-  const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
+  const Sol = () => window.OTTSolana;
+  const isAddress = (a) => !!Sol() && Sol().isAddress(a);
+  const launchedConfig = (cfg) => !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
   const brandOf = (cfg) => (cfg && cfg.brand) || null;
   const shortAddr = (a) => (a && a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : a || '—');
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
   const errText = (e) => (e && e.message ? e.message : String(e)).slice(0, 200);
-  const units = (big, decimals) => Number(big) / Math.pow(10, decimals);
-  const word = (hex, i) => BigInt('0x' + hex.slice(2 + i * 64, 2 + (i + 1) * 64));
   // null/undefined/'' -> NaN, so a business value that is genuinely absent never gets mistaken for
   // the number zero — a real zero (no redemptions yet, say) still renders as "0", not as a dash.
   const numOr = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
@@ -87,7 +69,7 @@
   // Same formatting as site/esim.js: a balance always carries its cents, a percentage its one or
   // two decimals, a shelf price two decimals flat.
   const fmtMoney = (n) => (Number.isFinite(n) ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—');
-  const fmtPct = (bps) => (Number.isFinite(bps) ? (bps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%' : '—');
+  const fmtSol = (n) => (Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 4 : 2 }) + ' SOL' : '—');
   const fmtPrice = (n) => (Number.isFinite(n) ? '$' + n.toFixed(2) : '—');
   const fmtDate = (sec) => {
     const n = Number(sec);
@@ -149,11 +131,11 @@
       h('div', { class: 'section-head' }, h('h2', {}, title)),
       card));
   }
-  function txLink(ctx, hash) {
+  function txLink(ctx, signature) {
     const { h } = ctx;
-    const explorer = ctx.cfg && ctx.cfg.explorer;
-    const short = hash && hash.length > 14 ? hash.slice(0, 8) + '…' + hash.slice(-6) : (hash || '—');
-    return explorer ? h('a', { class: 'mono', href: explorer + '/tx/' + hash, target: '_blank', rel: 'noopener' }, short) : h('span', { class: 'mono' }, short);
+    const short = signature && signature.length > 14 ? signature.slice(0, 8) + '…' + signature.slice(-6) : (signature || '—');
+    const href = signature && ctx.explorer && typeof ctx.explorer.tx === 'function' ? ctx.explorer.tx(signature) : '';
+    return href ? h('a', { class: 'mono', href, target: '_blank', rel: 'noopener' }, short) : h('span', { class: 'mono' }, short);
   }
 
   // ============================================================================ the catalogue (esim.json)
@@ -171,35 +153,29 @@
     return Array.from(seen);
   }
 
-  // ============================================================================ the coin's chain reads
-  /** Exactly the five view functions site/esim.js reads off the curve for the same numbers — no
-   *  treasury/escrow read here, because "the treasury" section below gets that from the files the
-   *  keepers write, not from a second live chain call. */
+  // ============================================================================ the coin's chain read
+  /**
+   * The coin's pump.fun bonding curve: how much of its sale is done, the SOL it has raised and
+   * whether it has graduated to PumpSwap. One account read; the treasury figures come from the
+   * files the keepers write, not from a second live read.
+   */
   async function readChain(ctx, cfg) {
-    const calls = [
-      { key: 'raised', to: cfg.curve, data: SEL.realQuoteReserve },
-      { key: 'threshold', to: cfg.curve, data: SEL.graduationThreshold },
-      { key: 'graduated', to: cfg.curve, data: SEL.graduated },
-      { key: 'taxBps', to: cfg.curve, data: SEL.creatorTaxBps },
-      { key: 'taxHeld', to: cfg.curve, data: SEL.creatorTaxBalance },
-    ].filter((c) => isAddress(c.to));
-    let answers;
-    if (typeof ctx.rpcBatch === 'function') {
-      answers = await ctx.rpcBatch(calls.map((c) => ({ method: 'eth_call', params: [{ to: c.to, data: c.data }, 'latest'] })));
-    } else {
-      answers = await Promise.all(calls.map((c) => ctx.callRaw(c.to, c.data).catch(() => null)));
-    }
-    const out = {};
-    calls.forEach((c, i) => {
-      const hex = answers[i];
-      out[c.key] = hex && hex.length >= 66 ? word(hex, 0) : null;
-    });
+    const S = Sol();
+    const curve = await S.programAddress(['bonding-curve', S.addressBytes(cfg.coin)], S.PROGRAMS.pump);
+    const info = await ctx.rpc('getAccountInfo', [curve.address, { encoding: 'base64', commitment: 'confirmed' }]);
+    const value = info && info.value;
+    if (!value || value.owner !== S.PROGRAMS.pump) throw new Error('the coin has no pump.fun bonding curve');
+    const b = S.decodeBase64(value.data[0]);
+    if (b.length < 49 || BONDING_CURVE_DISC.some((x, i) => b[i] !== x)) throw new Error('the bonding curve could not be read');
+    const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const u64 = (at) => view.getBigUint64(at, true);
+    const remaining = u64(24);
+    const sold = remaining >= CURVE_SALE_UNITS ? 0n : CURVE_SALE_UNITS - remaining;
     return {
-      raisedUsd: out.raised == null ? null : units(out.raised, USDG_DECIMALS),
-      thresholdUsd: out.threshold == null ? null : units(out.threshold, USDG_DECIMALS),
-      graduated: out.graduated == null ? null : out.graduated !== 0n,
-      taxBps: out.taxBps == null ? null : Number(out.taxBps),
-      taxHeldUsd: out.taxHeld == null ? null : units(out.taxHeld, USDG_DECIMALS),
+      curve: curve.address,
+      raisedSol: Number(u64(32)) / 1e9,
+      progress: Number(sold * 10000n / CURVE_SALE_UNITS) / 10000,
+      graduated: b[48] === 1,
     };
   }
 
@@ -238,14 +214,14 @@
   }
 
   function claimKeeperRow(ctx, launched, claims, claimsErr) {
-    if (claimsErr) return statusRow(ctx, 'warn', 'Claim keeper', 'data/claims.json has not been built yet (' + claimsErr + '). Run node scripts/claim.js.');
+    if (claimsErr) return statusRow(ctx, 'warn', 'Fee keeper', 'data/claims.json has not been built yet (' + claimsErr + '). Run node scripts/claim.js.');
     const list = Array.isArray(claims) ? claims : [];
     const last = list.length ? list[list.length - 1] : null;
-    if (!last) return statusRow(ctx, launched ? 'warn' : 'ok', 'Claim keeper', launched ? 'no claim has been recorded yet' : 'nothing to claim yet — the coin has not launched');
+    if (!last) return statusRow(ctx, launched ? 'warn' : 'ok', 'Fee keeper', launched ? 'no fee collection has been recorded yet' : 'nothing to collect yet — the coin has not launched');
     const ageS = Date.now() / 1000 - Number(last.at);
     const fresh = Number.isFinite(ageS) && ageS <= CLAIM_STALE_S;
-    return statusRow(ctx, fresh ? 'ok' : 'warn', 'Claim keeper',
-      (fresh ? 'last claimed ' : 'stale — last claimed ') + fmtAgo(ageS) + ' ago (' + fmtMoney(numOr(last.amount)) + ' ' + (last.kind === 'eth' ? 'ETH' : 'USDG') + ')');
+    return statusRow(ctx, fresh ? 'ok' : 'warn', 'Fee keeper',
+      (fresh ? 'last collected ' : 'stale — last collected ') + fmtAgo(ageS) + ' ago (' + fmtSol(numOr(last.sol)) + ')');
   }
 
   function fundKeeperRow(ctx, launched, fund, fundErr) {
@@ -273,7 +249,7 @@
   function healthStrip(ctx, d) {
     const { h } = ctx;
     const rows = h('div', {});
-    const preview = !!(d.cfg && d.cfg.brand && !isAddress(d.cfg.treasury));
+    const preview = !!(d.cfg && d.cfg.brand && !launchedConfig(d.cfg));
     if (d.apiErr) {
       rows.appendChild(preview
         ? statusRow(ctx, '', 'Health check', 'Live service checks begin after launch; this preview is showing catalogue and programme information.')
@@ -301,7 +277,7 @@
         rows.appendChild(statusRow(ctx, 'warn', 'Data redemption', 'Redemption readiness is unavailable. Purchases have not been verified.'));
       }
     }
-    const launchedLocally = !!(d.cfg && isAddress(d.cfg.treasury));
+    const launchedLocally = launchedConfig(d.cfg);
     rows.appendChild(preview && !d.allowErr
       ? statusRow(ctx, '', 'Indexer', 'not active until coin launch')
       : indexerRow(ctx, d.allow, d.allowErr));
@@ -318,27 +294,31 @@
     if (!launched) {
       const brand = brandOf(cfg);
       card.appendChild(h('p', { class: 'small' },
-        (brand ? brand.name : 'This carrier') + ' has not launched a coin yet. ', h('a', { href: 'https://whatever-fun.vercel.app/#/new', target: '_blank', rel: 'noopener' }, 'Launch the coin on whatever.fun'), '.'));
+        (brand ? brand.name : 'This carrier') + ' has not launched its coin yet. OTT will launch on ', h('a', { href: 'https://pump.fun', target: '_blank', rel: 'noopener' }, 'pump.fun'), ', paired with SOL.'));
       return card;
     }
-    if (chainErr) { card.appendChild(notice('Could not read the chain: ' + chainErr, 'warn')); return card; }
+    const links = h('p', { class: 'small' },
+      h('a', { href: typeof ctx.launchpad === 'function' ? ctx.launchpad(cfg.coin) : 'https://pump.fun/coin/' + cfg.coin, target: '_blank', rel: 'noopener' }, 'OTT on pump.fun ↗'), ' · ',
+      h('a', { href: ctx.explorer && typeof ctx.explorer.token === 'function' ? ctx.explorer.token(cfg.coin) : 'https://solscan.io/token/' + cfg.coin, target: '_blank', rel: 'noopener' }, 'Token on Solscan ↗'));
+    if (chainErr) { card.append(notice('Could not read the bonding curve: ' + chainErr, 'warn'), links); return card; }
     const c = chain || {};
     card.appendChild(h('div', { class: 'stat-grid' },
-      fmtTile(ctx, 'Raised', numOr(c.raisedUsd), fmtMoney,
-        Number.isFinite(c.thresholdUsd) ? 'of ' + fmtMoney(c.thresholdUsd) + ' to graduate' : 'of an unread graduation threshold',
-        'could not be read from the curve', 'chart'),
-      fmtTile(ctx, 'Creator tax', numOr(c.taxBps), fmtPct, 'of every trade, to the treasury', 'could not be read from the curve', 'flame'),
-      fmtTile(ctx, 'Tax held', numOr(c.taxHeldUsd), fmtMoney, 'sitting in the curve, unclaimed', 'could not be read from the curve', 'coins'),
+      fmtTile(ctx, 'Curve sold', numOr(c.progress), (n) => Math.round(n * 100) + '%', c.graduated ? 'the curve sold out and graduated' : 'of the bonding curve’s tokens, toward graduation', 'could not be read from the curve', 'chart'),
+      // A graduated curve holds no SOL: it all moved into the PumpSwap pool, so "0 SOL" would misread.
+      c.graduated ? ctx.tile('Raised', 'In the pool', 'the curve’s SOL moved into PumpSwap at graduation', 'coins')
+        : fmtTile(ctx, 'Raised', numOr(c.raisedSol), fmtSol, 'SOL in the bonding curve', 'could not be read from the curve', 'coins'),
+      ctx.tile('Creator fee', c.graduated ? '0.05–0.95%' : '0.30%', c.graduated ? 'of each PumpSwap trade, by market cap' : 'of each trade on the curve, to the treasury', 'flame'),
       ctx.tile('Graduated', c.graduated === null || c.graduated === undefined ? '—' : (c.graduated ? 'Yes' : 'Not yet'),
-        c.graduated === null || c.graduated === undefined ? 'could not be read from the curve' : (c.graduated ? 'trading has moved to the pool' : 'still selling on the bonding curve'), 'shield')));
-    const frac = Number.isFinite(c.raisedUsd) && c.thresholdUsd > 0 ? Math.min(1, c.raisedUsd / c.thresholdUsd) : null;
+        c.graduated === null || c.graduated === undefined ? 'could not be read from the curve' : (c.graduated ? 'trading has moved to PumpSwap' : 'still selling on the bonding curve'), 'shield')));
+    const frac = Number.isFinite(c.progress) ? Math.min(1, c.progress) : null;
     const fill = h('i', {});
     fill.style.setProperty('--w', String(frac || 0));
     card.appendChild(h('div', { class: 'data-progress' },
       h('div', { class: 'card-head' }, h('h3', { class: 'card-title' }, 'Curve progress'),
-        h('span', { class: 'num' }, Number.isFinite(c.raisedUsd) && Number.isFinite(c.thresholdUsd) ? fmtMoney(c.raisedUsd) + ' of ' + fmtMoney(c.thresholdUsd) : '—')),
+        h('span', { class: 'num' }, frac === null ? '—' : Math.round(frac * 100) + '%')),
       h('div', { class: 'sp-bar dp-bar' }, fill),
-      h('p', { class: 'small', style: 'margin-top:10px' }, frac === null ? 'Progress could not be read from the curve.' : Math.round(frac * 100) + '% of the way to graduation.')));
+      h('p', { class: 'small', style: 'margin-top:10px' }, frac === null ? 'Progress could not be read from the curve.' : c.graduated ? 'Graduated: OTT now trades on PumpSwap.' : Math.round(frac * 100) + '% of the way to graduation.')));
+    card.appendChild(links);
     return card;
   }
 
@@ -371,13 +351,13 @@
   // ============================================================================ 4. the treasury
   function claimFact(ctx, launched, claims, claimsErr) {
     const { h, notice } = ctx;
-    if (claimsErr) return notice('The claim log has not been built yet (data/claims.json: ' + claimsErr + '). Run node scripts/claim.js.', 'warn');
+    if (claimsErr) return notice('The fee collection log has not been built yet (data/claims.json: ' + claimsErr + '). Run node scripts/claim.js.', 'warn');
     const list = Array.isArray(claims) ? claims : [];
     const last = list.length ? list[list.length - 1] : null;
-    if (!last) return h('p', { class: 'small' }, launched ? 'No claim has been made yet.' : 'Nothing to claim yet — the coin has not launched.');
+    if (!last) return h('p', { class: 'small' }, launched ? 'No creator fees have been collected yet.' : 'Nothing to collect yet — the coin has not launched.');
     return h('p', { class: 'small' },
-      'Last claim: ', h('b', {}, fmtMoney(numOr(last.amount)) + ' ' + (last.kind === 'eth' ? 'ETH' : 'USDG')),
-      ' on ' + (fmtDate(last.at) || 'an unrecorded date') + ' — ', last.txHash ? txLink(ctx, last.txHash) : 'no transaction recorded', '.');
+      'Last fee collection: ', h('b', {}, fmtSol(numOr(last.sol)) + (Number.isFinite(numOr(last.usd)) ? ' (' + fmtMoney(numOr(last.usd)) + ')' : '')),
+      ' on ' + (fmtDate(last.at) || 'an unrecorded date') + ' — ', last.tx ? txLink(ctx, last.tx) : 'no transaction recorded', '.');
   }
   function fundFact(ctx, launched, fund, fundErr) {
     const { h, notice } = ctx;
@@ -386,7 +366,7 @@
     const last = list.length ? list[list.length - 1] : null;
     if (!last) return h('p', { class: 'small' }, launched ? 'No funding run has been recorded yet.' : 'Nothing to fund yet — the coin has not launched.');
     return h('p', { class: 'small' },
-      'Last funding run: ', h('b', {}, fmtMoney(numOr(last.amountUsd)) + ' → ' + numOr(last.sats).toLocaleString('en-US') + ' sats'),
+      'Last funding run: ', h('b', {}, (Number.isFinite(numOr(last.solSent)) ? fmtSol(numOr(last.solSent)) + ' · ' : '') + fmtMoney(numOr(last.amountUsd)) + ' → ' + numOr(last.sats).toLocaleString('en-US') + ' sats'),
       ' on ' + (fmtDate(last.at) || 'an unrecorded date') + ' — ' + String(last.status || 'unknown'),
       last.fixedFloatOrder ? ' · order ' + last.fixedFloatOrder : '', '.');
   }
@@ -396,10 +376,15 @@
     const t = treas || {};
     const card = h('div', { class: 'card' });
     card.appendChild(h('div', { class: 'stat-grid' },
-      fmtTile(ctx, 'Claimable in escrow', numOr(t.escrowClaimableUsd), fmtMoney, 'USDG waiting in the Pons fee escrow',
+      fmtTile(ctx, 'Uncollected fees', numOr(t.claimableUsd), fmtMoney,
+        Number.isFinite(numOr(t.claimableSol)) ? fmtSol(numOr(t.claimableSol)) + ' waiting in pump.fun’s creator vaults' : 'waiting in pump.fun’s creator vaults',
         treasErr ? 'data/treasury.json: ' + treasErr : 'not read yet', 'wallet'),
-      fmtTile(ctx, 'Treasury wallet', numOr(t.walletUsd), fmtMoney, 'USDG held before it is moved to the pool',
+      fmtTile(ctx, 'Treasury wallet', numOr(t.walletUsd), fmtMoney,
+        Number.isFinite(numOr(t.walletSol)) ? fmtSol(numOr(t.walletSol)) + ' before it is moved to the pool' : 'SOL held before it is moved to the pool',
         treasErr ? 'data/treasury.json: ' + treasErr : 'not read yet', 'coins')));
+    if (isAddress(t.treasury)) {
+      card.appendChild(h('p', { class: 'small' }, 'Treasury: ', h('a', { class: 'mono', href: ctx.explorer && typeof ctx.explorer.account === 'function' ? ctx.explorer.account(t.treasury) : 'https://solscan.io/account/' + t.treasury, target: '_blank', rel: 'noopener' }, shortAddr(t.treasury)), '.'));
+    }
     card.appendChild(claimFact(ctx, launched, claims, claimsErr));
     card.appendChild(fundFact(ctx, launched, fund, fundErr));
     return card;
@@ -407,11 +392,9 @@
 
   // ============================================================================ 5. the programme
   /**
-   * The week itself: the budget last week's tax funded, how many wallets hold a share of it, and
-   * the week the numbers on this page are for — read straight from allowances.json, which the
-   * indexer writes with all three. Holding is the whole mechanism now, so "wallets earning" (a
-   * trading concept) is gone; the table below is the current top holders by allowance instead of
-   * the old top earners by traded volume.
+   * The week itself: the budget last week's collected fees funded, how many members share it,
+   * this week's join amount and the week the numbers are for — read straight from
+   * allowances.json. The table is this week's members by allowance.
    */
   function programmeSection(ctx, d) {
     const { h, notice } = ctx;
@@ -426,12 +409,16 @@
     const budgetUsd = numOr(allow.budgetUsd);
     const holders = Number.isFinite(Number(allow.holders)) ? Number(allow.holders) : entries.length;
     const weekLabel = fmtDate(allow.weekStart);
+    const requirement = allow.membership && allow.membership.requirement;
+    const joinTokens = requirement && Number(requirement.burnTokens) > 0 ? Number(requirement.burnTokens) : 0;
+    const joinUsd = joinTokens && Number(requirement.priceUsd) > 0 ? joinTokens * Number(requirement.priceUsd) : NaN;
 
     card.appendChild(h('div', { class: 'stat-grid' },
-      ctx.tile('This week’s budget', fmtMoney(budgetUsd), allow.budgetSource ? String(allow.budgetSource) : 'last week’s creator tax', 'coins'),
-      ctx.tile('Holders', String(holders), holders === 1 ? 'wallet with a share of the supply' : 'wallets with a share of the supply', 'shield'),
+      ctx.tile('This week’s budget', fmtMoney(budgetUsd), allow.budgetSource ? String(allow.budgetSource) : 'last week’s collected creator fees', 'coins'),
+      ctx.tile('Members sharing', String(holders), holders === 1 ? 'member in this week’s split' : 'members in this week’s split', 'shield'),
+      ctx.tile('Join amount', joinTokens ? fmtTokens(joinTokens) + ' OTT' : '—', joinTokens ? 'about ' + fmtMoney(joinUsd) + ', set for this week' : 'set at the first ledger update of the week', 'flame'),
       ctx.tile('Week', weekLabel || '—', weekLabel ? 'the week this allowance is for' : 'not recorded in allowances.json', 'clock')));
-    if (!entries.length) { card.appendChild(h('p', { class: 'small' }, 'No wallet holds OTT yet.')); return card; }
+    if (!entries.length) { card.appendChild(h('p', { class: 'small' }, 'No member is in this week’s split yet.')); return card; }
 
     const top = entries.slice().sort((a, b) => numOr(b[1] && b[1].allowanceUsd) - numOr(a[1] && a[1].allowanceUsd)).slice(0, 5);
     const tbody = h('tbody', {});
@@ -452,7 +439,7 @@
     if (entries.length > top.length) {
       card.appendChild(h('p', { class: 'small' },
         h('a', { class: 'status-more-link', href: '#/holders' },
-          'See all ' + entries.length + ' holders →')));
+          'See all ' + entries.length + ' members →')));
     }
     return card;
   }
@@ -484,7 +471,7 @@
     const { h, notice } = ctx;
     const label = h('div', { class: 'label' }, 'NETWORK STATUS');
     const lede = h('p', { class: 'page-lede' },
-      'The coin, the pool, the treasury, the programme and the catalogue — read straight off the same files and the same chain every other route uses, with whatever is missing named instead of hidden.');
+      'The coin, the pool, the treasury, the programme and the catalogue — read straight off the same files and the same Solana accounts every other route uses, with whatever is missing named instead of hidden.');
     view.appendChild(h('div', { class: 'page-head' }, label, h('h1', {}, 'Everything, and whether it is running.'), lede));
 
     const body = h('div', {}, notice('Reading the network…', 'plain'));
@@ -511,9 +498,8 @@
       const brand = brandOf(cfg);
       if (brand) label.textContent = (brand.name + ' · NETWORK STATUS').toUpperCase();
 
-      // A partial config counts as not launched, the same rule site/esim.js uses: with no curve
-      // there is nothing to read the coin's numbers from.
-      const launched = isAddress(cfg.coin) && isAddress(cfg.curve) && isAddress(cfg.treasury);
+      // A partial config counts as not launched, the same rule site/esim.js uses.
+      const launched = launchedConfig(cfg);
       let chain = null, chainErr = null;
       if (launched) {
         try { chain = await readChain(ctx, cfg); }

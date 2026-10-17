@@ -1,18 +1,18 @@
 {
+ "chain": "solana",
  "coin": "",
- "curve": "",
+ "tokenProgram": "",
  "treasury": "",
  "brand": {
   "name": "OT+T",
   "full": "Onchain Telephone + Telegraph",
   "ticker": "OTT",
   "since": "2026" },
- "pair": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
- "taxBps": 1000,
  "budgetBps": 8000,
  "membership": {
-  "burnTokens": "100000",
-  "burnAddress": "0x000000000000000000000000000000000000dEaD",
+  "burnUsd": 5,
+  "burnOwner": "1nc1nerator11111111111111111111111111111111",
+  "burnAccount": "",
   "capMultiple": 3,
   "welcome": {
    "gb": 1, "days": 7,

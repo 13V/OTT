@@ -2,26 +2,22 @@
 /**
  * OT+T — the front end's shell.
  *
- * OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin: a
- * creator tax on every trade against the coin's bonding curve funds a treasury, and every week
- * last week's tax becomes that week's data budget — split among HOLDERS by their share of the
- * circulating supply, banked as dollars of credit, and spent on eSIMs from the network partner, paid for over
- * a Blink Lightning wallet. This programme
- * used to be two routes (#/data, #/status) inside a bigger launchpad, whatever.fun; this file is
- * what makes it a site of its own. site/esim.js and site/status.js are the same files that lived
- * there — this shell only hands them the `ctx` they already expected: the DOM helper, the RPC
- * rotation, the wallet flow, and the notice/tile/toast builders. Everything that belonged to the
- * launchpad and not to the programme — the menu, the launch form, the recent-launches table, the
- * 3D hero, the pairing-asset ticker — is left behind rather than carried over unused.
+ * OT+T (Onchain Telephone + Telegraph, ticker OTT) is a phone carrier that runs on a memecoin
+ * launched on pump.fun (Solana). Members join by sending about $5 of OTT to Solana's burn address
+ * once; every week, 80% of the pump.fun creator fees collected the week before becomes a data
+ * budget split among members by holdings, capped, banked as dollars of credit and spent on eSIMs
+ * from the network partner, paid for over a Blink Lightning wallet. This programme used to be two
+ * routes (#/data, #/status) inside a bigger launchpad, whatever.fun; this file is what makes it a
+ * site of its own. It hands each route module the `ctx` it expects: the DOM helper, Solana RPC,
+ * the wallet flow, explorer links and the notice/tile/toast builders.
  *
- * No framework. The optional mobile connector has a locally built SDK. Chain reads use endpoints in
- * config/addresses.json, rotated because the official one rate-limits.
+ * No framework. Chain reads go to the browser endpoints in config/addresses.json (`browserRpcs`);
+ * Solana's own public endpoint refuses web pages.
  */
 (function () {
-  const CHAIN_ID_HEX = '0x1237';           // 4663, Robinhood Chain
-
-  const STATE = { cfg: null, account: null, route: '', appScreen: 'home', endpoint: 0 };
+  const STATE = { cfg: null, account: null, route: '', appScreen: 'home' };
   let accountEpoch = 0;
+  let solanaRpc = null;
   window.OTT_STATE = STATE;                // a harmless inspection hook
 
   // ============================================================================ DOM helpers
@@ -43,149 +39,113 @@
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
   const $ = (id) => document.getElementById(id);
   const UI = () => window.WhateverUI || null;         // the shared component kit, if it loaded
-  const shortAddr = (a) => (a && a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : a || '—');
+  const shortAddr = (a) => (a && a.length > 12 ? a.slice(0, 4) + '…' + a.slice(-4) : a || '—');
 
   // ============================================================================ chain reads
-  /**
-   * Many eth_calls in one HTTP request, with the next endpoint in config/addresses.json's `rpcs`
-   * tried on any failure. A call that fails every endpoint throws; esim.js and status.js each
-   * decide for themselves whether a failed read costs the whole page or just one tile's dash.
-   */
-  async function rpcBatch(calls, attempt = 0) {
-    if (!calls.length) return [];
-    const eps = (STATE.cfg && STATE.cfg.rpcs) || [STATE.cfg && STATE.cfg.rpc].filter(Boolean);
-    if (!eps.length) throw new Error('no rpc configured');
-    const url = eps[STATE.endpoint++ % eps.length];
-    try {
-      const res = await fetch(url, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(calls.map((c, i) => ({ jsonrpc: '2.0', id: i, method: c.method, params: c.params }))),
-      });
-      const j = await res.json();
-      if (!Array.isArray(j)) throw new Error((j && j.error && j.error.message) || 'batch refused');
-      const out = new Array(calls.length).fill(null);
-      for (const r of j) if (r && typeof r.id === 'number' && !r.error) out[r.id] = r.result;
-      return out;
-    } catch (e) {
-      if (attempt >= eps.length) throw e;
-      await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-      return rpcBatch(calls, attempt + 1);
+  /** One Solana JSON-RPC call over the browser endpoints, each tried in turn. */
+  function rpc(method, params) {
+    if (!solanaRpc) {
+      const eps = (STATE.cfg && (STATE.cfg.browserRpcs || STATE.cfg.rpcs)) || [];
+      if (!eps.length || !window.OTTSolana) return Promise.reject(new Error('no Solana RPC configured'));
+      solanaRpc = window.OTTSolana.createRpc(eps, { timeoutMs: 10000, rounds: 2, pauseMs: 300 });
     }
+    return solanaRpc(method, params);
   }
-
-  async function rpc(method, params, attempt = 0) {
-    const eps = (STATE.cfg && STATE.cfg.rpcs) || [STATE.cfg && STATE.cfg.rpc].filter(Boolean);
-    if (!eps.length) throw new Error('no rpc configured');
-    const url = eps[STATE.endpoint++ % eps.length];
-    try {
-      const res = await fetch(url, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      });
-      const j = await res.json();
-      if (j.error) throw new Error(j.error.message);
-      return j.result;
-    } catch (e) {
-      // A transport failure is not an answer: try the next endpoint before giving up.
-      if (attempt >= eps.length) throw e;
-      await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-      return rpc(method, params, attempt + 1);
-    }
-  }
-  const callRaw = (to, data) => rpc('eth_call', [{ to, data }, 'latest']);
+  const explorerBase = () => String((STATE.cfg && STATE.cfg.explorer) || 'https://solscan.io').replace(/\/$/, '');
+  const explorer = {
+    tx: (signature) => explorerBase() + '/tx/' + encodeURIComponent(signature),
+    account: (address) => explorerBase() + '/account/' + encodeURIComponent(address),
+    token: (mint) => explorerBase() + '/token/' + encodeURIComponent(mint),
+  };
+  const launchpad = (mint) => String((STATE.cfg && STATE.cfg.launchpad) || 'https://pump.fun').replace(/\/$/, '') + (mint ? '/coin/' + encodeURIComponent(mint) : '');
 
   // ============================================================================ wallet
-  const walletAvailable = () => window.OTTWallet ? window.OTTWallet.available() : !!window.ethereum?.request;
-  const walletRequest = args => window.OTTWallet ? window.OTTWallet.request(args) : window.ethereum.request(args);
-  const accountChain = () => window.OTTWallet?.state().chain || (STATE.account ? 'evm' : null);
-  const sameAccount = (left, right) => accountChain() === 'solana' ? left === right : left?.toLowerCase() === right?.toLowerCase();
+  const walletAvailable = () => !!window.OTTWallet && window.OTTWallet.available();
   function setAccount(account) {
-    if (account !== STATE.account) {
-      window.WhateverData?.resetWallet?.();
-      void window.OTTSolanaLogin?.reset();
-    }
+    if (account !== STATE.account) window.WhateverData?.resetWallet?.();
     STATE.account = account || null;
     paintWallet();
   }
   async function disconnect() {
     accountEpoch++;
     window.WhateverData?.resetWallet?.();
-    const revoked = window.OTTSolanaLogin?.reset();
     STATE.account = null;
     paintWallet();
     if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
     await window.OTTWallet?.disconnect?.();
-    await revoked;
   }
-  async function connect(options) {
-    const solana = options?.transport === 'solana';
-    if (!solana && !walletAvailable()) {
-      toast('Connect your wallet', 'Open OTT in your wallet browser, or install a browser wallet to connect.');
-      paintWallet();
-      return null;
-    }
-    const accounts = window.OTTWallet ? await window.OTTWallet.connect(options) : await window.ethereum.request({ method: 'eth_requestAccounts' });
-    const account = accounts && accounts[0] || null;
-    if (!account) { setAccount(null); return null; }
-    const connectingEpoch = accountEpoch;
-    try { if (!solana) await ensureChain(); }
-    catch (error) {
-      // An account event has already selected (or revoked) the current wallet.
-      // Do not disconnect that selection for a stale connection's network check.
-      if (connectingEpoch === accountEpoch) await disconnect();
-      throw error;
-    }
-    const selectedAccount = window.OTTWallet?.state?.().accounts[0];
-    if (connectingEpoch !== accountEpoch || window.OTTWallet && (!selectedAccount || !sameAccount(selectedAccount, account))) {
-      throw new Error('Your wallet changed while connecting. Check the connected account and try again.');
-    }
-    setAccount(account);
-    if (solana) {
-      try {
-        await window.OTTSolanaLogin.login(account, () => connectingEpoch === accountEpoch && STATE.account === account);
-        toast('Signed in with Solana', 'Your wallet ownership is verified. Holder credit currently requires a Robinhood Chain OTT wallet.');
-      } catch (error) {
-        if (STATE.route === 'app' || STATE.route === 'data') renderRoute();
-        throw error;
+
+  /**
+   * Which wallet to connect. One installed wallet is used directly; several get a short list;
+   * none get the wallet apps' own "open this page in my browser" links, which is how a phone
+   * without a wallet extension reaches OT+T with a wallet attached.
+   */
+  function chooseWallet(source) {
+    return new Promise((resolve) => {
+      const wallets = window.OTTWallet ? window.OTTWallet.wallets() : [];
+      let picked = null;
+      const sheet = h('dialog', { class: 'om-dialog wallet-dialog', 'aria-labelledby': 'wallet-dialog-title' });
+      const close = h('button', { type: 'button', class: 'om-icon-button', 'aria-label': 'Close', onclick: () => sheet.close() }, '×');
+      const head = h('div', { class: 'om-dialog-head' }, h('h2', { id: 'wallet-dialog-title' }, wallets.length ? 'Choose a wallet' : 'Open OT+T in your wallet'), close);
+      const body = wallets.length
+        ? h('div', { class: 'wallet-choices' }, wallets.map((w) => h('button', { type: 'button', class: 'wallet-choice', onclick: () => { picked = w.name; sheet.close(); } },
+          w.icon ? h('img', { src: w.icon, alt: '', width: '28', height: '28' }) : h('span', { class: 'wallet-choice-mark', 'aria-hidden': 'true' }, w.name.slice(0, 1)),
+          h('span', {}, w.name))))
+        : h('div', { class: 'om-guide-copy' },
+          h('p', {}, 'OT+T works with Solana wallets such as Phantom and Solflare. On a phone, open this page inside your wallet app, then tap Connect wallet.'),
+          h('div', { class: 'wallet-choices' },
+            h('a', { class: 'om-button', href: window.OTTWallet ? window.OTTWallet.openIn('Phantom') : 'https://phantom.app/', rel: 'noopener' }, 'Open in Phantom'),
+            h('a', { class: 'om-secondary-button', href: window.OTTWallet ? window.OTTWallet.openIn('Solflare') : 'https://solflare.com/', rel: 'noopener' }, 'Open in Solflare')),
+          h('p', { class: 'om-muted' }, 'On a computer, install a Solana wallet extension such as ', h('a', { href: 'https://phantom.com/download', target: '_blank', rel: 'noopener noreferrer' }, 'Phantom'), ' and reload this page.'));
+      sheet.append(head, body);
+      sheet.addEventListener('close', () => {
+        sheet.remove();
+        resolve(picked);
+        // Focus goes back once the caller has settled: until then the opener is still disabled,
+        // and the masthead redraws its button, so a detached opener hands over to the new one.
+        if (!picked) setTimeout(() => (source && source.isConnected ? source : $('wallet-slot')?.querySelector('button'))?.focus?.(), 0);
+      }, { once: true });
+      document.body.appendChild(sheet);
+      if (typeof sheet.showModal === 'function') sheet.showModal(); else sheet.setAttribute('open', '');
+    });
+  }
+
+  async function connect(options, source) {
+    if (!window.OTTWallet) { toast('Wallet unavailable', 'The wallet connector did not load. Reload this page and try again.', 'error'); return null; }
+    let name = options && options.wallet;
+    if (!name) {
+      const wallets = window.OTTWallet.wallets();
+      if (wallets.length === 1) name = wallets[0].name;
+      else {
+        name = await chooseWallet(source);
+        if (!name) { paintWallet(); return null; }
       }
     }
+    // Account changes and disconnects move the epoch; a second tap on Connect shares this same
+    // wallet prompt (OTTWallet.connect), so it must not make this one look stale.
+    const connectingEpoch = accountEpoch;
+    const accounts = await window.OTTWallet.connect({ wallet: name });
+    const account = accounts && accounts[0] || null;
+    if (connectingEpoch !== accountEpoch) throw new Error('Your wallet changed while connecting. Check the connected account and try again.');
+    setAccount(account);
     if (STATE.route === 'app') renderRoute();
     return STATE.account;
-  }
-  async function ensureChain() {
-    if (accountChain() === 'solana') throw new Error('Holder credit and redemption require a Robinhood Chain OTT wallet.');
-    try {
-      const current = await walletRequest({ method: 'eth_chainId' });
-      if (String(current).toLowerCase() === CHAIN_ID_HEX) return true;
-      await walletRequest({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
-      if (String(await walletRequest({ method: 'eth_chainId' })).toLowerCase() !== CHAIN_ID_HEX) throw new Error('Switch your wallet to Robinhood Chain and try again.');
-      return true;
-    } catch (e) {
-      if (e && e.code === 4902) {
-        if (!STATE.cfg || !STATE.cfg.rpc) throw new Error('Network settings are unavailable. Go online and try connecting again.');
-        await walletRequest({
-          method: 'wallet_addEthereumChain',
-          params: [{
-            chainId: CHAIN_ID_HEX, chainName: 'Robinhood Chain',
-            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-            rpcUrls: [STATE.cfg.rpc], blockExplorerUrls: [STATE.cfg.explorer],
-          }],
-        });
-        await walletRequest({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
-        if (String(await walletRequest({ method: 'eth_chainId' })).toLowerCase() !== CHAIN_ID_HEX) throw new Error('Switch your wallet to Robinhood Chain and try again.');
-        return true;
-      }
-      throw e;
-    }
   }
   function paintWallet() {
     const slot = $('wallet-slot');
     if (!slot) return;
     clear(slot);
-    if (!STATE.account) { slot.appendChild(h('button', { class: 'btn btn-primary btn-sm', onclick: async () => { const button = slot.querySelector('button'); button.disabled = true; button.textContent = 'Connecting…'; try { await connect(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); } catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); } }, 'aria-label': 'Connect wallet' }, 'Connect wallet')); return; }
+    if (!STATE.account) {
+      const button = h('button', { class: 'btn btn-primary btn-sm', 'aria-label': 'Connect wallet', onclick: async () => {
+        button.disabled = true; button.textContent = 'Connecting…';
+        try { await connect(null, button); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); }
+        catch (e) { toast('Wallet connection failed', e && e.message ? e.message : String(e), 'error'); paintWallet(); }
+      } }, 'Connect wallet');
+      slot.appendChild(button);
+      return;
+    }
     slot.appendChild(h('a', { class: 'wallet-addr', href: '#/data', 'aria-label': 'My data, wallet ' + STATE.account }, shortAddr(STATE.account)));
   }
-  window.OTTEnsureChain = ensureChain;
 
   function toast(title, body, kind) {
     const box = $('toasts');
@@ -220,64 +180,43 @@
     app: 'OTT app — OT+T',
   };
 
-  /**
-   * The home route (#/) — OT+T's whole reason to exist. The programme used to be a second route
-   * inside whatever.fun (#/data); here it is the front door, so window.WhateverData.render draws
-   * exactly the page it always drew, just reached by a shorter hash. ctx is the one contract
-   * site/esim.js was already written against, so nothing in that file changes for the move.
-   */
+  /** What every route module is handed. */
+  function context(isCurrent, extra) {
+    return Object.assign({
+      h, rpc, notice, tile, toast, cfg: STATE.cfg, connect, explorer, launchpad,
+      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
+    }, extra || {});
+  }
+
   function renderHome(view, isCurrent) {
     const D = window.WhateverHome;
     if (!D || typeof D.render !== 'function') { view.appendChild(notice('The programme module has not loaded.', 'warn')); return; }
-    D.render(view, {
-      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
-    });
+    D.render(view, context(isCurrent));
   }
 
-  /**
-   * The Status route (#/status) lives in site/status.js, wired the same way site/esim.js is: this
-   * hands it the same ctx renderHome does, so the two route modules can never see a different
-   * picture of the wallet, the RPC rotation or the DOM helper.
-   */
   function renderStatus(view, isCurrent) {
     const S = window.WhateverStatus;
     if (!S || typeof S.render !== 'function') { view.appendChild(notice('The status module has not loaded.', 'warn')); return; }
-    S.render(view, {
-      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
-    });
+    S.render(view, context(isCurrent));
   }
 
   function renderData(view, isCurrent) {
-    if (accountChain() === 'solana') {
-      view.appendChild(h('div', { class: 'page-head' }, h('h1', {}, 'Your Solana account'),
-        h('p', { class: 'page-lede' }, 'Holder credit currently requires a Robinhood Chain OTT wallet.'),
-        h('a', { class: 'btn btn-primary', href: '#/app' }, 'Open your account')));
-      return;
-    }
     const D = window.WhateverData;
     if (!D || typeof D.renderMyData !== 'function') { view.appendChild(notice('The data module has not loaded.', 'warn')); return; }
-    D.renderMyData(view, {
-      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
-    });
+    D.renderMyData(view, context(isCurrent));
   }
 
   /**
    * The About route (#/about) — the one page this shell draws itself, because it is short and it
-   * is not a route module the way esim.js and status.js are: it keeps no state and reads the chain
-   * never. The only thing it reads is config/esim.json, and only for the handful of numbers that
-   * would otherwise be typed here a second time and could drift from it — the tax and the
-   * catalogue's own shape. A missing config is not an error here: the mechanism described below
-   * is still true without a number attached to it, so a figure that cannot be read is named as
-   * unconfigured rather than guessed at.
+   * keeps no state. The only thing it reads is config/esim.json, for the handful of numbers that
+   * would otherwise be typed here a second time and could drift from it. A missing figure drops
+   * its phrase rather than inventing one.
    */
   async function renderAbout(view, isCurrent) {
     view.appendChild(h('div', { class: 'page-head' },
       h('div', { class: 'label' }, 'HOW THIS WORKS'),
       h('h1', {}, 'Burn once. Get connected.'),
-      h('p', { class: 'page-lede' }, 'Burn OTT once to become a member and claim your first eSIM. Collected trading fees then fund members’ weekly data.')));
+      h('p', { class: 'page-lede' }, 'Burn about $5 of OTT once to become a member and claim your first eSIM. Collected trading fees then fund members’ weekly data.')));
     const body = h('div', {}, notice('Loading the programme details…', 'plain'));
     view.appendChild(body);
 
@@ -288,12 +227,10 @@
     } catch (e) { cfg = {}; }
     if (!isCurrent()) return;
     cfg = cfg || {};
-    const programmeLaunched = [cfg.coin, cfg.curve, cfg.treasury].every((a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || '')) && !/^0x0{40}$/i.test(String(a)));
-
-    // A percentage read from the config, or null — never a made-up figure. The two sentences below
-    // that use these read naturally either way.
+    const S = window.OTTSolana;
+    const member = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
+    const programmeLaunched = !!S && S.launchedConfig(cfg);
     const pct = (bps) => (Number.isFinite(Number(bps)) && Number(bps) > 0 ? (Number(bps) / 100) + '%' : null);
-    const taxPhrase = pct(cfg.taxBps) ? 'a ' + pct(cfg.taxBps) + ' creator tax' : 'a creator tax (the exact rate is not configured yet)';
 
     // The same rule esim.js uses for what counts as a real package, so this page's catalogue line
     // can never disagree with the one the programme page itself shows.
@@ -304,18 +241,12 @@
     const sizesText = sizes.length > 1 ? sizes.slice(0, -1).join(', ') + ' and ' + sizes[sizes.length - 1] : String(sizes[0] || '');
     const cheapest = list.length ? Math.min(...list.map((p) => Number(p.priceUsd))) : null;
     const catalogueText = list.length
-      ? 'The sample catalogue covers ' + places + ' ' + (places === 1 ? 'place' : 'places') + ' with ' + sizesText + ' GB packages, starting at $' + cheapest.toFixed(2) + ' in example data credit. Catalogue prices do not set the membership burn amount or guarantee an allowance.'
+      ? 'The catalogue covers ' + places + ' ' + (places === 1 ? 'place' : 'places') + ' with ' + sizesText + ' GB packages, starting at $' + cheapest.toFixed(2) + ' of data credit.'
       : 'The eSIM catalogue is not configured yet.';
 
-    // Prose, not cards. Five bordered boxes stacked down a page is the "cards on cards" habit every
-    // carrier site avoids: a card is for one thing that needs lifting off the page, and an article
-    // is not that. A hairline between entries and a measure the eye can actually track do the work.
+    // Prose, not cards. A hairline between entries and a measure the eye can track do the work.
     const entry = (title, ...text) => h('section', { class: 'prose-entry' }, h('h2', { class: 'prose-title' }, title), h('p', { class: 'prose-body' }, ...text));
-
-    // The membership terms, from the same config. A missing figure drops its phrase rather than
-    // inventing one, so a fork without a membership block still reads as plain rules.
-    const member = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
-    const burn = /^\d{1,30}$/.test(String(member.burnTokens || '')) ? Number(member.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT';
+    const joinUsd = Number(member.burnUsd) > 0 ? '$' + Number(member.burnUsd).toFixed(0) : null;
     const w = member.welcome && typeof member.welcome === 'object' ? member.welcome : null;
     const welcomeText = w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0)
       ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan costing up to $' + Number(w.maxUsd).toFixed(2) : 'a welcome eSIM';
@@ -326,44 +257,37 @@
     clear(body);
     body.appendChild(h('div', { class: 'prose' },
       entry('One burn starts your membership',
-        'OT+T stands for Onchain Telephone + Telegraph. Burn ' + burn + ' once to become a member: the app sends the tokens from your wallet to the standard burn address, after you confirm. Holding OTT or connecting a wallet alone won’t enrol you. There’s no further burn for top-ups, and membership doesn’t expire. One membership per wallet.' + (programmeLaunched ? '' : ' Enrolment opens when OTT launches.')),
+        'OT+T stands for Onchain Telephone + Telegraph. To join, burn ' + (joinUsd ? 'about ' + joinUsd + ' of OTT' : 'the published amount of OTT') + ' once by sending it to Solana’s burn address, the incinerator, which nobody holds the key to. The app shows this week’s amount in OTT, builds the transaction and asks you to confirm. The amount is set once a week from OTT’s price, so joining costs about the same whatever the price does. Holding OTT or connecting a wallet alone won’t enrol you. Membership doesn’t expire, and there’s one per wallet.' + (programmeLaunched ? '' : ' Joining opens when OTT launches on pump.fun.')),
       entry('Your first eSIM',
         'Each member can claim one welcome eSIM: ' + welcomeText + '. The reserve pays for it, so it doesn’t use your weekly credit, and the claim doesn’t expire.'),
       entry('Trading fees keep the data pool going',
-        (memberShare ? memberShare + ' of each week’s collected trading fees becomes the next week’s member data budget. ' : 'A published share of each week’s collected trading fees becomes the next week’s member data budget. ')
+        'OTT trades on pump.fun, which pays the coin’s creator a fee on every trade: 0.30% before the coin graduates, then up to 0.95%, falling as the coin grows. OT+T’s treasury is that creator. '
+        + (memberShare ? memberShare + ' of the fees collected each week becomes the next week’s member data budget. ' : 'A published share of the fees collected each week becomes the next week’s member data budget. ')
         + (reserveShare ? 'The other ' + reserveShare + ' stays in the pool as a reserve that pays for welcome eSIMs and payment costs. ' : '')
-        + 'The burn removes tokens; it doesn’t pay the mobile supplier. Actual collected fees pay for the data, and unspent money stays in the pool.'),
+        + 'The OTT sent to join doesn’t pay for data; collected fees do, and unspent money stays in the pool.'),
       entry('A fair share of a funded pool',
         'Members share the weekly budget by the OTT they hold at the Monday snapshot' + (cap ? ', but no member gets more than ' + cap + '× the average share' : '') + '. What a capped member would have received above that goes to the other members. Non-members get no weekly credit, however much they hold. A new member’s weekly share starts at the next snapshot, and unused credit expires at the end of the week. If no fees were collected, there is no new data allocation.'),
-      entry('A burn is final',
-        'Tokens sent to the burn address can’t be returned or refunded. The app offers the burn only while the pool’s reserve can pay for a welcome eSIM, and asks you to confirm first. If the eSIM is delayed, for example when many members join at once, your membership stays on-chain and you can claim it later without burning again. Membership doesn’t mean unlimited data: weekly credit depends on fees actually collected.'),
+      entry('Sending to the burn address is final',
+        'Nobody holds the incinerator’s key, so OTT sent there can’t be returned or refunded. The app offers the send only while the pool’s reserve can pay for a welcome eSIM, and asks you to confirm first. If the eSIM is delayed, for example when many members join at once, your membership stays on-chain and you can claim it later without sending again. Membership doesn’t mean unlimited data: weekly credit depends on fees actually collected.'),
       entry('Make the money trail visible',
-        'The status page shows fees received, the data budget, supplier spending and the pool balance. Burns and transfers are on-chain transactions anyone can check on the explorer. Off-chain supplier and payment-provider balances are labelled as reported figures.'),
+        'The status page shows the fees collected, the data budget, supplier spending and the pool balance. Joins, fee collections and the treasury’s transfers are Solana transactions anyone can check on the explorer. Off-chain supplier and payment-provider balances are labelled as reported figures.'),
       entry('An eSIM still needs a mobile network',
         'An external supplier provides the eSIM and mobile service. You will need a compatible, unlocked phone and coverage at your destination. OTT can make the funding and membership records verifiable; it cannot put the mobile network itself on-chain. The app preview demonstrates plan selection and setup using sample data, without an active eSIM.'),
       entry('What is available today',
-        'You can explore the catalogue and sample app, sign in with a supported wallet and review programme status. ' + (programmeLaunched ? 'Membership and weekly credit follow the rules above while purchases are switched on.' : 'The token has not launched, so enrolment, weekly credit and purchases stay closed until launch.') + ' The programme uses Robinhood Chain bonding-curve fees with ' + taxPhrase + '.')));
+        'You can explore the catalogue and sample app, connect a Solana wallet and review programme status. ' + (programmeLaunched ? 'Membership and weekly credit follow the rules above while purchases are switched on.' : 'OTT has not launched yet, so joining, weekly credit and purchases stay closed until it does.'))));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 
   function renderHolders(view, isCurrent) {
     const H = window.OTTHolders;
     if (!H || typeof H.render !== 'function') { view.appendChild(notice('The holders module has not loaded.', 'warn')); return; }
-    H.render(view, {
-      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
-    });
+    H.render(view, context(isCurrent));
   }
 
   function renderApp(view, isCurrent) {
     const A = window.OTTMobileApp;
     if (!A || typeof A.render !== 'function') { view.appendChild(notice('The OTT app has not loaded. Reload this page to try again.', 'warn')); return; }
-    A.render(view, {
-      h, rpc, rpcBatch, callRaw, notice, tile, toast, cfg: STATE.cfg, connect,
-      account: STATE.account, currentAccount: () => STATE.account, isCurrent,
-      refresh: renderRoute,
-      walletAvailable, disconnect, accountChain,
-    }, STATE.appScreen);
+    A.render(view, context(isCurrent, { refresh: renderRoute, walletAvailable, disconnect }), STATE.appScreen);
   }
 
   const RENDERERS = { home: renderHome, data: renderData, status: renderStatus, holders: renderHolders, about: renderAbout, app: renderApp };
@@ -436,34 +360,24 @@
       }
     }
 
-    const publicConfig = window.OTTClientConfig?.configure(await appSettings) || {};
-    window.OTTWallet?.configure({ projectId: publicConfig.walletConnect?.projectId || '',
-      chainId: STATE.cfg.chainId, rpc: STATE.cfg.rpc, explorer: STATE.cfg.explorer });
+    window.OTTClientConfig?.configure(await appSettings);
     function accountChanged(accs) {
       accountEpoch++;
-      // Revoke signatures even when the provider reports the same account again.
+      // Revoke signatures even when the wallet reports the same account again.
       window.WhateverData?.resetWallet?.();
-      void window.OTTSolanaLogin?.reset();
       STATE.account = accs && accs[0] || null;
       paintWallet();
       if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
     }
     if (window.OTTWallet) {
       window.OTTWallet.on('accountsChanged', accountChanged);
-      window.OTTWallet.on('chainChanged', () => {
-        window.WhateverData?.resetWallet?.();
-        void window.OTTSolanaLogin?.reset();
-        if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
-      });
       window.OTTWallet.on('disconnect', () => { if (STATE.account) accountChanged([]); });
     }
-    window.OTTSolanaLogin?.onChange(() => {
-      paintWallet();
-      if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
-    });
 
     const chain = $('foot-chain');
-    if (chain && Number(STATE.cfg.chainId) === 4663) chain.textContent = 'Robinhood Chain · ' + STATE.cfg.chainId;
+    if (chain && STATE.cfg.chain === 'solana') chain.textContent = 'Solana · pump.fun';
+    const explorerLink = $('foot-explorer');
+    if (explorerLink && STATE.cfg.explorer) explorerLink.href = STATE.cfg.explorer;
     const toggle = $('nav-toggle'), nav = $('nav');
     if (toggle && nav) toggle.addEventListener('click', () => {
       const open = nav.classList.toggle('open');
@@ -478,28 +392,14 @@
 
     if (window.OTTWallet) {
       try {
+        const restoringEpoch = accountEpoch;
         const accs = await window.OTTWallet.restore();
         const selected = window.OTTWallet.state().accounts[0];
-        if (accs && accs.length && selected && sameAccount(selected, accs[0])) {
+        if (restoringEpoch === accountEpoch && accs && accs.length && selected === accs[0]) {
           STATE.account = accs[0]; paintWallet();
           if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
         }
       } catch { /* Browsing the app does not depend on restoring a wallet session. */ }
-    } else if (window.ethereum) {
-      try {
-        const accs = await window.ethereum.request({ method: 'eth_accounts' });
-        if (accs && accs.length) { STATE.account = accs[0]; paintWallet(); if (STATE.route === 'data' || STATE.route === 'app') renderRoute(); }
-      } catch { /* an unavailable wallet is not an error here */ }
-      if (typeof window.ethereum.on === 'function') {
-        window.ethereum.on('accountsChanged', (accs) => {
-          accountEpoch++;
-          window.WhateverData?.resetWallet?.();
-          STATE.account = accs && accs[0] || null;
-          paintWallet();
-          if (STATE.route === 'data' || STATE.route === 'app') renderRoute();
-        });
-        window.ethereum.on('chainChanged', () => location.reload());
-      }
     }
   }
 
