@@ -180,10 +180,35 @@ function fixedFloat({ key = process.env.FIXEDFLOAT_API_KEY || '', secret = proce
   }
   return {
     name: 'fixedfloat',
+    ccies: () => call('ccies', {}),
     price: (body) => call('price', body),
     create: (body) => call('create', body),
     order: (body) => call('order', body),
   };
+}
+
+/**
+ * Whether FixedFloat lists the two currencies a top-up uses: SOL it will take in (`recv`), native
+ * on Solana (no token contract), and BTC over Lightning it will pay out (`send`). Read-only: nothing
+ * is quoted or ordered. Run before launch, it catches a wrong currency code while there is still
+ * time to set FIXEDFLOAT_FROM_CCY.
+ */
+async function checkCurrencies(ff, { from = FF_FROM, to = FF_TO } = {}) {
+  const list = await ff.ccies();
+  if (!Array.isArray(list)) throw new Error('FixedFloat returned no currency list');
+  const find = (code) => list.find((c) => c && c.code === code) || null;
+  const yes = (v) => v === true || v === 1 || v === '1';
+  const source = find(from), target = find(to);
+  const problems = [];
+  if (!source) problems.push(`FixedFloat lists no currency ${from}; set FIXEDFLOAT_FROM_CCY to its code for SOL on Solana`);
+  else {
+    if (!/^sol(ana)?$/i.test(String(source.network || ''))) problems.push(`FixedFloat's ${from} is on ${source.network || 'an unnamed network'}, not Solana`);
+    if (source.contract) problems.push(`FixedFloat's ${from} is a token (${source.contract}), not native SOL`);
+    if (!yes(source.recv)) problems.push(`FixedFloat is not taking ${from} in just now`);
+  }
+  if (!target) problems.push(`FixedFloat lists no currency ${to}`);
+  else if (!yes(target.send)) problems.push(`FixedFloat is not paying ${to} out just now`);
+  return { ok: problems.length === 0, problems };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,15 +334,28 @@ async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minU
   }
 }
 
-module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, checkOrder, solFor, run, fixedFloat, DEFAULTS, OUT_PATH, TREASURY_PATH, FF_FROM, FF_TO };
+module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, checkOrder, checkCurrencies, solFor, run, fixedFloat, DEFAULTS, OUT_PATH, TREASURY_PATH, FF_FROM, FF_TO };
 
 if (require.main === module) {
   const C = require(path.join(__dirname, 'solana-chain.js'));
   const argv = process.argv.slice(2);
   const flag = (name, dflt) => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] !== undefined ? Number(argv[i + 1]) : dflt; };
   const config = readJson(ESIM_PATH, {});
+  // FixedFloat's currency codes, checked read-only: on request (--check), and before launch whenever
+  // the keys are there, so a wrong code is caught while nothing depends on it yet.
+  const currencies = async () => {
+    const r = await checkCurrencies(fixedFloat());
+    if (r.ok) console.log(`fund: FixedFloat lists ${FF_FROM} (in, on Solana) and ${FF_TO} (out)`);
+    else { r.problems.forEach((p) => console.error('fund: ' + p)); process.exit(1); }
+  };
+  const fixedFloatKeys = !!(process.env.FIXEDFLOAT_API_KEY && process.env.FIXEDFLOAT_API_SECRET);
+  if (argv.includes('--check')) { currencies().catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); }); return; }
   // Before launch there is no treasury to move anything from; say so and stop cleanly.
-  if (!S.isAddress(config.treasury)) { console.log('fund: the coin is not launched yet (no treasury in site/config/esim.json); nothing to move'); process.exit(0); }
+  if (!S.isAddress(config.treasury)) {
+    console.log('fund: the coin is not launched yet (no treasury in site/config/esim.json); nothing to move');
+    if (fixedFloatKeys) currencies().catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
+    return;
+  }
   const secret = process.env.TREASURY_PRIVATE_KEY || process.env.PRIVATE_KEY || '';
   if (!secret) { console.error('TREASURY_PRIVATE_KEY is required — the treasury\'s Solana secret key, in the environment, never in a file'); process.exit(1); }
   let key;

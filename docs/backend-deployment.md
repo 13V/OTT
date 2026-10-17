@@ -181,8 +181,9 @@ The allocation script divides 80% of the creator fees collected the week before 
 The funding keeper pays the supplier over Lightning, as before: it turns the treasury's SOL into
 sats with a FixedFloat order (SOL → BTC over Lightning) paying a Blink invoice. FixedFloat's code
 for native SOL is taken to be `SOL` (`FIXEDFLOAT_FROM_CCY` overrides it), and the keeper refuses an
-order whose currency, network or deposit address doesn't match. Confirm the code with one call to
-FixedFloat's `/ccies` endpoint using the real keys before the first top-up. See the
+order whose currency, network or deposit address doesn't match. `npm run fund -- --check` confirms
+both codes against FixedFloat's `/ccies` list with the real keys, read-only, and the daily claim
+workflow runs the same check before launch once the funding secrets are set. See the
 [private operator phone-test guide](operator-phone-test.md) for the verified payment options and
 the isolated test tooling. No payment or real phone installation has been performed.
 

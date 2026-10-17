@@ -298,6 +298,7 @@ npm run treasury                                     # rebuild treasury status; 
 npm run claim -- --dry-run                           # what the collection would do, simulated, nothing sent
 npm run claim -- --rehearse <mint>                   # the same transaction for any live pump.fun coin, simulated unsigned
 npm run fund -- --dry-run                            # what the next top-up would move, nothing sent
+npm run fund -- --check                              # FixedFloat lists SOL (in) and BTC over Lightning (out); read-only
 
 npm run serve                                        # serve site/ on http://127.0.0.1:4174
 npm run test:site                                    # the browser suite (needs `npm install` for @playwright/test first)
@@ -312,7 +313,9 @@ reported as unknown. These commands update local files but do not buy eSIMs or m
 quotes; `claim --dry-run` simulates unsigned without a key. Keep `--dry-run` until live
 transactions are intended. Before launch, `allowances` and `treasury` publish an empty ledger and
 an unknown pool without inventing holder credit, and `claim` and `fund` say there is nothing to do
-and stop cleanly.
+and stop cleanly. Once the funding secrets are set, the daily run before launch also checks that
+FixedFloat lists the currency codes a top-up uses (`SOL` in, `BTCLN` out) and fails, opening an
+alert issue, if it doesn't; `FIXEDFLOAT_FROM_CCY` overrides the SOL code.
 
 ## To turn it on
 

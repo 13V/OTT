@@ -56,6 +56,14 @@ const FF_KEY = 'ff-key', FF_SECRET = 'ff-secret';
 // rate: dollars per sat at FixedFloat; solUsd: its idea of SOL's price. With both matching the
 // wallet's ($0.0008 a sat) and the market's ($100), a dollar of SOL buys 1,250 sats.
 const ff = { rate: 0.0008, solUsd: SOL_USD, askFactor: 1.0, from: {}, statuses: ['PENDING', 'EXCHANGE', 'DONE'], orders: new Map(), log: [] };
+// FixedFloat's currency list, in the shape ff.io/api documents for /ccies.
+const CCIES = () => [
+  { code: 'BTC', coin: 'BTC', network: 'BTC', name: 'Bitcoin', recv: true, send: true, tag: null, contract: null, priority: '5' },
+  { code: 'SOL', coin: 'SOL', network: 'SOL', name: 'Solana', recv: true, send: true, tag: null, contract: null, priority: '4' },
+  { code: 'USDCSOL', coin: 'USDC', network: 'SOL', name: 'USD Coin (Solana)', recv: true, send: true, tag: null, contract: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', priority: '3' },
+  { code: 'BTCLN', coin: 'BTC', network: 'LN', name: 'Bitcoin (Lightning)', recv: true, send: true, tag: null, contract: null, priority: '2' },
+];
+ff.ccies = CCIES();
 const ffServer = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -65,6 +73,7 @@ const ffServer = http.createServer((req, res) => {
     if (req.headers['x-api-key'] !== FF_KEY || req.headers['x-api-sign'] !== sign) return reply({ code: 501, msg: 'Not have permission', data: null });
     const b = JSON.parse(body);
     ff.log.push({ path: req.url, body: b });
+    if (req.url === '/ccies') return reply({ code: 0, msg: 'OK', data: ff.ccies });
     if (req.url === '/price') {
       const btc = b.direction === 'from' ? (Number(b.amount) * ff.solUsd / ff.rate) / 1e8 : Number(b.amount);
       return reply({ code: 0, msg: 'OK', data: { from: { code: b.fromCcy, amount: Number(b.amount) }, to: { code: b.toCcy, amount: Number(btc.toFixed(8)) } } });
@@ -287,6 +296,42 @@ const SOL = (n) => Math.round(n * 1e9);
   mockPayer._state.sats = 0;
   await rejects('one that is not on chain is journaled unconfirmed and stops', F.run(base({ rpc: fakeRpc({ lamports: SOL(5), confirm: 'pending', landed: null }).rpc, confirmOptions: { pollMs: 1, timeoutMs: 5 } })), /was not confirmed/);
   check('with its status', JSON.parse(fs.readFileSync(path.join(tmp, 'funding.json'), 'utf8')).pop().status, 'unconfirmed');
+
+  console.log('\nFixedFloat\'s currency codes, read-only');
+  check('SOL in and BTCLN out are listed and open', await F.checkCurrencies(ffClient), { ok: true, problems: [] });
+  const without = (code) => CCIES().filter((c) => c.code !== code);
+  const changed = (code, over) => CCIES().map((c) => (c.code === code ? Object.assign({}, c, over) : c));
+  for (const [what, list, problem] of [
+    ['a missing SOL code says how to fix it', without('SOL'), 'FixedFloat lists no currency SOL; set FIXEDFLOAT_FROM_CCY to its code for SOL on Solana'],
+    ['SOL on another network is refused', changed('SOL', { network: 'BSC' }), 'FixedFloat\'s SOL is on BSC, not Solana'],
+    ['a token is not native SOL', changed('SOL', { contract: 'So11111111111111111111111111111111111111112' }), 'FixedFloat\'s SOL is a token (So11111111111111111111111111111111111111112), not native SOL'],
+    ['SOL that FixedFloat will not take in', changed('SOL', { recv: false }), 'FixedFloat is not taking SOL in just now'],
+    ['Lightning that FixedFloat will not pay out', changed('BTCLN', { send: false }), 'FixedFloat is not paying BTCLN out just now'],
+    ['a missing Lightning code', without('BTCLN'), 'FixedFloat lists no currency BTCLN'],
+  ]) {
+    ff.ccies = list;
+    check(what, await F.checkCurrencies(ffClient), { ok: false, problems: [problem] });
+  }
+  ff.ccies = CCIES();
+  const placed = ff.log.filter((c) => c.path === '/create').length;
+  // The command line, against the real (prelaunch) config: no treasury yet, so nothing can move.
+  // Asynchronously: the fake FixedFloat server answers from this process, so it must keep running.
+  const { execFile } = require('child_process');
+  const cli = (env, args = []) => new Promise((resolve) => execFile(process.execPath, [path.join(__dirname, '..', 'scripts', 'fund.js'), ...args], {
+    encoding: 'utf8', timeout: 30000, env: Object.assign({ PATH: process.env.PATH, FIXEDFLOAT_API: 'http://127.0.0.1:' + ffServer.address().port }, env),
+  }, (error, stdout, stderr) => resolve({ status: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout, stderr })));
+  const keys = { FIXEDFLOAT_API_KEY: FF_KEY, FIXEDFLOAT_API_SECRET: FF_SECRET };
+  let out = await cli(keys);
+  check('before launch, with FixedFloat keys, the codes are checked and the run stops cleanly', [out.status, /not launched yet/.test(out.stdout), /FixedFloat lists SOL \(in, on Solana\) and BTCLN \(out\)/.test(out.stdout)], [0, true, true]);
+  out = await cli({});
+  check('without the keys it only says it is not launched', [out.status, /not launched yet/.test(out.stdout), /FixedFloat/.test(out.stdout + out.stderr)], [0, true, false]);
+  ff.ccies = without('SOL');
+  out = await cli(keys);
+  check('a wrong code before launch fails the run, so the keeper alert says so', [out.status, /set FIXEDFLOAT_FROM_CCY/.test(out.stderr)], [1, true]);
+  out = await cli(keys, ['--check']);
+  check('--check runs only the currency check', [out.status, /lists no currency SOL/.test(out.stderr), /not launched yet/.test(out.stdout)], [1, true, false]);
+  ff.ccies = CCIES();
+  check('and none of it placed an order', ff.log.filter((c) => c.path === '/create').length, placed);
 
   ffServer.close();
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
