@@ -134,6 +134,38 @@ test('revoking access while the join waits on the wallet records no join for any
   expect(api.posts).toEqual([]);
 });
 
+test('a join the wallet sends after the account switched is kept for the wallet that sent it, so switching back never offers a second burn', async ({ page }) => {
+  const api = await launchedSite(page, { answers: {
+    [ADDRESS]: async () => standing(ADDRESS, { member: false }),
+    [NEXT]: async () => standing(NEXT, { member: false }),
+  } });
+  const wallet = await installWallet(page, { trusted: true, send: 'hold' });
+  await page.goto('/index.html#/data');
+  const card = page.locator('.data-membership');
+  await card.getByRole('button', { name: 'Join: burn 180,000 OTT' }).click();
+  await card.getByLabel('I understand the burn is permanent and can’t be refunded.').check();
+  await card.getByRole('button', { name: 'Burn 180,000 OTT' }).click();
+  await expect.poll(() => wallet.calls('signAndSendTransaction').length).toBe(1);
+
+  // The person switches account while the burn waits in the wallet, then approves it there.
+  await wallet.switchTo(page, 'second account');
+  await expect(page.locator('.data-addr')).toHaveText(NEXT);
+  wallet.behave({ send: 'approve' });
+  wallet.release('signAndSendTransaction');
+  // The other account was asked for nothing and is offered its own join as usual.
+  await expect(card.getByRole('button', { name: 'Join: burn 180,000 OTT' })).toBeVisible();
+
+  await wallet.switchTo(page, 'holder');
+  await expect(page.locator('.data-addr')).toHaveText(ADDRESS);
+  await expect(card.locator('h3')).toHaveText('Your burn is confirming');
+  await expect(card).toContainText('Don’t burn again');
+  await expect(card.getByRole('button', { name: /^(?:Join|Burn)/ })).toHaveCount(0);
+  expect(wallet.calls('signAndSendTransaction')).toHaveLength(1);
+  // Nothing is stored until the burn is seen to confirm.
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('ott-membership-join:')))).toEqual([]);
+  expect(api.posts).toEqual([]);
+});
+
 test('a standing that arrives after the account changed is dropped, never shown for the new account', async ({ page }) => {
   let releaseFirst;
   const first = new Promise((resolve) => { releaseFirst = resolve; });

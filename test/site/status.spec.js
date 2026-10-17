@@ -292,6 +292,10 @@ test('a graduated coin says it trades on PumpSwap, with PumpSwap’s creator fee
   await expect(tileByLabel(coin, 'Curve sold')).toContainText('the curve sold out and graduated');
   await expect(tileByLabel(coin, 'Creator fee')).toContainText('0.05–0.95%');
   await expect(tileByLabel(coin, 'Creator fee')).toContainText('of each PumpSwap trade, by market cap');
+  // The emptied curve's 0 SOL is not shown as what the coin raised.
+  await expect(tileByLabel(coin, 'Raised')).toContainText('In the pool');
+  await expect(tileByLabel(coin, 'Raised')).toContainText('the curve’s SOL moved into PumpSwap at graduation');
+  await expect(tileByLabel(coin, 'Raised')).not.toContainText('0 SOL');
   await expect(coin.locator('.data-progress')).toContainText('Graduated: OTT now trades on PumpSwap.');
   expect(errors).toEqual([]);
 });

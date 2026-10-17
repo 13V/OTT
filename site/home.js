@@ -227,7 +227,7 @@
       return;
     }
     if (ctx.isCurrent && !ctx.isCurrent()) return;
-    const launched = cfg.chain === 'solana' && isAddress(cfg.coin) && isAddress(cfg.tokenProgram) && isAddress(cfg.treasury) && isAddress(cfg.membership && cfg.membership.burnAccount);
+    const launched = !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
     view.appendChild(hero(h, launched, cfg, ctx.cfg));
     const travelSection = travel(h);
     const catalogueSection = catalogue(h, cfg, launched);

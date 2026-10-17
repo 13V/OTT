@@ -6,7 +6,7 @@ const CACHE_NAME = CACHE_PREFIX + 'v15';
 const SHELL = [
   'index.html', 'fonts.css', 'style.css?v=20261017-burn', 'ui.css', 'home.css?v=20261007-membership', 'membership-story.css?v=20261007-membership', 'account-preview.css',
   'mobile-app.css?v=20261017-solana', 'ui.js', 'qr.js', 'esim.js?v=20261017-solana', 'clay-type.js', 'account-preview.js?v=20261017-burn',
-  'membership-story.js?v=20261017-solana', 'home.js?v=20261017-solana', 'status.js', 'holders.js', 'mobile-app.js?v=20261017-solana', 'app.js?v=20261017-solana', 'pwa.js',
+  'membership-story.js?v=20261017-solana', 'home.js?v=20261017-solana', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261017-solana', 'app.js?v=20261017-solana', 'pwa.js',
   'client-config.js?v=20261017-solana', 'solana.js?v=20261017-solana', 'wallet.js?v=20261017-solana',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',

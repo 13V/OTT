@@ -27,9 +27,8 @@
   const Sol = () => window.OTTSolana;
   const isAddress = (a) => !!Sol() && Sol().isAddress(a);
   const isSignature = (s) => !!Sol() && Sol().isSignature(s);
-  /** Every launch address the site needs, filled in: the coin is live on pump.fun. */
-  const launchedConfig = (cfg) => !!cfg && cfg.chain === 'solana' && isAddress(cfg.coin) && isAddress(cfg.tokenProgram)
-    && isAddress(cfg.treasury) && isAddress(cfg.membership && cfg.membership.burnAccount);
+  /** Every launch address the site needs, filled in: the coin is live on pump.fun (site/solana.js's rule, the API's too). */
+  const launchedConfig = (cfg) => !!Sol() && Sol().launchedConfig(cfg);
 
   /**
    * The join transaction: create the incinerator's OTT account if it is missing (a no-op once it
@@ -1103,6 +1102,9 @@
         if (!stillHere(generation)) return;
         await settleJoin(sent, status);
       } catch (e) {
+        // The wallet sent it for this wallet, but answered after the page had moved on: it may
+        // still land, so this page never offers this wallet a second send for it.
+        if (!sent && e && e.account === addr && isSignature(e.signature)) { sent = e.signature; pendingJoins.set(addr, sent); }
         if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx) !== addr) return;
         if (sent) { paintPending(sent, 'The burn was sent, but its status could not be checked. Don’t burn again: check its status in a moment.'); return; }
         const rejected = e && (e.code === 4001 || /reject|denied|cancel|not approved/i.test(errText(e)));

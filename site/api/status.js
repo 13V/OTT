@@ -142,14 +142,10 @@ const messageOf = (e) => (e && e.message) || String(e || 'failed');
 // ---------------------------------------------------------------------------------------------
 // A launch address is a canonical base58 Solana address, and not the all-zero key (the system
 // program's), which is what an unset Pubkey looks like.
-const isLaunchAddress = (a) => S.isAddress(a) && a !== S.PROGRAMS.system;
+const isLaunchAddress = S.isLaunchAddress;
 
-/** The same "launched" redeem.js applies: chain, mint, its token program, treasury and the incinerator's account. */
-function launched(config) {
-  const m = config && config.membership;
-  return !!config && config.chain === 'solana' && isLaunchAddress(config.coin) && S.TOKEN_PROGRAMS.includes(config.tokenProgram)
-    && isLaunchAddress(config.treasury) && !!m && typeof m === 'object' && !Array.isArray(m) && isLaunchAddress(m.burnAccount);
-}
+/** The same "launched" redeem.js and the site apply (site/solana.js): chain, mint, its token program, treasury and the incinerator's account. */
+const launched = S.launchedConfig;
 const text = (value) => (typeof value === 'string' ? value : '');
 
 function summariseConfig(config) {

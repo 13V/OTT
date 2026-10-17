@@ -418,6 +418,20 @@
   }
   const feePayer = (tx) => accountKeys(tx)[0] || null;
 
+  // ============================================================================ launch config
+  /**
+   * Whether a config (site/config/esim.json, or the API's view of it) names a launched coin: the
+   * Solana chain, the mint, the Token or Token-2022 program that owns it, the treasury and the
+   * incinerator's token account for it. None of the addresses may be the all-zero key, which is
+   * what an unset address reads as. The site, the API and the launch checks all use this one rule.
+   */
+  const isLaunchAddress = (value) => isAddress(value) && value !== PROGRAMS.system;
+  function launchedConfig(cfg) {
+    const m = cfg && cfg.membership;
+    return !!cfg && cfg.chain === 'solana' && isLaunchAddress(cfg.coin) && TOKEN_PROGRAMS.includes(cfg.tokenProgram)
+      && isLaunchAddress(cfg.treasury) && !!m && typeof m === 'object' && !Array.isArray(m) && isLaunchAddress(m.burnAccount);
+  }
+
   // ============================================================================ JSON-RPC
   /**
    * A JSON-RPC caller that rotates over `endpoints`. Each call tries every endpoint at most
@@ -473,6 +487,7 @@
     compileMessage, messageSigners, wireTransaction, compactLength, readCompactLength, u64, u32, concat,
     unitsOf, tokensOf,
     accountKeys, succeeded, tokenChanges, lamportsChange, feePayer,
+    isLaunchAddress, launchedConfig,
     createRpc,
   };
 });

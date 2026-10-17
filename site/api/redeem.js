@@ -196,18 +196,14 @@ async function readTreasury() {
 // A wallet is a canonical base58 Solana address. Launch addresses must also not be the all-zero
 // key (the system program's), which is what an unset Pubkey looks like.
 const isAddress = (a) => S.isAddress(a);
-const isLaunchAddress = (a) => S.isAddress(a) && a !== S.PROGRAMS.system;
+const isLaunchAddress = S.isLaunchAddress;
 
 /**
  * The coin counts as launched when esim.json names the chain, the mint, the token program that
  * owns it, the treasury and the incinerator's token account for it (docs/membership.md). Anything
- * less, or anything malformed, is prelaunch.
+ * less, or anything malformed, is prelaunch. The rule is site/solana.js's, shared with the site.
  */
-function launched(config) {
-  const m = config && config.membership;
-  return !!config && config.chain === 'solana' && isLaunchAddress(config.coin) && S.TOKEN_PROGRAMS.includes(config.tokenProgram)
-    && isLaunchAddress(config.treasury) && !!m && typeof m === 'object' && !Array.isArray(m) && isLaunchAddress(m.burnAccount);
-}
+const launched = S.launchedConfig;
 // Anything that becomes an href or an <img src> on the page is scheme-checked HERE as well as
 // where it was written, so a record stored before the provider checked — or by a provider that
 // never did — cannot put a "javascript:" link on the page that is showing a wallet's codes.

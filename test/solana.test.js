@@ -206,6 +206,21 @@ const randomBytes = (n) => Uint8Array.from({ length: n }, () => rand() & 0xff);
   check('a json-encoded v0 transaction includes its lookup-table addresses', S.accountKeys({ transaction: { message: { accountKeys: [A] } }, meta: { loadedAddresses: { writable: [B], readonly: [dest] } } }), [A, B, dest]);
   check('a failed transaction did not succeed', S.succeeded({ meta: { err: { InstructionError: [0, 'x'] } } }), false);
 
+  // ---------------------------------------------------------------- the launch rule
+  {
+    const coin = S.encodeBase58(new Uint8Array(32).fill(7)), treasury = S.encodeBase58(new Uint8Array(32).fill(9));
+    const burnAccount = await S.associatedTokenAddress(S.INCINERATOR, coin, S.PROGRAMS.token2022);
+    const cfg = (over = {}, m = {}) => Object.assign({ chain: 'solana', coin, tokenProgram: S.PROGRAMS.token2022, treasury, membership: Object.assign({ burnAccount }, m) }, over);
+    check('a complete config is launched', S.launchedConfig(cfg()), true);
+    check('the classic Token program is accepted too', S.launchedConfig(cfg({ tokenProgram: S.PROGRAMS.token })), true);
+    check('nothing filled in is prelaunch', S.launchedConfig(cfg({ coin: '', tokenProgram: '', treasury: '' }, { burnAccount: '' })), false);
+    check('the all-zero key is never a launch address', [S.launchedConfig(cfg({ coin: S.PROGRAMS.system })), S.launchedConfig(cfg({ treasury: S.PROGRAMS.system })), S.launchedConfig(cfg({}, { burnAccount: S.PROGRAMS.system }))], [false, false, false]);
+    check('the token program must be Token or Token-2022', S.launchedConfig(cfg({ tokenProgram: treasury })), false);
+    check('another chain is not launched', S.launchedConfig(cfg({ chain: 'robinhood' })), false);
+    check('a missing or malformed membership block is not launched', [S.launchedConfig(cfg({ membership: undefined })), S.launchedConfig(cfg({ membership: [burnAccount] }))], [false, false]);
+    check('a non-canonical address is not launched', S.launchedConfig(cfg({ coin: '1' + coin })), false);
+  }
+
   // ---------------------------------------------------------------- RPC rotation
   const answers = [];
   const fake = (script) => async (url) => {

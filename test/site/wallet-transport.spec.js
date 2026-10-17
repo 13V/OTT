@@ -321,6 +321,41 @@ test('a transaction goes to the wallet as its exact wire bytes on Solana mainnet
   expect(await again()).toEqual({ error: { code: -32603, message: 'Transaction simulation failed: insufficient funds for fee.' } });
 });
 
+test('a send the wallet answers after the account changed still reports its signature and the account that sent it', async ({ page }) => {
+  const wallet = await installWallet(page, { name: 'Phantom', send: 'hold', sign: 'hold' });
+  await openFixture(page);
+  await attempt(page, () => window.OTTWallet.connect());
+  const to = addressFrom('recipient');
+  await page.evaluate(({ arg }) => {
+    const S = window.OTTSolana;
+    const message = S.compileMessage({ payer: arg.from, blockhash: arg.blockhash, instructions: [S.systemTransfer({ from: arg.from, to: arg.to, lamports: 5000 })] });
+    const settle = (promise) => promise.then((value) => ({ value }), (error) => ({ error: { code: error.code, message: error.message, signature: error.signature, account: error.account } }));
+    window.__send = settle(window.OTTWallet.signAndSendTransaction(S.wireTransaction(message), message));
+    window.__sign = settle(window.OTTWallet.signMessage(arg.text));
+  }, { arg: { from: ADDRESS, to, blockhash: BLOCKHASH, text: MESSAGE } });
+  await expect.poll(() => wallet.calls('signAndSendTransaction').length + wallet.calls('signMessage').length).toBe(2);
+
+  // The person switches account while both prompts are open, then approves them.
+  await wallet.switchTo(page, 'second account');
+  wallet.behave({ send: 'approve', sign: 'approve' });
+  wallet.release('signAndSendTransaction');
+  wallet.release('signMessage');
+  // The transaction may land, so the page is told what was sent and by whom...
+  expect(await page.evaluate(() => window.__send)).toEqual({ error: { code: 4900, message: 'Your wallet changed while the transaction was being sent. It may still go through.', signature: TX_SIGNATURE, account: ADDRESS } });
+  // ...while a message signature for the account the page has left is simply dropped.
+  expect(await page.evaluate(() => window.__sign)).toEqual({ error: { code: 4900, message: 'Your wallet changed. Please try again.' } });
+  expect(await page.evaluate(() => window.OTTWallet.state().accounts)).toEqual([NEXT]);
+});
+
+test('connecting a wallet the chooser named never connects a different one instead', async ({ page }) => {
+  const wallet = await installWallet(page, { name: 'Phantom' });
+  await openFixture(page);
+  expect(await attempt(page, () => window.OTTWallet.connect({ wallet: 'Solflare' }))).toEqual({ error: { code: 'WALLET_UNAVAILABLE', message: 'Solflare is no longer available. Choose another wallet.' } });
+  expect(wallet.calls()).toEqual([]);
+  expect(await page.evaluate(() => window.OTTWallet.state().connected)).toBe(false);
+  expect(await attempt(page, () => window.OTTWallet.connect({ wallet: 'Phantom' }))).toEqual({ value: [ADDRESS] });
+});
+
 test('account changes in the wallet follow through, and revoking this site’s access disconnects and forgets it', async ({ page }) => {
   const wallet = await installWallet(page, { name: 'Phantom' });
   await openFixture(page);

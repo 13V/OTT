@@ -22,7 +22,9 @@
  *   wallet.behave({ send: 'reject' })       change what it does next
  *   wallet.release('connect')               answer a call held by 'hold' with the current behaviour
  *   await wallet.switchTo(page, 'other')    change the account, as a person does in their wallet
- *   await wallet.switchTo(page, null)       revoke this site's access
+ *   await wallet.switchTo(page, null)       the wallet shares no account any more
+ *   await wallet.revoke(page)               revoke this site's access; the account stays, so a
+ *                                           later explicit connect can share it again
  */
 const crypto = require('crypto');
 const { S, decodeTransaction } = require('./solana.js');
@@ -69,6 +71,10 @@ async function installWallet(page, opts = {}) {
     async switchTo(target, label) {
       current = label === null ? null : remember(label);
       await target.evaluate((account) => window.__ottTestWalletChange(account), current ? { address: current.address, publicKey: current.raw } : null);
+    },
+    async revoke(target) {
+      this.trusted = false;
+      await target.evaluate(() => window.__ottTestWalletChange(null));
     },
   };
 

@@ -143,7 +143,10 @@ for (const failure of ['expired', 'previous allocation', 'failed API', 'invalid 
     if (failure === 'invalid amount') account.remainingUsd = null;
     const { writes, wallet } = await fixture(page, { live: true, account, apiStatus });
     await page.goto('/#/app/plans');
-    await expect(page.locator('.om-plan-budget')).toHaveText('Current credit is unavailable. Browse all packages or refresh your account.');
+    // A wallet that hasn't joined is told why it has no credit, not to refresh.
+    await expect(page.locator('.om-plan-budget')).toHaveText(failure === 'not a member'
+      ? 'Weekly credit is for members. Join OT+T on the eSIMs screen to share next week’s budget.'
+      : 'Current credit is unavailable. Browse all packages or refresh your account.');
     await expect(page.getByRole('checkbox', { name: 'Fits my credit', exact: true })).toBeDisabled();
     await expect(packageOptions(page)).toHaveCount(3);
     await expect(page.locator('.om-preview-banner')).toHaveCount(0);

@@ -179,6 +179,8 @@
     connecting = (async () => {
       const name = options && options.wallet;
       const choice = adapterFor(name);
+      // A wallet named by the chooser must be the one that connects, not whichever is installed.
+      if (choice && name && choice.name !== name) throw failure(name + ' is no longer available. Choose another wallet.', 'WALLET_UNAVAILABLE');
       if (!choice) {
         throw failure(list().length > 1 ? 'Choose which wallet to connect.' : 'No Solana wallet was found. Open OTT in Phantom or Solflare, or install a Solana wallet.', 'WALLET_UNAVAILABLE');
       }
@@ -230,19 +232,45 @@
     let out;
     try { out = await work(choice.adapter, account); }
     catch (error) { throw rejected(error) ? failure('The request was not approved in your wallet.', 4001) : error; }
-    if (selected !== choice || op !== generation || accounts[0] !== account) throw failure('Your wallet changed. Please try again.', 4900);
+    if (selected !== choice || op !== generation || accounts[0] !== account) {
+      const changed = failure('Your wallet changed. Please try again.', 4900);
+      // What the wallet answered anyway, and for which account: a sent transaction can still land.
+      changed.result = out;
+      changed.account = account;
+      throw changed;
+    }
     return out;
   }
 
   async function signMessage(text) {
     if (typeof text !== 'string' || !text.length || text.length > 2048) throw failure('The message to sign is invalid.', 'INVALID_MESSAGE');
-    const signature = await guarded((adapter) => adapter.signMessage(S().utf8(text)));
+    let signature;
+    try { signature = await guarded((adapter) => adapter.signMessage(S().utf8(text))); }
+    catch (error) {
+      // A message signature for an account the page has left is simply dropped.
+      if (error) { delete error.result; delete error.account; }
+      throw error;
+    }
     return S().encodeBase58(signature);
   }
 
+  /**
+   * Sends through the wallet and returns the transaction's signature. If the wallet or account
+   * changed while it was asking, the send may still land, so the error carries `signature` and
+   * the `account` that sent it: the caller must treat that as sent, never offer it again.
+   */
   async function signAndSendTransaction(wire, message) {
     if (!(wire instanceof Uint8Array) || !(message instanceof Uint8Array)) throw failure('The transaction is invalid.', 'INVALID_TRANSACTION');
-    const signature = await guarded((adapter) => adapter.signAndSendTransaction(wire, message));
+    let signature;
+    try { signature = await guarded((adapter) => adapter.signAndSendTransaction(wire, message)); }
+    catch (error) {
+      if (error && error.code === 4900 && error.result instanceof Uint8Array && error.result.length === 64) {
+        error.signature = S().encodeBase58(error.result);
+        error.message = 'Your wallet changed while the transaction was being sent. It may still go through.';
+      }
+      if (error) delete error.result;
+      throw error;
+    }
     return S().encodeBase58(signature);
   }
 

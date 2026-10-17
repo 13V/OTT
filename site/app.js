@@ -229,7 +229,7 @@
     cfg = cfg || {};
     const S = window.OTTSolana;
     const member = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
-    const programmeLaunched = !!S && [cfg.coin, cfg.tokenProgram, cfg.treasury, member.burnAccount].every((a) => S.isAddress(a));
+    const programmeLaunched = !!S && S.launchedConfig(cfg);
     const pct = (bps) => (Number.isFinite(Number(bps)) && Number(bps) > 0 ? (Number(bps) / 100) + '%' : null);
 
     // The same rule esim.js uses for what counts as a real package, so this page's catalogue line

@@ -57,8 +57,7 @@
   // ============================================================================ small helpers
   const Sol = () => window.OTTSolana;
   const isAddress = (a) => !!Sol() && Sol().isAddress(a);
-  const launchedConfig = (cfg) => !!cfg && cfg.chain === 'solana' && isAddress(cfg.coin) && isAddress(cfg.tokenProgram)
-    && isAddress(cfg.treasury) && isAddress(cfg.membership && cfg.membership.burnAccount);
+  const launchedConfig = (cfg) => !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
   const brandOf = (cfg) => (cfg && cfg.brand) || null;
   const shortAddr = (a) => (a && a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : a || '—');
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); };
@@ -305,7 +304,9 @@
     const c = chain || {};
     card.appendChild(h('div', { class: 'stat-grid' },
       fmtTile(ctx, 'Curve sold', numOr(c.progress), (n) => Math.round(n * 100) + '%', c.graduated ? 'the curve sold out and graduated' : 'of the bonding curve’s tokens, toward graduation', 'could not be read from the curve', 'chart'),
-      fmtTile(ctx, 'Raised', numOr(c.raisedSol), fmtSol, c.graduated ? 'moved into the PumpSwap pool' : 'SOL in the bonding curve', 'could not be read from the curve', 'coins'),
+      // A graduated curve holds no SOL: it all moved into the PumpSwap pool, so "0 SOL" would misread.
+      c.graduated ? ctx.tile('Raised', 'In the pool', 'the curve’s SOL moved into PumpSwap at graduation', 'coins')
+        : fmtTile(ctx, 'Raised', numOr(c.raisedSol), fmtSol, 'SOL in the bonding curve', 'could not be read from the curve', 'coins'),
       ctx.tile('Creator fee', c.graduated ? '0.05–0.95%' : '0.30%', c.graduated ? 'of each PumpSwap trade, by market cap' : 'of each trade on the curve, to the treasury', 'flame'),
       ctx.tile('Graduated', c.graduated === null || c.graduated === undefined ? '—' : (c.graduated ? 'Yes' : 'Not yet'),
         c.graduated === null || c.graduated === undefined ? 'could not be read from the curve' : (c.graduated ? 'trading has moved to PumpSwap' : 'still selling on the bonding curve'), 'shield')));

@@ -28,9 +28,8 @@
   const isAddress = value => !!window.OTTSolana && window.OTTSolana.isAddress(value);
   // The API's own rule (site/api/status.js launched()): a real address, never the all-zero key an
   // unset address looks like, and a token program that is Token or Token-2022.
-  const isLaunchAddress = value => isAddress(value) && value !== window.OTTSolana.PROGRAMS.system;
-  const launched = cfg => !!cfg && cfg.chain === 'solana' && window.OTTSolana?.TOKEN_PROGRAMS.includes(cfg.tokenProgram)
-    && [cfg.coin, cfg.treasury, cfg.membership && cfg.membership.burnAccount].every(isLaunchAddress);
+  // The API's launch rule, shared through site/solana.js, so the app and the API never disagree.
+  const launched = cfg => !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
   const go = screen => { location.hash = screen === 'home' ? '#/app' : '#/app/' + screen; };
 
   // The connected Solana wallet is the member's account: its credit, its eSIMs, its signatures.
@@ -527,7 +526,9 @@
       budget = confirmedBudget(state);
       budgetEnd = budget === null ? Infinity : state.weekEnd * 1000;
       fit.disabled = budget === null;
-      budgetNote.textContent = budget === null ? 'Current credit is unavailable. Browse all packages or refresh your account.' : 'Confirmed remaining credit: ' + money(budget);
+      const notMember = !!(state && state.membership && state.membership.configured && !state.membership.member);
+      budgetNote.textContent = notMember ? 'Weekly credit is for members. Join OT+T on the eSIMs screen to share next week’s budget.'
+        : budget === null ? 'Current credit is unavailable. Browse all packages or refresh your account.' : 'Confirmed remaining credit: ' + money(budget);
       if (budget === null) fit.checked = false;
       paintPackages();
     });
