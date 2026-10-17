@@ -15,8 +15,7 @@ const row = (id, label, ok, detail) => ({ id, label, ok: !!ok, detail });
 // in the membership block, in esim.json and in /api/status's config summary alike.
 const launchFields = cfg => ({ coin: cfg?.coin, tokenProgram: cfg?.tokenProgram, treasury: cfg?.treasury, burnAccount: cfg?.membership?.burnAccount });
 const unlaunched = cfg => Object.values(launchFields(cfg)).every(value => value === '');
-const launchedConfig = cfg => cfg?.chain === 'solana' && address(cfg?.coin) && S.TOKEN_PROGRAMS.includes(cfg?.tokenProgram)
-  && address(cfg?.treasury) && address(cfg?.membership?.burnAccount);
+const launchedConfig = S.launchedConfig;
 function catalogueMatches(body, esim) {
   const fingerprint = catalogueFingerprint(esim);
   return !!fingerprint && body?.ready?.config === true && body?.config?.packages === esim.packages.length
