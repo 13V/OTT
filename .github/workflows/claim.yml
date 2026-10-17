@@ -15,6 +15,10 @@ name: claim
 on:
   schedule:
     - cron: '17 6 * * *'
+    # Monday's ledger (data.yml, 00:05) publishes the new week's budget, and until the pool is
+    # topped up to cover it the API keeps joining closed. Funding again right after it closes that
+    # gap in minutes instead of waiting for 06:17.
+    - cron: '35 0 * * 1'
   workflow_dispatch:
 
 permissions:

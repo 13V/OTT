@@ -34,7 +34,8 @@ a ticker has no room for.
 
 pump.fun keeps the creator fee on the bonding curve, and after graduation in the PumpSwap pool,
 until someone pays it out. Paying out is permissionless and can only ever pay the creator.
-`scripts/claim.js` does it once a day (`.github/workflows/claim.yml`): one transaction sweeps
+`scripts/claim.js` does it once a day, and again just after Monday's new budget is published
+(`.github/workflows/claim.yml`): one transaction sweeps
 whatever is waiting and pays it to the treasury, a wallet that holds nothing but fee income. That
 is what makes it acceptable to keep the treasury's key as a repository secret, and the daily
 collection is what keeps more than a day's fees from waiting. The transaction is simulated before
@@ -388,12 +389,18 @@ allowance and a 40 GB weekly cap are not implemented or promised by the app.
 3. **Check the creator by hand** as well, on pump.fun's coin page or Solscan, against `treasury`: a
    treasury that has never collected anything looks exactly like a quiet week.
 4. Commit and push (production deploys from `main`), publish Pages with `npm run deploy:pages`,
-   add the repository secrets above, then switch purchases on with `REDEMPTIONS_ENABLED=1`.
+   and add the repository secrets above.
+5. **Put at least $50 in the Blink Lightning wallet** before switching purchases on with
+   `REDEMPTIONS_ENABLED=1`. The app offers joining only while the treasury report calls the pool
+   funded ($50 or more, with room for a $4 welcome eSIM beyond what the week owes), and on launch
+   day no creator fees have been collected into it yet. From then on the keeper tops it up from
+   the fees; run the claim workflow by hand (Actions → claim → Run workflow) to collect sooner.
 
 Until then the deploy answers with the rules and "coin not launched yet", and the workflows say what
 they skipped rather than failing. Week one publishes a budget of zero, honestly and without
 crashing: there were no fees the week before to make one from. The join amount is priced from the
-first run after launch, so joining opens within half an hour of the coin going live.
+first run after launch, so joining opens within half an hour of the coin going live, as long as the
+pool is funded (step 5).
 
 Two things to know about how it runs once it is on. The funding keeper aims at what the week still
 owes its members — the published budget less what has been redeemed — rather than a flat target, so
