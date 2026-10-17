@@ -1,0 +1,455 @@
+{
+ "note": "The four creator-fee instructions from pump-fun/pump-public-docs idl/pump.json and idl/pump_amm.json (October 2026), trimmed to what test/claim.test.js checks.",
+ "pump": {
+  "address": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+  "instructions": {
+   "sweep_creator_fee": {
+    "discriminator": [
+     32,
+     246,
+     191,
+     52,
+     8,
+     201,
+     73,
+     186
+    ],
+    "args": [],
+    "accounts": [
+     {
+      "name": "payer",
+      "writable": true,
+      "signer": true
+     },
+     {
+      "name": "global",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "global"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "base_mint",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "quote_mint",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "quote_token_program",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "associated_token_program",
+      "writable": false,
+      "signer": false,
+      "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+     },
+     {
+      "name": "system_program",
+      "writable": false,
+      "signer": false,
+      "address": "11111111111111111111111111111111"
+     },
+     {
+      "name": "bonding_curve",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "bonding-curve"
+        },
+        {
+         "account": "base_mint"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "associated_quote_bonding_curve",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "bonding_curve"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+      }
+     },
+     {
+      "name": "recipient",
+      "writable": true,
+      "signer": false
+     },
+     {
+      "name": "associated_quote_recipient",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "recipient"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+      }
+     },
+     {
+      "name": "event_authority",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "__event_authority"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "program",
+      "writable": false,
+      "signer": false
+     }
+    ]
+   },
+   "collect_creator_fee_v2": {
+    "discriminator": [
+     207,
+     17,
+     138,
+     242,
+     4,
+     34,
+     19,
+     56
+    ],
+    "args": [],
+    "accounts": [
+     {
+      "name": "creator",
+      "writable": true,
+      "signer": false
+     },
+     {
+      "name": "creator_token_account",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "creator"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": {
+        "account": "associated_token_program"
+       }
+      }
+     },
+     {
+      "name": "creator_vault",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "creator-vault"
+        },
+        {
+         "account": "creator"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "creator_vault_token_account",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "creator_vault"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": {
+        "account": "associated_token_program"
+       }
+      }
+     },
+     {
+      "name": "quote_mint",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "quote_token_program",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "associated_token_program",
+      "writable": false,
+      "signer": false,
+      "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+     },
+     {
+      "name": "system_program",
+      "writable": false,
+      "signer": false,
+      "address": "11111111111111111111111111111111"
+     },
+     {
+      "name": "event_authority",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "__event_authority"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "program",
+      "writable": false,
+      "signer": false
+     }
+    ]
+   }
+  }
+ },
+ "pumpAmm": {
+  "address": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+  "instructions": {
+   "sweep_creator_fee": {
+    "discriminator": [
+     32,
+     246,
+     191,
+     52,
+     8,
+     201,
+     73,
+     186
+    ],
+    "args": [],
+    "accounts": [
+     {
+      "name": "payer",
+      "writable": true,
+      "signer": true
+     },
+     {
+      "name": "global_config",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "pool",
+      "writable": true,
+      "signer": false
+     },
+     {
+      "name": "quote_mint",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "quote_token_program",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "pool_quote_token_account",
+      "writable": true,
+      "signer": false
+     },
+     {
+      "name": "recipient",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "recipient_token_account",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "recipient"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+      }
+     },
+     {
+      "name": "system_program",
+      "writable": false,
+      "signer": false,
+      "address": "11111111111111111111111111111111"
+     },
+     {
+      "name": "associated_token_program",
+      "writable": false,
+      "signer": false,
+      "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+     },
+     {
+      "name": "event_authority",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "__event_authority"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "program",
+      "writable": false,
+      "signer": false
+     }
+    ]
+   },
+   "collect_coin_creator_fee": {
+    "discriminator": [
+     160,
+     57,
+     89,
+     42,
+     181,
+     139,
+     43,
+     66
+    ],
+    "args": [],
+    "accounts": [
+     {
+      "name": "quote_mint",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "quote_token_program",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "coin_creator",
+      "writable": false,
+      "signer": false
+     },
+     {
+      "name": "coin_creator_vault_authority",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "creator_vault"
+        },
+        {
+         "account": "coin_creator"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "coin_creator_vault_ata",
+      "writable": true,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "account": "coin_creator_vault_authority"
+        },
+        {
+         "account": "quote_token_program"
+        },
+        {
+         "account": "quote_mint"
+        }
+       ],
+       "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+      }
+     },
+     {
+      "name": "coin_creator_token_account",
+      "writable": true,
+      "signer": false
+     },
+     {
+      "name": "event_authority",
+      "writable": false,
+      "signer": false,
+      "pda": {
+       "seeds": [
+        {
+         "const": "__event_authority"
+        }
+       ],
+       "program": null
+      }
+     },
+     {
+      "name": "program",
+      "writable": false,
+      "signer": false
+     }
+    ]
+   }
+  }
+ }
+}

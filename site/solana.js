@@ -421,8 +421,9 @@
   // ============================================================================ JSON-RPC
   /**
    * A JSON-RPC caller that rotates over `endpoints`. Each call tries every endpoint at most
-   * `rounds` times. A null result can mean "not found" or "this node is behind", so it is only
-   * returned once every endpoint has said it.
+   * `rounds` times. A null result can mean "not found", "this node is behind" or "this node
+   * doesn't keep that much history", so it is only returned once every endpoint has said it. When
+   * some said null and the rest only failed, the answer is unknown, and the call throws.
    */
   function createRpc(endpoints, { fetchImpl, timeoutMs = 8000, rounds = 2, headers = {}, pauseMs = 250, log = () => {} } = {}) {
     const urls = (endpoints || []).filter((u) => typeof u === 'string' && /^https?:\/\//.test(u));
@@ -459,7 +460,7 @@
           if (pauseMs) await new Promise((r) => setTimeout(r, pauseMs * Math.min(4, 1 + Math.floor(attempt / urls.length))));
         } finally { if (timer) clearTimeout(timer); }
       }
-      if (nulls.size) return null;
+      if (nulls.size) throw new Error(method + ' found nothing on ' + nulls.size + ' of ' + urls.length + ' Solana endpoints and failed on the rest: ' + (lastError && lastError.message));
       throw new Error(method + ' failed on every Solana endpoint: ' + (lastError && lastError.message));
     };
   }

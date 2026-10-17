@@ -6,25 +6,27 @@
  * The one promise the Data page makes that a trader cannot check on chain is that the balance
  * behind the redeem button is real. So this writes it down, in public, every half hour:
  * site/data/treasury.json carries the pool's balance (the Lightning wallet that pays wholesale, or
- * the reseller account for eSIM Access), what the last thirty days of redemptions
- * cost, the runway those two numbers imply, what is still claimable in Pons's escrow, what the
- * treasury wallet holds, and when it was last paid. The page shows it as a card; the workflow
+ * the reseller account for eSIM Access), what the last thirty days of redemptions cost, the runway
+ * those two numbers imply, what the treasury wallet holds in SOL, the creator fees still waiting in
+ * pump.fun's vaults, and when the treasury was last paid. The page shows it as a card; the workflow
  * opens an issue when it turns low. A balance nobody can see is a promise; one everybody can is a
  * number.
  *
  *   node scripts/treasury.js                       # writes site/data/treasury.json
+ *   node scripts/treasury.js --out /tmp/t.json     # somewhere else
  *   ESIM_PROVIDER=wholesale BLINK_API_KEY=… KV_REST_API_URL=… KV_REST_API_TOKEN=… node scripts/treasury.js
  *   ESIM_PROVIDER=esimaccess ESIMACCESS_ACCESS_CODE=… node scripts/treasury.js
  *
  * Without a provider the pool side is null and the status is "unknown" — the chain side is still
- * written, so a fork of this repository produces an honest file rather than none.
+ * written, so a fork of this repository produces an honest file rather than none. Before launch
+ * (no treasury or coin in site/config/esim.json) the chain side is skipped and left null.
  */
 const fs = require('fs');
 const path = require('path');
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 
 const SITE = path.join(__dirname, '..', 'site');
 const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
-const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const CLAIMS_PATH = path.join(SITE, 'data', 'claims.json');
 const ALLOWANCES_PATH = path.join(SITE, 'data', 'allowances.json');
 // The one place week arithmetic lives, so this file and the indexer can never disagree on when a
@@ -40,8 +42,8 @@ const LOW_DAYS = 14;
 // and the keeper only tops up once a day — so this is not a hair trigger.
 const BEHIND_RATIO = 0.5;
 
-const lower = (a) => String(a || '').toLowerCase();
 const round2 = (x) => Math.round(x * 100) / 100;
+const solOf = (lamports) => Number(lamports) / 1e9;
 
 function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; }
@@ -62,13 +64,12 @@ function priceOf(order, config) {
 /**
  * What this week's holders can still spend, and whether the pool could pay if they all did.
  *
- * The two numbers had nothing to do with each other until now, which was the single worst thing
- * about this system: scripts/allowances.js publishes a budget computed purely from tax collected
- * on chain, unbounded and growing with volume, while the Lightning wallet that actually pays for
- * the eSIMs was topped up to a flat hundred dollars. A good week published thousands of dollars of
- * allowances against a hundred-dollar wallet, every holder saw a real balance on their dashboard,
- * and everyone after the first few got a 503 on the button. This is the figure that makes that
- * visible — to the funding keeper, which now aims at it, and to the alert, which now fires on it.
+ * scripts/allowances.js publishes a budget computed from fees collected on chain, unbounded and
+ * growing with volume, while the Lightning wallet that actually pays for the eSIMs is topped up by
+ * a keeper once a day. A good week can publish more allowance than the wallet holds, and every
+ * holder past the first few would get a 503 on the button while their dashboard showed a real
+ * balance. This is the figure that makes that visible — to the funding keeper, which aims at it,
+ * and to the alert, which fires on it.
  *
  * Counted at the catalogue price the holder was charged rather than the discounted price the pool
  * pays, which errs toward funding slightly more than strictly needed. That is the safe direction.
@@ -123,29 +124,48 @@ function statusOf({ balanceUsd, runwayDays, owedUsd = null, lowBalanceUsd = LOW_
   return 'funded';
 }
 
+/** The newest claims.json entry as the card shows it, or null. */
+function lastClaimOf(claims) {
+  const last = Array.isArray(claims) && claims.length ? claims[claims.length - 1] : null;
+  if (!last) return null;
+  const solNum = Number(last.sol);
+  const usdNum = Number(last.usd);
+  return { at: last.at, sol: Number.isFinite(solNum) ? solNum : null, usd: last.usd === null || !Number.isFinite(usdNum) ? null : usdNum, tx: last.tx || null };
+}
+
 // ---------------------------------------------------------------------------
 // The run.
 // ---------------------------------------------------------------------------
-async function run({ rpc, config, addresses, provider = null, claims = [], now = () => Date.now(), out = OUT_PATH, allowancesPath = ALLOWANCES_PATH, log = () => {} }) {
-  const chain = require(path.join(__dirname, 'chain.js'));
-  const treasury = lower(config.treasury);
-  const usdg = addresses.usdg;
-  const decimals = Number(addresses.usdgDecimals || 6);
-  const escrow = addresses.pons && addresses.pons.feeEscrow;
+async function run({ rpc, config, provider = null, claims = [], now = () => Date.now(), out = OUT_PATH, allowancesPath = ALLOWANCES_PATH,
+  solUsd = null, fees = null, log = () => {} }) {
   const asOf = Math.floor(now() / 1000);
+  const treasury = S.isAddress(config.treasury) ? config.treasury : '';
+  const coin = S.isAddress(config.coin) ? config.coin : '';
 
-  // Chain side: public, always attempted, each read allowed to fail on its own.
-  let escrowClaimableUsd = null, walletUsd = null;
-  if (treasury && escrow && usdg) {
-    const read = async (to, sig, args) => {
-      const raw = await rpc('eth_call', [{ to, data: chain.encodeCall(sig, args) }, 'latest']);
-      return Number(BigInt(raw)) / 10 ** decimals;
-    };
-    try { escrowClaimableUsd = round2(await read(escrow, 'balanceOfToken(address,address)', [treasury, usdg])); } catch (e) { log(`  escrow read failed: ${e.message}`); }
-    try { walletUsd = round2(await read(usdg, 'balanceOf(address)', [treasury])); } catch (e) { log(`  wallet read failed: ${e.message}`); }
+  // Chain side: public, always attempted once there is a treasury, each read allowed to fail on
+  // its own so one dead endpoint costs one figure, not the file.
+  let walletSol = null, claimableSol = null, price = null;
+  if (treasury) {
+    try {
+      const r = await rpc('getBalance', [treasury, { commitment: 'confirmed' }]);
+      const lamports = r && r.value !== undefined ? BigInt(r.value) : null;
+      walletSol = lamports === null ? null : solOf(lamports);
+    } catch (e) { log(`  wallet read failed: ${e.message}`); }
+    if (coin) {
+      try {
+        const reader = fees || require(path.join(__dirname, 'pump-fees.js'));
+        const waiting = await reader.claimable(rpc, { mint: coin, creator: treasury });
+        claimableSol = solOf(waiting.totalLamports);
+      } catch (e) { log(`  creator-fee read failed: ${e.message}`); }
+    }
+    try {
+      const priceNow = solUsd || (() => require(path.join(__dirname, 'solana-chain.js')).solUsdNow());
+      price = await priceNow();
+    } catch (e) { log(`  SOL price unavailable: ${e.message}`); }
   } else {
     log('  no treasury in esim.json yet; chain side skipped');
   }
+  const inUsd = (amount) => (amount === null || !Number.isFinite(price) || price === null ? null : round2(amount * price));
 
   // Provider side: only with a provider that can answer. For wholesale the balance is the Lightning
   // wallet's (Blink), in sats at its own price, and the sats are written down beside the dollars.
@@ -175,13 +195,15 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
   const owed = Number.isFinite(wk)
     ? owing({ orders: orderList, config, budgetUsd: allow.budgetUsd, weekStartMs: weekStart(wk) * 1000 })
     : { budgetUsd: null, redeemedUsd: null, owedUsd: null };
-  const last = Array.isArray(claims) && claims.length ? claims[claims.length - 1] : null;
 
   const data = {
     asOf,
-    treasury: config.treasury || '',
-    escrowClaimableUsd,
-    walletUsd,
+    treasury,
+    solUsd: price,
+    walletSol,
+    walletUsd: inUsd(walletSol),
+    claimableSol,
+    claimableUsd: inUsd(claimableSol),
     reseller,
     spend30dUsd: spend.spendUsd,
     redemptions30d: spend.count,
@@ -190,14 +212,15 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     weekBudgetUsd: owed.budgetUsd,
     weekRedeemedUsd: owed.redeemedUsd,
     owedUsd: owed.owedUsd,
-    lastClaim: last ? { at: last.at, kind: last.kind, amount: last.amount, txHash: last.txHash || null } : null,
+    lastClaim: lastClaimOf(claims),
     status: statusOf({ balanceUsd, runwayDays, owedUsd: owed.owedUsd }),
   };
-  // Same reasoning as writeAllowances(): asOf moves every run, and rewriting the file for that
-  // alone turned both workflows' "commit only if something changed" into a commit every time.
+  // asOf moves every run, and the SOL price nearly every run; rewriting the file for those alone
+  // would turn both workflows' "commit only if something changed" into a commit every time. The
+  // dollar figures derived from the price still change the file when the price moves them a cent.
   let existing = null;
   try { existing = JSON.parse(fs.readFileSync(out, 'utf8')); } catch (e) { existing = null; }
-  const strip = (o) => JSON.stringify(o, (k, v) => (k === 'asOf' || k === 'block' ? undefined : v));
+  const strip = (o) => JSON.stringify(o, (k, v) => (k === 'asOf' || k === 'solUsd' ? undefined : v));
   if (!existing || strip(existing) !== strip(data)) {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
@@ -207,17 +230,19 @@ async function run({ rpc, config, addresses, provider = null, claims = [], now =
     `, ${spend.count} redemption(s) / $${spend.spendUsd.toFixed(2)} in ${DAYS}d` +
     (runwayDays === null ? '' : `, runway ${runwayDays}d`) +
     (owed.owedUsd === null ? '' : `, $${owed.owedUsd.toFixed(2)} still promised this week`) +
-    (escrowClaimableUsd === null ? '' : `, escrow $${escrowClaimableUsd.toFixed(2)}`) +
+    (walletSol === null ? '' : `, treasury ${walletSol.toFixed(4)} SOL`) +
+    (claimableSol === null ? '' : `, ${claimableSol.toFixed(4)} SOL of creator fees waiting`) +
     ` -> ${path.relative(process.cwd(), out)}`;
   return { data, summary };
 }
 
-module.exports = { priceOf, summarise, runway, statusOf, run, OUT_PATH, LOW_BALANCE_USD, LOW_DAYS, DAYS };
+module.exports = { priceOf, owing, summarise, runway, statusOf, lastClaimOf, run, OUT_PATH, LOW_BALANCE_USD, LOW_DAYS, DAYS };
 
 if (require.main === module) {
-  const A = require(path.join(__dirname, 'allowances.js'));
-  const addresses = readJson(ADDRESSES_PATH, {});
-  const endpoints = addresses.rpcs && addresses.rpcs.length ? addresses.rpcs : [addresses.rpc];
+  const C = require(path.join(__dirname, 'solana-chain.js'));
+  const argv = process.argv.slice(2);
+  const outIndex = argv.indexOf('--out');
+  const out = outIndex >= 0 && argv[outIndex + 1] ? path.resolve(process.cwd(), argv[outIndex + 1]) : OUT_PATH;
   // Which provider: ESIM_PROVIDER names it (wholesale needs BLINK_API_KEY and the store's
   // KV_REST_API_* pair; esimaccess needs ESIMACCESS_ACCESS_CODE). Without one the reseller side is
   // left unknown rather than guessed.
@@ -227,13 +252,14 @@ if (require.main === module) {
     process.env.ESIM_PROVIDER = name;
     provider = require(path.join(SITE, 'api', '_lib', 'providers')).provider();
   }
+  const log = (m) => process.stderr.write(m + '\n');
   run({
-    rpc: A.makeRpc(endpoints, { log: (m) => process.stderr.write(m + '\n') }),
+    rpc: C.makeRpc({ log }),
     config: readJson(ESIM_PATH, {}),
-    addresses,
     provider,
     claims: readJson(CLAIMS_PATH, []),
-    log: (m) => process.stderr.write(m + '\n'),
+    out,
+    log,
   })
     .then(({ summary }) => console.log(summary))
     .catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });

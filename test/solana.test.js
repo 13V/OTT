@@ -223,6 +223,14 @@ const randomBytes = (n) => Uint8Array.from({ length: n }, () => rand() & 0xff);
   rpc = S.createRpc(['https://a.test', 'https://b.test'], { pauseMs: 0, fetchImpl: fake({
     'https://a.test': [{ body: { result: null } }], 'https://b.test': [{ body: { result: null } }] }) });
   check('a null every node agrees on is an answer', await rpc('getTransaction', ['x']), null);
+  // A node that keeps only recent history answers null for an old transaction. While the node
+  // that keeps it all is failing, that null is not "not found", and must not read as one.
+  rpc = S.createRpc(['https://a.test', 'https://b.test'], { pauseMs: 0, rounds: 2, fetchImpl: fake({
+    'https://a.test': [{ status: 429, body: { error: { message: 'rate limited' } } }, { status: 429, body: { error: { message: 'rate limited' } } }],
+    'https://b.test': [{ body: { result: null } }, { body: { result: null } }] }) });
+  let partial = null;
+  try { partial = { result: await rpc('getTransaction', ['x']) }; } catch (e) { partial = { error: e.message }; }
+  check('a null from some nodes while the rest fail is an error, not "not found"', partial, { error: 'getTransaction found nothing on 1 of 2 Solana endpoints and failed on the rest: HTTP 429' });
   rpc = S.createRpc(['https://a.test'], { pauseMs: 0, rounds: 2, fetchImpl: fake({
     'https://a.test': [{ status: 429, body: { error: { message: 'rate limited' } } }, { body: { error: { code: -32602, message: 'invalid' } } }] }) });
   let rpcError = null;

@@ -1,99 +1,69 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * fund.js — move the creator tax from the treasury wallet into the Lightning wallet that pays for eSIMs.
+ * fund.js — move creator fees from the treasury wallet into the Lightning wallet that pays for eSIMs.
  *
- * The tax arrives as USDG on Robinhood Chain (scripts/claim.js sweeps it there). wholesale wants
- * sats over Lightning. Three hops, each with an API, none needing a person:
+ * The fees arrive as SOL in the treasury (scripts/claim.js collects them from pump.fun). wholesale
+ * wants sats over Lightning. Two services, each with an API, none needing a person:
  *
  *   1. Blink: an invoice on the pool's wallet for the sats to receive.
- *   2. FixedFloat: a fixed-rate order USDC (Base) → BTC (Lightning), paying that invoice. Its
- *      answer is the USDC amount to send and a one-off Base address to send it to.
- *   3. Across: a deposit of USDG on Robinhood Chain that is filled as exactly that USDC on Base,
- *      delivered straight to FixedFloat's address (Across takes a recipient), in seconds. No wallet
- *      on Base, no gas there, nothing to sweep back.
+ *   2. FixedFloat: a fixed-rate order SOL → BTC (Lightning) paying that invoice. Its answer is the
+ *      SOL to send and a one-off Solana address to send it to, and the treasury sends exactly that
+ *      in one plain transfer.
  *
  * Then it waits for FixedFloat to say DONE and Blink to say PAID, and writes what happened to
- * site/data/funding.json. Every quote is checked against the wallet's own BTC price before any
- * money moves, the swap is simulated before it is sent, and a dry run does everything except
- * create the invoice, the order and the deposit.
+ * site/data/funding.json. FixedFloat's quote is checked against the wallet's own BTC price and
+ * SOL's market price before any money moves, its order is checked against the quote, the deposit
+ * address must be a Solana address, the transfer is simulated before it is sent, and a dry run does
+ * everything except create the invoice, the order and the transfer.
  *
- *   PRIVATE_KEY=… BLINK_API_KEY=… FIXEDFLOAT_API_KEY=… FIXEDFLOAT_API_SECRET=… node scripts/fund.js
+ *   TREASURY_PRIVATE_KEY=… BLINK_API_KEY=… FIXEDFLOAT_API_KEY=… FIXEDFLOAT_API_SECRET=… node scripts/fund.js
  *   node scripts/fund.js --dry-run           # the plan, priced, nothing sent (Blink and FixedFloat keys still needed for quotes)
  *   node scripts/fund.js --target 150        # keep the Lightning wallet at $150 (default 100)
  *   node scripts/fund.js --min 20 --max 200  # never move less than $20 or more than $200 in one run
+ *   node scripts/fund.js --keep-sol 0.05     # SOL the treasury always keeps for fees and rent
  *
- * The key must be the treasury's (the fee recipient in site/config/esim.json), as in claim.js.
+ * The key must be the treasury's (the creator wallet in site/config/esim.json), as in claim.js.
  */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 
 const SITE = path.join(__dirname, '..', 'site');
 const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
-const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const OUT_PATH = path.join(SITE, 'data', 'funding.json');
 const TREASURY_PATH = path.join(SITE, 'data', 'treasury.json');
-// Both exchanges are reached with a deadline: this runs unattended, on a job with a wall clock,
-// and an endpoint that accepts the connection and then says nothing would burn the whole run.
-const { timedFetch } = require(path.join(__dirname, 'chain.js'));
 const { membershipConfig } = require(path.join(SITE, 'api', '_lib', 'membership.js'));
 const HTTP_TIMEOUT_MS = 30000;
 const KEEP = 100;
 
-const ACROSS_API = () => (process.env.ACROSS_API || 'https://app.across.to/api').replace(/\/$/, '');
 const FIXEDFLOAT_API = () => (process.env.FIXEDFLOAT_API || 'https://ff.io/api/v2').replace(/\/$/, '');
-const BASE_CHAIN_ID = 8453;
-const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const FF_FROM = 'USDCBASE', FF_TO = 'BTCLN';
+// FixedFloat's codes for native SOL and for BTC over Lightning. The order's answer is checked to
+// carry the same code and a Solana deposit address, so a wrong guess here stops the run instead
+// of sending SOL anywhere.
+const FF_FROM = process.env.FIXEDFLOAT_FROM_CCY || 'SOL';
+const FF_TO = 'BTCLN';
 
 // targetUsd is the FLOOR the pool is kept at when nothing is owed; what it actually aims for is
 // this week's outstanding allowances (see plan()). maxUsd caps one FixedFloat order, which is the
-// real exposure in a single run — the money is with two intermediaries between leaving the
-// treasury and arriving as sats. maxPoolUsd caps the standing balance of what is, after all, a hot
-// wallet at a third party: past this the pool stays behind on purpose and the treasury file says so.
-const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 500, maxPoolUsd: 1000, waitMs: 10 * 60 * 1000, pollMs: 15000 };
-const QUOTE_TOLERANCE = 0.05;   // FixedFloat's rate vs Blink's price
-const ASK_TOLERANCE = 0.03;     // USDC FixedFloat asks for vs the amount quoted
-const BRIDGE_TOLERANCE = 0.02;  // USDG in vs USDC out across the bridge
-const APPROVE_SEL = '0x095ea7b3';  // approve(address,uint256)
+// real exposure in a single run — the money is with an intermediary between leaving the treasury
+// and arriving as sats. maxPoolUsd caps the standing balance of what is, after all, a hot wallet
+// at a third party: past this the pool stays behind on purpose and the treasury file says so.
+// keepLamports never leaves the treasury, so it can always pay for the next claim and its rent.
+const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 500, maxPoolUsd: 1000, keepLamports: 50000000n, waitMs: 10 * 60 * 1000, pollMs: 15000 };
+const QUOTE_TOLERANCE = 0.05;   // FixedFloat's rate vs Blink's BTC price and SOL's market price
+const ASK_TOLERANCE = 0.03;     // SOL FixedFloat asks for vs the amount quoted
+const PRIORITY_MICRO_LAMPORTS = 50000;
 
-/**
- * The one approval this run is willing to sign, built here rather than taken from Across.
- *
- * Every other number in fund() is bounded — what FixedFloat may ask, what the bridge may charge,
- * what the treasury holds. An approval is not a number, it is a standing permission, and the one
- * Across hands back asks for all of it, for ever. Signing that on trust would make a bad answer
- * from their API — compromised, hijacked, or merely wrong — worth the entire treasury including
- * every fee it has not earned yet, which is not a risk any amount in this file justifies.
- *
- * So their calldata is read, never sent. It has to be an approve() of our own USDG for the very
- * contract the deposit is about to call; anything else means the flow has changed and this run
- * stops rather than guesses. What is then signed is ours: the same spender, for what this run
- * needs and not a unit more. scripts/claim.js has never signed anyone else's bytes; this is the
- * same discipline reaching the one leg that had escaped it.
- */
-function approvalFor(chain, t, { usdg, spender, units }) {
-  const to = String((t && t.to) || '').toLowerCase();
-  const data = String((t && t.data) || '').toLowerCase();
-  if (to !== String(usdg).toLowerCase()) {
-    throw new Error(`Across wants an approval sent to ${to || '(nothing)'}, which is not USDG (${usdg}); refusing to sign it`);
-  }
-  if (!data.startsWith(APPROVE_SEL) || data.length !== 2 + 8 + 64 + 64) {
-    throw new Error('Across wants to send calldata that is not a plain approve(address,uint256); refusing to sign it');
-  }
-  const asked = '0x' + data.slice(10, 74).slice(24);
-  if (asked !== String(spender).toLowerCase()) {
-    throw new Error(`Across wants USDG approved for ${asked}, but the deposit goes to ${spender}; refusing to sign it`);
-  }
-  // Same token, same spender, our amount: enough for this deposit and worthless afterwards.
-  return { to: usdg, data: chain.encodeCall('approve(address,uint256)', [spender, units]) };
-}
-
-const lower = (a) => String(a || '').toLowerCase();
 const round2 = (x) => Math.round(x * 100) / 100;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; } }
+async function timedFetch(url, opts = {}, ms = HTTP_TIMEOUT_MS) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, Object.assign({}, opts, { signal: ctl.signal })); } finally { clearTimeout(timer); }
+}
 
 // ---------------------------------------------------------------------------
 // The pure part.
@@ -102,12 +72,12 @@ function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf
 /**
  * How much to move, and what the pool is actually aiming at.
  *
- * `owedUsd` is what this week's holders can still spend — the published budget less what they
+ * `owedUsd` is what this week's members can still spend — the published budget less what they
  * have already redeemed, written by scripts/treasury.js. Aiming at a flat hundred dollars while
- * scripts/allowances.js published an unbounded budget was the worst thing about this system: a
- * week that collected four thousand dollars of tax promised four thousand dollars of data against
- * a hundred-dollar wallet, and everyone past the first few redeemers got a 503 on the button while
- * their dashboard showed a real balance. So the target follows the promise.
+ * scripts/allowances.js published an unbounded budget would be the worst thing about this system:
+ * a week that collected thousands of dollars of fees would promise them as data against a
+ * hundred-dollar wallet, and everyone past the first few redeemers would get a 503 on the button
+ * while their dashboard showed a real balance. So the target follows the promise.
  *
  * Three things still bound it. maxPoolUsd, because the pool is a hot wallet at a third party and
  * an unbounded balance there is its own risk; maxUsd, because one FixedFloat order is the real
@@ -117,10 +87,10 @@ function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf
  *
  * `reserveUsd` is headroom for welcome eSIMs (docs/membership.md), which the same pool pays for.
  * Aiming at exactly what the week owes would leave nothing for them, and the API stops offering
- * the burn once the pool less what is owed cannot cover one. It is 0 without membership.
+ * the join once the pool less what is owed cannot cover one. It is 0 without membership.
  */
 function plan({ walletUsd, poolUsd, owedUsd = null, reserveUsd = 0, targetUsd = DEFAULTS.targetUsd, minUsd = DEFAULTS.minUsd, maxUsd = DEFAULTS.maxUsd, maxPoolUsd = DEFAULTS.maxPoolUsd }) {
-  const owed = Number.isFinite(Number(owedUsd)) ? Number(owedUsd) : null;
+  const owed = Number.isFinite(Number(owedUsd)) && owedUsd !== null ? Number(owedUsd) : null;
   const reserve = Number.isFinite(Number(reserveUsd)) && Number(reserveUsd) > 0 ? Number(reserveUsd) : 0;
   const promised = owed === null ? null : owed + reserve;
   const wanted = promised !== null && promised > targetUsd ? Math.min(promised, maxPoolUsd) : targetUsd;
@@ -132,11 +102,11 @@ function plan({ walletUsd, poolUsd, owedUsd = null, reserveUsd = 0, targetUsd = 
   const need = round2(wanted - poolUsd);
   if (need < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve, reason: `${aim}; the shortfall is under the $${minUsd.toFixed(2)} floor` };
   const amountUsd = round2(Math.min(need, walletUsd, maxUsd));
-  if (amountUsd < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve, reason: `${aim}; the treasury holds $${walletUsd.toFixed(2)} USDG, under the $${minUsd.toFixed(2)} floor` };
+  if (amountUsd < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve, reason: `${aim}; the treasury holds $${walletUsd.toFixed(2)} of spendable SOL, under the $${minUsd.toFixed(2)} floor` };
   const short = round2(need - amountUsd);
   return {
     amountUsd, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve,
-    reason: `${aim}, treasury $${walletUsd.toFixed(2)}`
+    reason: `${aim}, treasury $${walletUsd.toFixed(2)} of spendable SOL`
       + (short > 0 ? ` — $${short.toFixed(2)} short of the aim this run, ${amountUsd === maxUsd ? 'capped per run' : 'all the treasury has'}` : ''),
   };
 }
@@ -152,7 +122,8 @@ function welcomeReserveFor(config) {
 function owedFrom(treasuryFile) {
   // Not `treasuryFile && treasuryFile.owedUsd`: that yields null for a missing file, and
   // Number(null) is 0 — a confident "nothing is owed" where the truth is "we cannot tell".
-  const owed = Number(treasuryFile ? treasuryFile.owedUsd : undefined);
+  const raw = treasuryFile ? treasuryFile.owedUsd : undefined;
+  const owed = raw === null ? NaN : Number(raw);
   return Number.isFinite(owed) ? owed : null;
 }
 
@@ -160,11 +131,35 @@ function appendLog(existing, entry) {
   return (Array.isArray(existing) ? existing : []).concat([entry]).slice(-KEEP);
 }
 
-// ---------------------------------------------------------------------------
-// The three services. Each is a thin client; the tests hand in fakes with the same shape.
-// ---------------------------------------------------------------------------
+/** SOL to quote for `amountUsd` at `solUsd`, to the microSOL. */
+const solFor = (amountUsd, solUsd) => Math.floor((amountUsd / solUsd) * 1e6) / 1e6;
 
-/** FixedFloat: signed JSON over POST. code 0 is success; anything else carries their message. */
+/**
+ * FixedFloat's order, checked before anything is sent: the code we asked for, no memo, a Solana
+ * deposit address that is not our own, and an ask within tolerance of what was quoted. Returns
+ * { to, lamports, ask } or throws.
+ */
+function checkOrder(order, { quotedSol, treasury }) {
+  const from = (order && order.from) || {};
+  if (from.code !== undefined && from.code !== FF_FROM) throw new Error(`FixedFloat's order is for ${from.code}, not ${FF_FROM}; order ${order.id} left to expire`);
+  if (from.network !== undefined && from.network !== null && from.network !== '' && !/^sol(ana)?$/i.test(String(from.network))) {
+    throw new Error(`FixedFloat's order deposits on ${from.network}, not Solana; order ${order.id} left to expire`);
+  }
+  if (from.tag !== undefined && from.tag !== null && String(from.tag) !== '') throw new Error(`FixedFloat's order needs a memo (${from.tag}), which a plain transfer cannot carry; order ${order.id} left to expire`);
+  const to = String(from.address || '');
+  if (!S.isAddress(to)) throw new Error('FixedFloat order came back without a Solana deposit address');
+  if (to === treasury) throw new Error('FixedFloat\'s deposit address is the treasury itself; refusing');
+  let lamports;
+  try { lamports = S.unitsOf(String(from.amount), 9); } catch (e) { throw new Error('FixedFloat order came back without an amount it can be paid in'); }
+  const ask = Number(from.amount);
+  if (!(lamports > 0n) || !(ask > 0)) throw new Error('FixedFloat order came back without an amount');
+  if (ask > quotedSol * (1 + ASK_TOLERANCE)) throw new Error(`FixedFloat asks ${ask} SOL for what was quoted at ${quotedSol} SOL; order ${order.id} left to expire`);
+  return { to, lamports, ask };
+}
+
+// ---------------------------------------------------------------------------
+// FixedFloat: signed JSON over POST. code 0 is success; anything else carries their message.
+// ---------------------------------------------------------------------------
 function fixedFloat({ key = process.env.FIXEDFLOAT_API_KEY || '', secret = process.env.FIXEDFLOAT_API_SECRET || '', api = FIXEDFLOAT_API() } = {}) {
   async function call(method, body) {
     if (!key || !secret) throw new Error('FIXEDFLOAT_API_KEY and FIXEDFLOAT_API_SECRET are not set');
@@ -191,115 +186,96 @@ function fixedFloat({ key = process.env.FIXEDFLOAT_API_KEY || '', secret = proce
   };
 }
 
-/** Across: one GET that answers the approval and the deposit transaction, ready to sign. */
-function across({ api = ACROSS_API() } = {}) {
-  return {
-    name: 'across',
-    async quote(params) {
-      const url = api + '/swap/approval?' + new URLSearchParams(params).toString();
-      const res = await timedFetch(url, { headers: { accept: 'application/json' } }, HTTP_TIMEOUT_MS);
-      let j = null;
-      try { j = await res.json(); } catch (e) { j = null; }
-      if (!res.ok) throw new Error('Across answered HTTP ' + res.status + ((j && j.message) ? ': ' + j.message : ''));
-      if (!j || !j.swapTx) throw new Error('Across gave no transaction');
-      return j;
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // The run.
 // ---------------------------------------------------------------------------
-async function run({ chain, config, addresses, treasury, payer, ff, bridge, targetUsd, minUsd, maxUsd, maxPoolUsd, reserveUsd, dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH, now = () => Date.now(), log = () => {} }) {
-  const want = lower(config.treasury);
-  if (!want) throw new Error('no treasury in site/config/esim.json');
-  if (lower(treasury) !== want) throw new Error(`wrong wallet: the key is for ${treasury}, the treasury is ${config.treasury}`);
-  const usdg = addresses.usdg;
-  const decimals = Number(addresses.usdgDecimals || 6);
-  const units = (usd) => BigInt(Math.round(usd * 10 ** decimals));
+async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minUsd, maxUsd, maxPoolUsd, reserveUsd, keepLamports = DEFAULTS.keepLamports,
+  dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH,
+  confirmOptions = {}, now = () => Date.now(), log = () => {} }) {
+  const C = chain || require(path.join(__dirname, 'solana-chain.js'));
+  const treasury = config.treasury;
+  if (!S.isAddress(treasury)) throw new Error('no treasury in site/config/esim.json');
+  if (!key || key.address !== treasury) throw new Error(`wrong wallet: the key is for ${key && key.address}, the treasury is ${treasury}`);
 
   // 1. Where things stand.
   const pool = await payer.balance();
-  const [walletUnits] = await chain.call(usdg, 'balanceOf(address)', [treasury], ['uint256']);
-  const walletUsd = Number(walletUnits) / 10 ** decimals;
-  // What this week still owes its holders, as scripts/treasury.js last measured it. A day old at
-  // worst — the keepers run in the order claim, fund, treasury — which is close enough to aim by
-  // and enormously better than the flat target this used before. Absent, the flat target stands.
+  const balance = await rpc('getBalance', [treasury, { commitment: 'confirmed' }]);
+  const lamports = BigInt(balance && balance.value !== undefined ? balance.value : 0);
+  const keep = BigInt(keepLamports);
+  const spendable = lamports > keep ? lamports - keep : 0n;
+  const price = Number(await (solUsd || C.solUsdNow)());
+  if (!(price > 0)) throw new Error('no SOL price to value the treasury');
+  const walletUsd = round2((Number(spendable) / 1e9) * price);
+  // What this week still owes its members, as scripts/treasury.js last measured it. A day old at
+  // worst — the keepers run in the order claim, fund, treasury — which is close enough to aim by.
   const owedUsd = owedFrom(readJson(treasuryPath, null));
   const reserve = reserveUsd === undefined ? welcomeReserveFor(config) : reserveUsd;
   const p = plan({ walletUsd, poolUsd: Number(pool.usd), owedUsd, reserveUsd: reserve, targetUsd, minUsd, maxUsd, maxPoolUsd });
-  log(`  pool $${Number(pool.usd).toFixed(2)} (${pool.sats} sats), treasury $${walletUsd.toFixed(2)} USDG`);
+  log(`  pool $${Number(pool.usd).toFixed(2)} (${pool.sats} sats), treasury ${(Number(lamports) / 1e9).toFixed(4)} SOL at $${price.toFixed(2)}, $${walletUsd.toFixed(2)} spendable`);
   if (!p.amountUsd) { log(`  nothing to move: ${p.reason}`); return { action: 'none', reason: p.reason }; }
   const amountUsd = p.amountUsd;
+  const quotedSol = solFor(amountUsd, price);
 
-  // 2. FixedFloat's rate for that, checked against the wallet's own BTC price.
-  const quote = await ff.price({ type: 'fixed', fromCcy: FF_FROM, toCcy: FF_TO, direction: 'from', amount: amountUsd });
+  // 2. FixedFloat's rate for that, checked against the wallet's own BTC price: the SOL quoted
+  // should buy about amountUsd of sats.
+  const quote = await ff.price({ type: 'fixed', fromCcy: FF_FROM, toCcy: FF_TO, direction: 'from', amount: quotedSol });
   const btc = Number(quote && quote.to && quote.to.amount);
   if (!(btc > 0)) throw new Error('FixedFloat quoted no amount');
   const sats = Math.round(btc * 1e8);
   const implied = sats * Number(pool.usdPerSat);
   if (Math.abs(implied - amountUsd) > amountUsd * QUOTE_TOLERANCE) {
-    throw new Error(`FixedFloat's rate is off: $${amountUsd.toFixed(2)} would buy ${sats} sats, worth $${implied.toFixed(2)} at the wallet's price`);
+    throw new Error(`FixedFloat's rate is off: ${quotedSol} SOL ($${amountUsd.toFixed(2)}) would buy ${sats} sats, worth $${implied.toFixed(2)} at the wallet's price`);
   }
-  log(`  moving $${amountUsd.toFixed(2)}: ${sats} sats via FixedFloat (${p.reason})`);
-  if (dryRun) return { action: 'plan', amountUsd, sats, reason: p.reason };
+  log(`  moving $${amountUsd.toFixed(2)}: ${quotedSol} SOL for ${sats} sats via FixedFloat (${p.reason})`);
+  if (dryRun) return { action: 'plan', amountUsd, sats, sol: quotedSol, reason: p.reason };
 
-  // 3. The invoice, the order, the deposit — in that order, each checked before the next.
+  // 3. The invoice, the order, the transfer — in that order, each checked before the next.
   const invoice = await payer.invoice({ sats, memo: 'OT+T data pool top-up', expiresInMinutes: 120 });
   const order = await ff.create({ type: 'fixed', fromCcy: FF_FROM, toCcy: FF_TO, direction: 'to', amount: (sats / 1e8).toFixed(8), toAddress: invoice.paymentRequest });
-  const ask = Number(order && order.from && order.from.amount);
-  const to = order && order.from && order.from.address;
-  if (!(ask > 0) || !/^0x[0-9a-fA-F]{40}$/.test(String(to || ''))) throw new Error('FixedFloat order came back without an amount or an address');
-  if (ask > amountUsd * (1 + ASK_TOLERANCE)) throw new Error(`FixedFloat asks $${ask.toFixed(2)} USDC for the ${sats} sats quoted at $${amountUsd.toFixed(2)}; order ${order.id} left to expire`);
-  const usdcUnits = units(ask);
+  const { to, lamports: sendLamports, ask } = checkOrder(order, { quotedSol, treasury });
+  if (sendLamports > spendable) throw new Error(`FixedFloat asks ${ask} SOL and the treasury can spare ${(Number(spendable) / 1e9).toFixed(6)}; order ${order.id} left to expire`);
 
-  const q = await bridge.quote({
-    originChainId: String(addresses.chainId || 4663), destinationChainId: String(BASE_CHAIN_ID),
-    inputToken: usdg, outputToken: USDC_BASE, amount: usdcUnits.toString(), tradeType: 'exactOutput',
-    depositor: treasury, recipient: to,
+  const { blockhash, lastValidBlockHeight } = await C.latestBlockhash(rpc);
+  const { wire, signature } = C.signedTransaction({
+    payer: treasury, blockhash, signers: [key],
+    instructions: [S.computeUnitPrice(PRIORITY_MICRO_LAMPORTS), S.systemTransfer({ from: treasury, to, lamports: sendLamports })],
   });
-  const inUnits = BigInt(q.inputAmount || q.maxInputAmount || 0);
-  const minOut = BigInt(q.minOutputAmount || 0);
-  if (minOut < usdcUnits) throw new Error(`Across would deliver ${minOut} of the ${usdcUnits} USDC units FixedFloat asks for`);
-  if (inUnits > usdcUnits + (usdcUnits * BigInt(Math.round(BRIDGE_TOLERANCE * 1000))) / 1000n) throw new Error(`Across wants ${inUnits} USDG units for ${usdcUnits} USDC; more than ${BRIDGE_TOLERANCE * 100}% over`);
-  if (inUnits > walletUnits) throw new Error(`the bridge needs ${inUnits} USDG units and the treasury holds ${walletUnits}`);
-
-  const tx = q.swapTx || {};
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(tx.to || ''))) throw new Error('Across returned no deposit address');
-  const value = tx.value ? BigInt(tx.value) : 0n;
-
-  // Approve if Across says so — for this deposit's spender and this deposit's amount, in calldata
-  // built here. See approvalFor() for why none of theirs is signed.
-  const hashes = [];
-  for (const t of q.approvalTxns || []) {
-    const safe = approvalFor(chain, t, { usdg, spender: tx.to, units: inUnits });
-    const r = await chain.send(safe);
-    hashes.push(r.transactionHash);
-    log(`  approved ${inUnits} USDG units for the bridge at ${tx.to}: ${r.transactionHash}`);
-  }
-  await chain.rpc('eth_call', [{ from: treasury, to: tx.to, data: tx.data, value: '0x' + value.toString(16) }, 'latest']);
+  await C.simulateTransaction(rpc, wire);
 
   // The journal opens HERE — one line before the only call in this file that moves money, and not
-  // after it. Everything above can be retried for nothing; the deposit cannot. A process killed
-  // between the broadcast returning and the write landing used to leave real USDG in the bridge
-  // with no record of it anywhere but one run's console. 'sending' says a deposit was broadcast
-  // and not yet confirmed, and it already names the FixedFloat order, which is what a person needs
-  // to find the money again.
+  // after it. Everything above can be retried for nothing; the transfer cannot. A process killed
+  // between the broadcast and the write would leave real SOL with FixedFloat and no record of it
+  // anywhere but one run's console. A Solana signature is known before it is sent, so 'sending'
+  // already names the transfer and the FixedFloat order, which is what a person needs to find the
+  // money again.
   const journal = appendLog(readJson(out, []), {
-    at: Math.floor(now() / 1000), amountUsd, usdcSent: ask, usdgIn: Number(inUnits) / 10 ** decimals, sats,
-    fixedFloatOrder: order.id, invoiceHash: invoice.paymentHash, depositTx: null, approvals: hashes,
+    at: Math.floor(now() / 1000), amountUsd, solSent: ask, lamports: sendLamports.toString(), sats,
+    fixedFloatOrder: order.id, invoiceHash: invoice.paymentHash, depositTx: signature,
     status: 'sending', dryRun: false,
   });
   const entry = journal[journal.length - 1];
   const write = () => { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(journal, null, 1) + '\n'); };
   write();
 
-  const receipt = await chain.send({ to: tx.to, data: tx.data, value });
-  log(`  deposited: ${receipt.transactionHash}`);
-
-  // One entry per run, opened above and rewritten in place as its status moves on.
-  entry.depositTx = receipt.transactionHash;
-  entry.approvals = hashes;
+  const sent = await C.sendTransaction(rpc, wire);
+  if (sent !== signature) log(`  the node answered ${sent} for ${signature}`);
+  try {
+    await C.confirmTransaction(rpc, signature, Object.assign({ wire, lastValidBlockHeight }, confirmOptions));
+  } catch (e) {
+    // A wait that ran out is not proof the transfer failed; one that is on chain and succeeded
+    // is a confirmation, and the run carries on to wait for the sats.
+    let landed = null;
+    try { landed = await C.getTransaction(rpc, signature); } catch (err) { landed = null; }
+    if (landed && landed.meta && landed.meta.err === null) {
+      log(`  ${e.message}, but the transfer is on chain and succeeded`);
+    } else {
+      entry.status = 'unconfirmed';
+      entry.error = String(e.message || e).slice(0, 200);
+      write();
+      throw new Error(`the transfer ${signature} to FixedFloat was not confirmed (${entry.error}); check it on chain and order ${order.id} at ff.io before running again`);
+    }
+  }
+  log(`  sent ${ask} SOL: ${signature}`);
   entry.status = 'sent';
   write();
 
@@ -321,7 +297,7 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
     if (status === 'EXPIRED' || status === 'EMERGENCY') {
       entry.status = status.toLowerCase();
       write();
-      throw new Error(`FixedFloat order ${order.id} is ${status} after the deposit ${receipt.transactionHash}; it needs a hand at ff.io`);
+      throw new Error(`FixedFloat order ${order.id} is ${status} after the transfer ${signature}; it needs a hand at ff.io`);
     }
     if (now() >= deadline) {
       entry.status = 'sent'; entry.lastSeen = status;
@@ -333,31 +309,40 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   }
 }
 
-module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, run, fixedFloat, across, DEFAULTS, OUT_PATH, TREASURY_PATH, USDC_BASE, BASE_CHAIN_ID };
+module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, checkOrder, solFor, run, fixedFloat, DEFAULTS, OUT_PATH, TREASURY_PATH, FF_FROM, FF_TO };
 
 if (require.main === module) {
-  const chain = require(path.join(__dirname, 'chain.js'));
-  const flag = (name, dflt) => { const v = chain.flagValue(name); return v === undefined ? dflt : Number(v); };
-  const key = process.env.PRIVATE_KEY || '';
-  if (!key) { console.error('PRIVATE_KEY is required — the treasury\'s key, in the environment, never in a file'); process.exit(1); }
+  const C = require(path.join(__dirname, 'solana-chain.js'));
+  const argv = process.argv.slice(2);
+  const flag = (name, dflt) => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] !== undefined ? Number(argv[i + 1]) : dflt; };
+  const config = readJson(ESIM_PATH, {});
+  // Before launch there is no treasury to move anything from; say so and stop cleanly.
+  if (!S.isAddress(config.treasury)) { console.log('fund: the coin is not launched yet (no treasury in site/config/esim.json); nothing to move'); process.exit(0); }
+  const secret = process.env.TREASURY_PRIVATE_KEY || process.env.PRIVATE_KEY || '';
+  if (!secret) { console.error('TREASURY_PRIVATE_KEY is required — the treasury\'s Solana secret key, in the environment, never in a file'); process.exit(1); }
+  let key;
+  try { key = C.keypairFromSecret(secret); } catch (e) { console.error('TREASURY_PRIVATE_KEY: ' + e.message); process.exit(1); }
   process.env.LN_PAYER = process.env.LN_PAYER || 'blink';
   const payer = require(path.join(SITE, 'api', '_lib', 'payers')).payer();
+  const log = (m) => process.stderr.write(m + '\n');
+  const keepSol = flag('keep-sol', undefined);
   run({
-    chain,
-    config: readJson(ESIM_PATH, {}),
-    addresses: readJson(ADDRESSES_PATH, {}),
-    treasury: chain.secp.addressOf(key),
+    rpc: C.makeRpc({ log }),
+    chain: C,
+    config,
+    key,
     payer,
     ff: fixedFloat(),
-    bridge: across(),
+    solUsd: () => C.solUsdNow(),
     targetUsd: flag('target', DEFAULTS.targetUsd),
     minUsd: flag('min', DEFAULTS.minUsd),
     maxUsd: flag('max', DEFAULTS.maxUsd),
     maxPoolUsd: flag('max-pool', DEFAULTS.maxPoolUsd),
     reserveUsd: flag('reserve', undefined),
-    dryRun: chain.dryRun,
-    log: (m) => process.stderr.write(m + '\n'),
+    keepLamports: keepSol === undefined ? DEFAULTS.keepLamports : BigInt(Math.round(keepSol * 1e9)),
+    dryRun: argv.includes('--dry-run'),
+    log,
   })
-    .then((r) => console.log(r.action === 'none' ? `fund: nothing to move (${r.reason})` : r.action === 'plan' ? `fund: would move $${r.amountUsd.toFixed(2)} (${r.sats} sats) — dry run` : `fund: $${r.amountUsd.toFixed(2)} → ${r.sats} sats, ${r.status}`))
+    .then((r) => console.log(r.action === 'none' ? `fund: nothing to move (${r.reason})` : r.action === 'plan' ? `fund: would move $${r.amountUsd.toFixed(2)} (${r.sol} SOL for ${r.sats} sats) — dry run` : `fund: $${r.amountUsd.toFixed(2)} → ${r.sats} sats, ${r.status}`))
     .catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
 }

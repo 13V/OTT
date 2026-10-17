@@ -1,11 +1,14 @@
-# Refresh the generated files the site reads: site/data/allowances.json (who has earned how much
-# data credit — scripts/allowances.js, from USDG Transfer logs) and site/data/treasury.json (is the
-# pool funded — scripts/treasury.js, from chain and the pool itself). The first is read-only against
-# a public RPC endpoint. The second reads the pool's balance — the Blink Lightning wallet the provider is
-# paid from, which needs BLINK_API_KEY — and the last 30 days of orders from the store, which needs
-# KV_REST_API_URL and KV_REST_API_TOKEN; with any of them unset it still writes the chain side and
-# marks the pool "unknown". GITHUB_TOKEN is for the commit, and for the issues the alert steps open
-# when the pool runs low or a keeper step fails.
+# Refresh the generated files the site reads: site/data/allowances.json (who has joined and how much
+# data credit each member has this week — scripts/allowances.js, from Solana: joins sent to the
+# incinerator, holdings at the snapshot, creator fees collected into the treasury) and
+# site/data/treasury.json (is the pool funded — scripts/treasury.js, from Solana and the pool
+# itself). Both read Solana through SOLANA_RPC_URL when it is set (a keyed endpoint, recommended)
+# and the public endpoints in config/addresses.json otherwise; both are read-only. The second also
+# reads the pool's balance — the Blink Lightning wallet the provider is paid from, which needs
+# BLINK_API_KEY — and the last 30 days of orders from the store, which needs KV_REST_API_URL and
+# KV_REST_API_TOKEN; with any of them unset it still writes the chain side and marks the pool
+# "unknown". GITHUB_TOKEN is for the commit, and for the issues the alert steps open when the pool
+# runs low or a keeper step fails.
 #
 # A commit is made only when a file actually changed (the git diff --quiet guard), and every push
 # to main triggers the Vercel deploy, so a refresh that finds nothing new costs nothing downstream.
@@ -54,18 +57,21 @@ jobs:
       - name: Lint
         run: node scripts/lint.js
 
-      # Read-only against a public RPC endpoint; failing here (every RPC busy) must not withhold
-      # the treasury refresh below. The script writes its file only on success, so a failed step
-      # leaves the previous ledger in place rather than a broken one.
+      # Read-only against Solana; failing here (every RPC busy) must not withhold the treasury
+      # refresh below. The script writes its file only on success, so a failed step leaves the
+      # previous ledger in place rather than a broken one.
       - name: Refresh allowances
         id: allowances
         continue-on-error: true
+        env:
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
         run: node scripts/allowances.js
 
       - name: Refresh treasury
         id: treasury
         continue-on-error: true
         env:
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
           ESIM_PROVIDER: wholesale
           WHOLESALE_BASE_URL: ${{ secrets.WHOLESALE_BASE_URL }}
           BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
@@ -114,10 +120,10 @@ jobs:
               '- Reseller balance: ' + (r.balanceUsd == null ? 'unknown' : '$' + r.balanceUsd.toFixed(2)),
               '- Last 30 days: ' + t.redemptions30d + ' redemption(s), $' + (t.spend30dUsd || 0).toFixed(2),
               '- Runway at that rate: ' + (t.runwayDays == null ? 'n/a' : t.runwayDays + ' days'),
-              '- Claimable in the Pons escrow: ' + (t.escrowClaimableUsd == null ? 'unknown' : '$' + t.escrowClaimableUsd.toFixed(2)),
-              '- Treasury wallet: ' + (t.walletUsd == null ? 'unknown' : '$' + t.walletUsd.toFixed(2) + ' USDG'),
+              '- Creator fees waiting in pump.fun\'s vaults: ' + (t.claimableSol == null ? 'unknown' : t.claimableSol.toFixed(4) + ' SOL' + (t.claimableUsd == null ? '' : ' ($' + t.claimableUsd.toFixed(2) + ')')),
+              '- Treasury wallet: ' + (t.walletSol == null ? 'unknown' : t.walletSol.toFixed(4) + ' SOL' + (t.walletUsd == null ? '' : ' ($' + t.walletUsd.toFixed(2) + ')')),
               '',
-              (r.error ? 'The balance could not be read: ' + r.error + '. That is usually BLINK_API_KEY — and note it is the same secret scripts/fund.js needs, so the top-ups have almost certainly stopped too.' : 'scripts/fund.js tops the pool up from the treasury once a day; if it is still low, check site/data/funding.json and the FixedFloat order it names.'),
+              (r.error ? 'The balance could not be read: ' + r.error + '. That is usually BLINK_API_KEY — and note it is the same secret scripts/fund.js needs, so the top-ups have almost certainly stopped too.' : 'scripts/claim.js collects the creator fees and scripts/fund.js tops the pool up from the treasury once a day; if it is still low, check site/data/claims.json, site/data/funding.json and the FixedFloat order it names.'),
             ].join('\\n'));
           ")
           title="Treasury: the data pool is $status"
@@ -150,7 +156,7 @@ jobs:
           gh issue create --title "$title" --label treasury --body "$body"
 
       # Every step above (bar Lint) is continue-on-error, so the job goes green whatever actually
-      # happened — a claim that reverts, a swap that never lands, a bad-curve refusal, none of that
+      # happened — a claim that fails, a swap that never lands, a refused coin, none of that
       # raises anything on its own. steps.<id>.outcome is each step's real result from before
       # continue-on-error rewrote its conclusion to "success"; that is what this reads, never
       # .conclusion, which is exactly the field continue-on-error overwrites to hide the failure.

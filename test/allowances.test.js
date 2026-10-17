@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * scripts/allowances.js, without the chain.
+ * scripts/allowances.js, against a small fake Solana chain.
  *
- * The ledger this writes decides who gets free data, so every piece of arithmetic is checked here
- * against fixtures whose answer is known by hand: the week boundaries, balances folded from mints,
- * burns and a wallet that empties itself, circulating supply excluding the operational addresses,
- * shares, and the tax window that must land on exactly last week and nowhere else. The scan itself
- * runs against a fake node that honours topic filters and block ranges and refuses a chunk wider
- * than the real endpoints will, so the chunking logic is exercised rather than assumed. The
- * unlaunched-coin path writes to a temp dir, because that is the file every consumer reads until
- * the launch.
+ * The ledger decides who gets free data, so it is run here week after week over one consistent
+ * world: a pump.fun coin on its bonding curve, wallets that buy and then send OTT to the
+ * incinerator, creator-fee collections into the treasury (and things that look like them but are
+ * not), and members' token accounts whose history decides what they held at each Monday snapshot.
+ * The fake chain indexes every transaction under every account it touches and answers
+ * getSignaturesForAddress with the real until/before/limit semantics, so the cursors, the paging
+ * and the balance-at-a-moment walk are exercised rather than assumed. Prices are injected.
  *
  *   node test/allowances.test.js
  */
@@ -19,14 +18,14 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const A = require(path.join(__dirname, '..', 'scripts', 'allowances.js'));
-const chain = require(path.join(__dirname, '..', 'scripts', 'chain.js'));
+const C = require(path.join(__dirname, '..', 'scripts', 'solana-chain.js'));
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
 
-let failures = 0;
-let total = 0;
+let failures = 0, total = 0;
+const norm = (v) => JSON.stringify(v, (k, x) => (typeof x === 'bigint' ? x.toString() + 'n' : x));
 function check(what, got, want) {
   total++;
-  const ok = JSON.stringify(got) === JSON.stringify(want);
-  if (!ok) { failures++; console.error(`  FAIL ${what}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
+  if (norm(got) !== norm(want)) { failures++; console.error(`  FAIL ${what}\n       got  ${norm(got)}\n       want ${norm(want)}`); }
   else console.log(`  ok   ${what}`);
 }
 function checkThat(what, cond, detail) {
@@ -35,508 +34,458 @@ function checkThat(what, cond, detail) {
   else console.log(`  ok   ${what}`);
 }
 async function rejects(what, promise, pattern) {
-  try { await promise; total++; failures++; console.error(`  FAIL ${what}\n       resolved instead of throwing`); }
-  catch (e) { checkThat(what, pattern.test(e.message), e.message); }
+  total++;
+  try { await promise; failures++; console.error(`  FAIL ${what}\n       resolved instead of throwing`); }
+  catch (e) {
+    if (pattern.test(e.message)) console.log(`  ok   ${what}`);
+    else { failures++; console.error(`  FAIL ${what}\n       threw "${e.message}"`); }
+  }
 }
-const lower = (a) => String(a).toLowerCase();
-/** A foldBalances() Map has BigInt values, which JSON.stringify refuses outright — turn it into a
- *  plain { addr: "digits" } object so check() can compare it like anything else. */
-const balancesToObj = (map) => { const o = {}; for (const [k, v] of map) o[k] = v.toString(); return o; };
-
-// Addresses are made up but well-formed; the code never looks past their shape. The four Pons
-// addresses and USDG are the real ones from site/config/addresses.json, so a reader who knows this
-// repo recognizes them; the wallets (and the made-up treasury) are hashed out so their hex is
-// guaranteed valid without hand-counting characters.
-const addr = (seed) => '0x' + crypto.createHash('sha256').update(seed).digest('hex').slice(0, 40);
-const CURVE = '0xC4eed34C4fA1690Cf7206906e9A19cE076Aa3254';   // mixed case on purpose: keys must come out lowercase
-const COIN = '0x1fefc04bcb777c615b887297168c57e67a2c8192';
-const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
-const ESCROW = '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e';
-const FACTORY = '0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e';
-const HOOK = '0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044';
-const TREASURY = addr('treasury');
-const ALICE = '0xe9f89a769f234f6cc75e1c1c6b1fd9963d72c652';
-const BOB = '0x65050a9b7e5075a2ba5ced7b1b64ee66262c40dc';
-const CAROL = '0xe33e9e479df8802cb0866d5d05258bec4cf62948';
-const DAVE = addr('dave');
-const ZERO = '0x0000000000000000000000000000000000000000';
-
-let logIndex = 0;
-/** An eth_getLogs entry for Transfer(from, to, amount) in raw base units, as a node would return
- *  it. Base units rather than a human amount, so a fixture's numbers are exactly the "tokens"
- *  string the output is expected to contain — no decimals scaling to keep straight by hand. */
-const xfer = (from, to, amountBaseUnits, block) => ({
-  topics: [A.TRANSFER, A.pad(from), A.pad(to)],
-  data: '0x' + BigInt(amountBaseUnits).toString(16).padStart(64, '0'),
-  blockNumber: '0x' + block.toString(16),
-  logIndex: '0x' + (logIndex++).toString(16),
-});
-/** Same, but for a USDG transfer, where the fixture amount is dollars and USDG is 6 decimals. */
-const usdgXfer = (from, to, amountUsd, block) => xfer(from, to, BigInt(Math.round(amountUsd * 1e6)), block);
-
-console.log('weekOf/weekStart/weekEnd — the arithmetic every file in the contract shares');
-checkThat('weekStart(0) is exactly Monday 5 Jan 1970 00:00 UTC',
-  new Date(A.weekStart(0) * 1000).toISOString() === '1970-01-05T00:00:00.000Z');
-for (const w of [0, 1, 2960, 123456]) {
-  const d = new Date(A.weekStart(w) * 1000);
-  checkThat(`weekStart(${w}) falls on a Monday at 00:00:00 UTC`,
-    d.getUTCDay() === 1 && d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0, d.toISOString());
-  check(`weekOf(weekStart(${w})) === ${w}`, A.weekOf(A.weekStart(w)), w);
-  check(`weekOf(weekEnd(${w}) - 1) === ${w}: the last second of a week is still that week`, A.weekOf(A.weekEnd(w) - 1), w);
-  check(`weekEnd(${w}) === weekStart(${w + 1}): weeks are contiguous`, A.weekEnd(w), A.weekStart(w + 1));
-}
-checkThat('weekOf(weekStart(w)) is false for the wrong week, so the check above is not vacuous',
-  A.weekOf(A.weekStart(5)) !== 6);
-
-console.log('\nfoldBalances() folds Transfer logs into balances: credit to, debit from');
-{
-  const logs = [
-    xfer(ZERO, ALICE, 1000, 1),   // mint
-    xfer(ALICE, BOB, 300, 2),     // ordinary transfer
-    xfer(BOB, ZERO, 100, 3),      // burn
-    xfer(ALICE, CAROL, 700, 4),   // alice sends the rest away (alice nets to exactly 0)
-    xfer(CAROL, BOB, 700, 5),     // carol, who just received it, sends all of it away again
-  ];
-  const balances = A.foldBalances(logs);
-  check('bob is the only wallet left standing: 300 - 100 (burn) + 700 = 900',
-    balancesToObj(balances), { [lower(BOB)]: '900' });
-  checkThat('alice and carol each received tokens and later sent all of them away, and are absent, not present at zero',
-    !balances.has(lower(ALICE)) && !balances.has(lower(CAROL)));
-  checkThat('the zero address itself never appears as a balance key', !balances.has(ZERO));
-}
-check('a mint alone credits only the recipient', balancesToObj(A.foldBalances([xfer(ZERO, ALICE, 500, 1)])), { [lower(ALICE)]: '500' });
-check('a mint immediately followed by a full burn nets to nothing, and leaves no entry',
-  balancesToObj(A.foldBalances([xfer(ZERO, ALICE, 500, 1), xfer(ALICE, ZERO, 500, 2)])), {});
-check('no logs is an empty map, not a crash', balancesToObj(A.foldBalances([])), {});
-
-console.log('\nbuildWallets() computes circulating supply, shares and allowances from a balance map');
-{
-  const balances = new Map([
-    [lower(ALICE), 600n], [lower(BOB), 400n],
-    [lower(CURVE), 9000n], [lower(ESCROW), 500n], [lower(FACTORY), 10n], [lower(HOOK), 20n], [lower(TREASURY), 300n],
-  ]);
-  const exclude = [CURVE, ESCROW, FACTORY, HOOK, TREASURY];
-  const r = A.buildWallets({ balances, exclude, budgetUsd: 1000 });
-  check('circulating is only the public balances (600 + 400), none of the five operational ones', r.circulating.toString(), '1000');
-  check('holders counts only the public wallets', r.holders, 2);
-  checkThat('none of the curve, escrow, factory, hook or treasury has a wallets entry, even though each holds tokens',
-    [CURVE, ESCROW, FACTORY, HOOK, TREASURY].every((a) => !(lower(a) in r.wallets)));
-  // Key order matters to this comparison (check() does a plain JSON.stringify), and that is used
-  // deliberately here: bob (0x650…) sorts before alice (0xe9f…), so listing bob first also proves
-  // the wallets object comes back sorted rather than in balance-map insertion order.
-  check('the public wallets get tokens, share and allowanceUsd, sorted by address', r.wallets, {
-    [lower(BOB)]: { tokens: '400', share: 0.4, allowanceUsd: 400 },
-    [lower(ALICE)]: { tokens: '600', share: 0.6, allowanceUsd: 600 },
-  });
-  checkThat('shares across the public holders sum to 1, within floating-point tolerance',
-    Math.abs(Object.values(r.wallets).reduce((s, w) => s + w.share, 0) - 1) < 1e-9);
-}
-{
-  const r = A.buildWallets({ balances: new Map([[lower(ALICE), 12345n]]), exclude: [], budgetUsd: 250 });
-  check('a single holder has a share of exactly 1', r.wallets[lower(ALICE)].share, 1);
-  check('and gets the entire budget', r.wallets[lower(ALICE)].allowanceUsd, 250);
-}
-{
-  const r = A.buildWallets({ balances: new Map(), exclude: [CURVE], budgetUsd: 500 });
-  checkThat('an empty balance map is 0 circulating, not a crash', r.circulating === 0n);
-  check('and an empty wallets object', r.wallets, {});
-  check('and 0 holders', r.holders, 0);
+function throws(what, fn, pattern) {
+  total++;
+  try { fn(); failures++; console.error(`  FAIL ${what}: did not throw`); }
+  catch (e) {
+    if (pattern.test(e.message)) console.log(`  ok   ${what}`);
+    else { failures++; console.error(`  FAIL ${what}: threw "${e.message}"`); }
+  }
 }
 
-console.log('\nsumTaxUsd() adds up a set of USDG transfer logs at 6 decimals');
-check('two transfers sum to their dollar total', A.sumTaxUsd([usdgXfer(CURVE, ESCROW, 100, 1), usdgXfer(CURVE, ESCROW, 0.5, 2)]), 100.5);
-check('no logs is $0', A.sumTaxUsd([]), 0);
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ott-allowances-'));
+const outPath = (name) => path.join(TMP, name + '.json');
+const readOut = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
+// Real wallets are points on the ed25519 curve; these are fresh keys.
+const wallet = () => S.encodeBase58(new Uint8Array(crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12)));
+const randomAddress = () => S.encodeBase58(new Uint8Array(crypto.randomBytes(32)));
+const randomSignature = () => S.encodeBase58(new Uint8Array(crypto.randomBytes(64)));
+const T22 = S.PROGRAMS.token2022;
+const OTT = (n) => BigInt(Math.round(n * 1e6)); // whole OTT in base units (6 decimals)
+const SOL = (n) => BigInt(Math.round(n * 1e9));
 
-console.log('\nemptyAllowances() is the contract shape with nothing in it');
-check('shape', A.emptyAllowances({ asOf: 1700000000, block: 42, week: 100 }), {
-  asOf: 1700000000, block: 42, week: 100,
-  weekStart: A.weekStart(100), weekEnd: A.weekEnd(100),
-  snapshotBlock: 0, coin: '', curve: '',
-  budgetUsd: 0, budgetSource: 'the coin is not launched yet',
-  circulating: '0', decimals: 18, holders: 0,
-  membership: null, members: {},
-  wallets: {},
-});
+// ---------------------------------------------------------------------------------------------
+// The fake chain
+// ---------------------------------------------------------------------------------------------
+function curveData({ vt = 1073000000000000n, vq = 30000000000n, complete = false, creator, quoteMint = null, holderReward = false, cashback = false }) {
+  const b = Buffer.alloc(166);
+  Buffer.from(C.DISC.bondingCurve).copy(b, 0);
+  b.writeBigUInt64LE(vt, 8); b.writeBigUInt64LE(vq, 16); b.writeBigUInt64LE(793100000000000n, 24); b.writeBigUInt64LE(0n, 32);
+  b.writeBigUInt64LE(1000000000000000n, 40);
+  b[48] = complete ? 1 : 0;
+  Buffer.from(S.decodeBase58(creator)).copy(b, 49);
+  b[82] = cashback ? 1 : 0;
+  if (quoteMint) Buffer.from(S.decodeBase58(quoteMint)).copy(b, 83);
+  b[124] = holderReward ? 1 : 0;
+  return [b.toString('base64'), 'base64'];
+}
+function poolData({ baseMint, quoteMint = S.MINTS.wsol, baseVault, quoteVault, coinCreator, creator, virtualQuote = 0n }) {
+  const b = Buffer.alloc(301);
+  Buffer.from(C.DISC.pool).copy(b, 0);
+  b[8] = 255; b.writeUInt16LE(0, 9);
+  for (const [at, key] of [[11, creator], [43, baseMint], [75, quoteMint], [107, randomAddress()], [139, baseVault], [171, quoteVault], [211, coinCreator]]) Buffer.from(S.decodeBase58(key)).copy(b, at);
+  b.writeBigInt64LE(virtualQuote >> 64n, 253); b.writeBigUInt64LE(virtualQuote & ((1n << 64n) - 1n), 245);
+  return [b.toString('base64'), 'base64'];
+}
+function mintData({ supply = 1000000000000000n, decimals = 6 } = {}) {
+  const b = Buffer.alloc(82);
+  b.writeBigUInt64LE(supply, 36); b[44] = decimals; b[45] = 1;
+  return [b.toString('base64'), 'base64'];
+}
 
-// ---------------------------------------------------------------------------
-// A fake node: enough of eth_call / eth_getLogs / eth_blockNumber / eth_getBlockByNumber to run
-// the real scan and binary searches against.
-//
-// Blocks are one hour apart (BLOCK_S) starting at the contract's own week epoch (A.ANCHOR), so a
-// week is exactly WEEK_BLOCKS blocks and a week boundary lands exactly on a block number — which
-// is what lets the tests below assert the snapshot and tax-window block numbers precisely instead
-// of just trusting whatever the binary search returns.
-// ---------------------------------------------------------------------------
-const BLOCK_S = 3600;
-const T0 = A.ANCHOR;
-const WEEK_BLOCKS = A.WEEK_S / BLOCK_S; // 168
-const blockOfWeek = (w) => w * WEEK_BLOCKS;
-
-const addresses = { usdg: USDG, usdgDecimals: 6, pons: { factory: FACTORY, feeEscrow: ESCROW, memeHook: HOOK } };
-const GET_LAUNCHED = chain.selector('getLaunchedToken(address)');
-const LAUNCHED_AT = chain.selector('launchedAt()');
-const DECIMALS_SEL = chain.selector('decimals()');
-const SUPPLY_SEL = chain.selector('totalSupply()');
-const wordOf = (v) => (typeof v === 'string' ? A.pad(v).slice(2) : BigInt(v).toString(16).padStart(64, '0'));
-/** getLaunchedToken's fifteen words for a coin the factory knows. */
-const launchedRow = (pair) => '0x' + [COIN, CURVE, ALICE, ALICE, pair, 500000000000n, 0, 200, 1000, 0, 0, 0, 0, 0, 1].map(wordOf).join('');
-const launchLog = (block) => ({
-  address: FACTORY, topics: [A.LAUNCHED, A.pad(COIN), A.pad(CURVE), A.pad(ALICE)],
-  data: '0x' + [USDG, 0, 500000000000n].map(wordOf).join(''), blockNumber: '0x' + block.toString(16), logIndex: '0x0',
-});
-
-/** Enough of a node to run run() against. `archive` is whether it will answer a getLogs over the
- *  whole chain for the factory's TokenLaunched log, which the official endpoint does and the
- *  others do not; the CHUNK limit applies to every other query regardless, as it does on every
- *  real endpoint. */
-function fakeNode({ head, launchBlockNum = 900, pair = USDG, coinDecimals = 9, coinTransfers = [], taxTransfers = [], factoryKnows = true, archive = true, totalSupply = 'from-transfers' }) {
+function fakeChain() {
+  const accounts = new Map();
+  const history = new Map();
+  const txs = new Map();
+  const unreadable = new Set();
   const calls = [];
-  const rpc = async (method, params) => {
-    calls.push({ method, params });
-    if (method === 'eth_blockNumber') return '0x' + head.toString(16);
-    if (method === 'eth_getBlockByNumber') {
-      const n = Number(BigInt(params[0]));
-      return { number: params[0], timestamp: '0x' + (T0 + BLOCK_S * n).toString(16) };
+  let slot = 5000;
+  let lastAt = 0;
+  function add({ at, signer, keys = [], tokens = [], lamports = {}, fee = 5000, err = null }) {
+    if (at < lastAt) throw new Error('fixture transactions must be added in time order');
+    lastAt = at;
+    slot += 10;
+    const signature = randomSignature();
+    const order = [signer];
+    const push = (k) => { if (k && !order.includes(k)) order.push(k); };
+    keys.forEach(push); tokens.forEach((t) => push(t.account)); Object.keys(lamports).forEach(push);
+    const pre = [], post = [];
+    for (const t of tokens) {
+      const i = order.indexOf(t.account);
+      const row = (amount) => ({ accountIndex: i, mint: t.mint, owner: t.owner, programId: T22, uiTokenAmount: { amount: String(amount), decimals: 6 } });
+      if (t.pre !== null && t.pre !== undefined) pre.push(row(t.pre));
+      if (t.post !== null && t.post !== undefined) post.push(row(t.post));
     }
-    if (method === 'eth_call') {
-      const { to, data } = params[0];
-      const toL = to.toLowerCase();
-      if (toL === FACTORY && data.startsWith(GET_LAUNCHED)) return factoryKnows ? launchedRow(pair) : '0x' + '0'.repeat(15 * 64);
-      if (toL === CURVE.toLowerCase() && data.startsWith(LAUNCHED_AT)) return '0x' + wordOf(T0 + BLOCK_S * launchBlockNum);
-      if (toL === COIN.toLowerCase() && data.startsWith(DECIMALS_SEL)) return '0x' + wordOf(coinDecimals);
-      // The coin's own account of how much of it exists: mints less burns, unless a test says
-      // otherwise. 'silent' stands for a node that will not answer the call at all.
-      if (toL === COIN.toLowerCase() && data.startsWith(SUPPLY_SEL)) {
-        if (totalSupply === 'silent') throw new Error('fake node: totalSupply() not supported here');
-        if (totalSupply !== 'from-transfers') return '0x' + BigInt(totalSupply).toString(16).padStart(64, '0');
-        let supply = 0n;
-        for (const l of coinTransfers) {
-          const from = '0x' + l.topics[1].slice(26), to = '0x' + l.topics[2].slice(26);
-          if (from === ZERO) supply += BigInt(l.data);
-          if (to === ZERO) supply -= BigInt(l.data);
-        }
-        return '0x' + supply.toString(16).padStart(64, '0');
+    const tx = {
+      slot, blockTime: at, version: 0,
+      meta: { err, fee, preBalances: order.map((k) => Number((lamports[k] || [0, 0])[0])), postBalances: order.map((k) => Number((lamports[k] || [0, 0])[1])), preTokenBalances: pre, postTokenBalances: post },
+      transaction: { signatures: [signature], message: { accountKeys: order.map((k, i) => ({ pubkey: k, signer: i === 0, writable: true, source: 'transaction' })) } },
+    };
+    txs.set(signature, tx);
+    for (const k of order) {
+      if (!history.has(k)) history.set(k, []);
+      history.get(k).unshift({ signature, slot, blockTime: at, err, confirmationStatus: 'finalized' });
+    }
+    return signature;
+  }
+  async function rpc(method, params = []) {
+    calls.push([method, params[0]]);
+    switch (method) {
+      case 'getSlot': return slot;
+      case 'getAccountInfo': { const a = accounts.get(params[0]); return { context: { slot }, value: a ? Object.assign({ lamports: 0, executable: false }, a) : null }; }
+      case 'getMultipleAccounts': return { context: { slot }, value: params[0].map((k) => (accounts.has(k) ? Object.assign({ lamports: 0 }, accounts.get(k)) : null)) };
+      case 'getSignaturesForAddress': {
+        const [address, opts = {}] = params;
+        let list = history.get(address) || [];
+        if (opts.until) { const i = list.findIndex((s) => s.signature === opts.until); if (i >= 0) list = list.slice(0, i); }
+        if (opts.before) { const i = list.findIndex((s) => s.signature === opts.before); list = i >= 0 ? list.slice(i + 1) : []; }
+        return list.slice(0, opts.limit || 1000);
       }
-      throw new Error(`fake node: unexpected eth_call ${to} ${data.slice(0, 10)}`);
+      case 'getTransaction': return unreadable.has(params[0]) ? null : (txs.get(params[0]) || null);
+      case 'getTokenAccountsByOwner': return { context: { slot }, value: [] };
+      default: throw new Error('the fake chain does not answer ' + method);
     }
-    if (method === 'eth_getLogs') {
-      const f = params[0];
-      const from = Number(BigInt(f.fromBlock)), to = Number(BigInt(f.toBlock));
-      const wide = to - from + 1 > A.CHUNK;
-      if (wide && !(archive && f.address.toLowerCase() === FACTORY)) throw new Error(`fake node: range ${from}-${to} is wider than ${A.CHUNK}`);
-      const addrL = f.address.toLowerCase();
-      const pool = addrL === FACTORY ? [launchLog(launchBlockNum)]
-        : addrL === COIN.toLowerCase() ? coinTransfers
-        : addrL === USDG.toLowerCase() ? taxTransfers
-        : [];
-      return pool.filter((l) => {
-        const b = Number(BigInt(l.blockNumber));
-        if (b < from || b > to) return false;
-        return f.topics.every((t, i) => t == null || (l.topics[i] || '').toLowerCase() === t.toLowerCase());
-      });
-    }
-    throw new Error(`fake node: unexpected ${method}`);
-  };
-  return { rpc, calls };
+  }
+  const count = (method, address) => calls.filter(([m, a]) => m === method && (address === undefined || a === address)).length;
+  return { accounts, history, txs, unreadable, add, rpc, calls, count };
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'allowances-'));
-const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+/** A launched coin on its bonding curve, with the config that matches it. */
+async function world({ priceVq = 30000000000n, holderReward = false, cashback = false, quoteMint = null } = {}) {
+  const chain = fakeChain();
+  const coin = randomAddress();
+  const treasury = wallet();
+  const burnAccount = await S.associatedTokenAddress(S.INCINERATOR, coin, T22);
+  const curve = await C.bondingCurveAddress(coin);
+  chain.accounts.set(coin, { owner: T22, data: mintData() });
+  chain.accounts.set(curve, { owner: S.PROGRAMS.pump, data: curveData({ vq: priceVq, creator: treasury, holderReward, cashback, quoteMint }) });
+  const config = {
+    chain: 'solana', coin, tokenProgram: T22, treasury, budgetBps: 8000,
+    membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount, capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } },
+  };
+  const vault = await C.creatorVaultAddress(treasury);
+  const ammVault = await C.ammCreatorVaultAccount(treasury);
+  const ata = (owner) => S.associatedTokenAddress(owner, coin, T22);
+  const balance = new Map(); // owner -> OTT units held in its associated account
+  async function buy(owner, amount, at) {
+    const account = await ata(owner);
+    const before = balance.get(owner);
+    balance.set(owner, (before || 0n) + amount);
+    return chain.add({ at, signer: owner, keys: [curve], tokens: [{ account, mint: coin, owner, pre: before === undefined ? null : before, post: balance.get(owner) }] });
+  }
+  async function sell(owner, amount, at) {
+    const account = await ata(owner);
+    const before = balance.get(owner);
+    balance.set(owner, before - amount);
+    return chain.add({ at, signer: owner, keys: [curve], tokens: [{ account, mint: coin, owner, pre: before, post: balance.get(owner) }] });
+  }
+  let burned = null;
+  async function join(owner, amount, at) {
+    const account = await ata(owner);
+    const before = balance.get(owner);
+    balance.set(owner, before - amount);
+    const pre = burned;
+    burned = (burned || 0n) + amount;
+    return chain.add({ at, signer: owner, keys: [S.PROGRAMS.associatedToken, coin], tokens: [
+      { account, mint: coin, owner, pre: before, post: balance.get(owner) },
+      { account: burnAccount, mint: coin, owner: S.INCINERATOR, pre, post: burned }] });
+  }
+  /** A collection from the bonding-curve creator vault, paid for by the treasury. */
+  function collect(lamports, at, { fee = 5000 } = {}) {
+    return chain.add({ at, signer: treasury, keys: [vault, curve, S.PROGRAMS.pump], fee, lamports: { [treasury]: [SOL(1), SOL(1) + lamports - BigInt(fee)], [vault]: [lamports + 890880n, 890880n] } });
+  }
+  return { chain, config, coin, treasury, burnAccount, curve, vault, ammVault, ata, buy, sell, join, collect, balance };
+}
+
+const W = 2965;
+const at = (week, seconds) => A.weekStart(week) + seconds;
+const clock = (week, seconds) => () => at(week, seconds) * 1000;
+/** Prices: SOL now, and SOL at a given hour (by default $100, with overrides per hour). */
+function prices(now = 100, hours = {}) {
+  return { now: async () => { if (now instanceof Error) throw now; return now; }, at: async (t) => { const h = Math.floor(t / 3600) * 3600; const v = hours[h]; if (v instanceof Error) throw v; return v === undefined ? 100 : v; } };
+}
 
 (async () => {
-  console.log('\nscanTransfers() chunks a wide range at CHUNK and de-dupes an overlapping answer');
+  console.log('before launch: an empty ledger, whatever the RPC does');
   {
-    const pool = [xfer(ALICE, BOB, 1, 5), xfer(ALICE, BOB, 2, 10005), xfer(ALICE, BOB, 3, 20005)];
-    const ranges = [];
-    const chunkRpc = async (method, params) => {
-      if (method !== 'eth_getLogs') throw new Error('unexpected ' + method);
-      const f = params[0];
-      const from = Number(BigInt(f.fromBlock)), to = Number(BigInt(f.toBlock));
-      if (to - from + 1 > A.CHUNK) throw new Error(`range ${from}-${to} is wider than CHUNK`);
-      ranges.push([from, to]);
-      const found = pool.filter((l) => { const b = Number(BigInt(l.blockNumber)); return b >= from && b <= to; });
-      return found.concat(found); // answer every log twice, so de-dupe has something to do
-    };
-    const { logs, chunks } = await A.scanTransfers({ rpc: chunkRpc, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 25000, pause: 0, chunk: 10000 });
-    check('a 25,001-block range at a 10,000 span takes three chunks', chunks, 3);
-    check('the duplicated answer de-dupes down to one copy of each log', logs.length, 3);
-    checkThat('no chunk asked for more than the span it was given', ranges.every(([f, t]) => t - f + 1 <= 10000), JSON.stringify(ranges));
+    const out = outPath('empty');
+    const dead = async () => { throw new Error('every endpoint is down'); };
+    const r = await A.run({ config: { chain: 'solana', coin: '', tokenProgram: '', treasury: '', membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: '' } }, rpc: dead, out, now: clock(W, 100) });
+    const f = readOut(out);
+    check('the empty ledger names the week and nothing else', [f.chain, f.week, f.weekStart, f.weekEnd, f.coin, f.decimals, f.budgetUsd, f.budgetSource],
+      ['solana', W, A.weekStart(W), A.weekEnd(W), '', null, 0, 'the coin is not launched yet']);
+    check('with no members, joins, wallets or membership block', [f.membership, f.members, f.joins, f.wallets, f.holders, f.memberTokens, f.fees], [null, {}, {}, {}, 0, '0', null]);
+    check('the slot falls back to 0 when the chain cannot be reached', f.slot, 0);
+    checkThat('and it says why', /not launched/.test(r.summary), r.summary);
+    const partial = await A.run({ config: { chain: 'solana', coin: randomAddress(), tokenProgram: '', treasury: '', membership: {} }, rpc: dead, out: outPath('partial'), now: clock(W, 100) });
+    check('a half-filled launch config is still not launched', partial.data.membership, null);
   }
 
-  // This chain makes a block every tenth of a second, so a week is about six million blocks and a
-  // fixed narrow chunk turns one week's scan into six hundred requests — slow enough that the
-  // scheduled job does not finish. The window therefore starts wide and only narrows when an
-  // endpoint actually complains, which is the behaviour these three checks pin down.
-  console.log('\nscanTransfers() adapts its window to what the endpoint will serve');
+  console.log('\nthe first weeks of a launched coin');
+  const w1 = await world();
+  const ALICE = wallet(), BOB = wallet(), CAROL = wallet(), DAVE = wallet(), ERIN = wallet();
+  // A collection in week W-2, before anyone joined: it is week W-1's budget.
+  await w1.collect(SOL(1), at(W - 2, 3600 * 30));
+  await w1.buy(ALICE, OTT(5000000), at(W - 1, 1000));
+  await w1.join(ALICE, OTT(1800000), at(W - 1, 2000));
+  await w1.buy(BOB, OTT(10000000), at(W - 1, 3000));
+  await w1.join(BOB, OTT(1000000), at(W - 1, 3500));   // short of 1.8M…
+  await w1.join(BOB, OTT(800000), at(W - 1, 4000));    // …then over it with his second send
+  const ledger = outPath('ledger');
   {
-    check('the default span is a million blocks, not ten thousand', [A.CHUNK, A.MAX_CHUNK, A.MIN_CHUNK], [1000000, 1000000, 10000]);
-    const spans = [];
-    // An endpoint that refuses anything wider than 250,000 the way a real one does.
-    const fussy = async (method, params) => {
-      const from = Number(BigInt(params[0].fromBlock)), to = Number(BigInt(params[0].toBlock));
-      const span = to - from + 1;
-      spans.push(span);
-      if (span > 250000) throw new Error('log query timed out');
-      return [];
-    };
-    const r = await A.scanTransfers({ rpc: fussy, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 2000000, pause: 0 });
-    checkThat('it halves until the endpoint accepts the range', spans.slice(0, 3).join(',') === '1000000,500000,250000', spans.slice(0, 5).join(','));
-    // Every window it *chooses* is at or above the floor; the one short range at the end is simply
-    // what was left of the span, which is not the scan narrowing.
-    const chosen = spans.slice(0, -1);
-    checkThat('and never chooses a window below the floor', chosen.every((n) => n >= A.MIN_CHUNK), spans.join(','));
-    checkThat('the last request is just the remainder of the range', spans[spans.length - 1] <= 250000, spans.join(','));
-    checkThat('it covers the whole range exactly once', r.chunks >= 8, 'chunks=' + r.chunks);
-
-    // The two refusals these endpoints actually send, captured verbatim on 16 Sep 2026. The first
-    // is a result-count cap rather than a range cap, which is the one that would otherwise slip
-    // past a regex written only for ranges and crash the scan instead of narrowing it.
-    for (const msg of ['logs matched by query exceeds limit of 10000', 'log query timed out']) {
-      const seen = [];
-      const capped = async (method, params) => {
-        const span = Number(BigInt(params[0].toBlock)) - Number(BigInt(params[0].fromBlock)) + 1;
-        seen.push(span);
-        if (span > 100000) throw new Error(msg);
-        return [];
-      };
-      await A.scanTransfers({ rpc: capped, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 300000, pause: 0 });
-      checkThat('"' + msg + '" narrows the window instead of throwing', seen.some((n) => n <= 100000), seen.join(','));
-    }
-
-    // A real error is not a range complaint and must not be swallowed by narrowing forever.
-    let threw = null;
-    try {
-      await A.scanTransfers({ rpc: async () => { throw new Error('execution reverted'); }, address: USDG, topics: [A.TRANSFER], fromBlock: 0, toBlock: 100, pause: 0 });
-    } catch (e) { threw = e.message; }
-    check('an error that is not about the range is rethrown, not retried smaller', threw, 'execution reverted');
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W - 1, 5000), prices: prices(100) });
+    const f = readOut(ledger);
+    check('week W-1 is priced at its first run: $5 at $0.0000028 is 1,800,000 OTT', [f.membership.requirement.week, f.membership.requirement.burnTokens, f.membership.requirement.burnUnits, f.membership.requirement.source],
+      [W - 1, '1800000', '1800000000000', 'bonding-curve']);
+    checkThat('the price recorded is the curve price times SOL', Math.abs(f.membership.requirement.priceUsd - (30e9 / 1.073e15 / 1000) * 100) < 1e-15, f.membership.requirement.priceUsd);
+    check('and the amount goes into the history of amounts', f.membership.requirements, { [W - 1]: '1800000000000' });
+    check('Alice joined with one send', f.members[ALICE].burned, '1800000000000');
+    check('Bob joined with his second send, and both are recorded', [f.members[BOB].burned, f.members[BOB].since.at], ['1800000000000', at(W - 1, 4000)]);
+    check('nobody joined before this week\'s snapshot, so nobody shares yet', [f.holders, f.wallets, f.membership.members], [0, {}, 0]);
+    check('week W-1\'s budget is 80% of the $100 collected in week W-2', [f.budgetUsd, f.budgetSource], [80, `creator fees collected in week ${W - 2}`]);
+    check('the collection is recorded with its price', f.fees.collections.map((c) => [c.lamports, c.solUsd, c.usd]), [['1000000000', 100, 100]]);
+    check('the cursor sits on the last send read', f.membership.cursor.signature, w1.chain.history.get(w1.burnAccount)[0].signature);
+    check('decimals and the token program come from the mint', [f.decimals, f.tokenProgram, f.treasury], [6, T22, w1.treasury]);
+    checkThat('the run reports it wrote the file', r.written);
+  }
+  {
+    const before = fs.readFileSync(ledger, 'utf8');
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W - 1, 9000), prices: prices(50) });
+    check('a second run in the same week never reprices: still 1,800,000 at half the SOL price', readOut(ledger).membership.requirement.burnTokens, '1800000');
+    check('with nothing new on chain, the file is not rewritten', [r.written, fs.readFileSync(ledger, 'utf8') === before], [false, true]);
+  }
+  {
+    // Spam lands on the treasury: the cursor would move, but nothing in the ledger changes.
+    w1.chain.add({ at: at(W - 1, 9500), signer: wallet(), keys: [], lamports: { [w1.treasury]: [SOL(1), SOL(1) + 1000n] } });
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W - 1, 9600), prices: prices(100) });
+    check('a cursor moving over spam alone does not rewrite the file', r.written, false);
+  }
+  // Week W-1's fees: two collections at different hours and prices, a sale of OTT by the treasury
+  // that touches the vault (not a fee), and a donation that never touched a vault (not a fee).
+  const h1 = Math.floor(at(W - 1, 20000) / 3600) * 3600, h2 = Math.floor(at(W - 1, 90000) / 3600) * 3600;
+  await w1.collect(SOL(0.5), at(W - 1, 20000));
+  w1.balance.set(w1.treasury, OTT(1000));
+  w1.chain.add({ at: at(W - 1, 30000), signer: w1.treasury, keys: [w1.vault, w1.curve], tokens: [{ account: await w1.ata(w1.treasury), mint: w1.coin, owner: w1.treasury, pre: OTT(1000), post: 0n }], lamports: { [w1.treasury]: [SOL(1), SOL(3)] } });
+  w1.chain.add({ at: at(W - 1, 40000), signer: wallet(), keys: [], lamports: { [w1.treasury]: [SOL(1), SOL(1.5)] } });
+  await w1.collect(SOL(0.25), at(W - 1, 90000));
+  {
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W - 1, 100000), prices: prices(100, { [h1]: 100, [h2]: 120 }) });
+    const f = readOut(ledger);
+    check('each collection is valued at its own hour\'s SOL price', f.fees.collections.slice(1).map((c) => [c.lamports, c.solUsd, c.usd]), [['500000000', 100, 50], ['250000000', 120, 30]]);
+    check('a sale of OTT by the treasury and a plain transfer in are not fees', f.fees.collections.length, 3);
+    check('weekly totals', f.fees.weekUsd, { [W - 2]: 100, [W - 1]: 80 });
+    check('this week\'s budget is still last week\'s fees', f.budgetUsd, 80);
+    checkThat('new collections rewrite the file', r.written);
   }
 
-  console.log('\nrun() with no coin writes a valid empty ledger for the current week, and does not need the chain to be up');
-  const NOW_S = 1700000000;
-  const NOW_WEEK = A.weekOf(NOW_S);
-  const idle = fakeNode({ head: 777 });
-
-  const out1 = path.join(tmp, 'empty', 'allowances.json');
-  const r1 = await A.run({ config: { coin: '', curve: '', treasury: '' }, addresses, rpc: idle.rpc, out: out1, now: () => NOW_S * 1000 });
-  check('the file on disk is the contract-shaped empty ledger for the current week',
-    readBack(out1), A.emptyAllowances({ asOf: NOW_S, block: 777, week: NOW_WEEK }));
-  check('what run() returns is what it wrote', r1.data, readBack(out1));
-  checkThat('the summary says so in one line', /empty ledger/.test(r1.summary) && !/\n/.test(r1.summary), r1.summary);
-  checkThat('the file ends with a newline', fs.readFileSync(out1, 'utf8').endsWith('}\n'));
-
-  const out2 = path.join(tmp, 'offline.json');
-  const r2 = await A.run({ config: { coin: '' }, addresses, rpc: async () => { throw new Error('no route to host'); }, out: out2 });
-  check('with no RPC reachable the block is 0 and the file is still written', readBack(out2).block, 0);
-  checkThat('asOf defaults to now, in seconds', Math.abs(r2.data.asOf - Date.now() / 1000) < 5, String(r2.data.asOf));
-
-  const out3 = path.join(tmp, 'noconfig.json');
-  const r3 = await A.run({ config: A.loadConfig(path.join(tmp, 'does-not-exist.json')), addresses, rpc: idle.rpc, out: out3, now: () => NOW_S * 1000 });
-  check('a missing esim.json is treated as "not launched yet"', r3.data.coin, '');
-
-  console.log('\nrun() with a coin: balances at the week-9 snapshot, and week 9\'s tax as the week-10 budget');
-  // Launch at block 900 (mid week 5). Target week 10 starts at block 1680 and ends at 1848; last
-  // week (9) is blocks [1512, 1680); the week before that (8) is [1344, 1512). The chain head sits
-  // at 1750 — inside week 10, as if the indexer were run partway through it.
-  const HEAD = 1750;
-  const coinTransfers = [
-    xfer(ZERO, ALICE, 1000, 950),      // mint
-    xfer(ZERO, CURVE, 5000, 960),      // the curve's own bonding-curve inventory
-    xfer(ZERO, CAROL, 500, 970),
-    xfer(ZERO, TREASURY, 400, 980),
-    xfer(ALICE, BOB, 400, 1100),
-    xfer(CAROL, ZERO, 500, 1200),      // carol burns everything she has
-    xfer(ALICE, DAVE, 300, 1300),
-    xfer(DAVE, BOB, 300, 1400),        // dave immediately sends it all on to bob
-    xfer(ZERO, ALICE, 777, 800),       // before the launch block (900): must never be seen
-    xfer(ALICE, BOB, 999999, 1690),    // after the snapshot block (1680): must never be seen
-  ];
-  const taxTransfers = [
-    usdgXfer(CURVE, ESCROW, 100, 1600),    // in week 9: this is the only one that should count
-    usdgXfer(CURVE, ESCROW, 99999, 1680),  // exactly week 10's first block (the current week): excluded
-    usdgXfer(CURVE, ESCROW, 88888, 1500),  // in week 8 (the week before last): excluded
-    usdgXfer(CURVE, BOB, 77, 1650),        // curve money moving, but not to the escrow: excluded regardless of week
-  ];
-  const mainNode = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers });
-  const outMain = path.join(tmp, 'main.json');
-  const rMain = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: mainNode.rpc, out: outMain, week: 10, now: () => 1700000000000 });
-
-  check('decimals is read from the token\'s decimals(), not assumed to be 18', rMain.data.decimals, 9);
-  check('week/weekStart/weekEnd', [rMain.data.week, rMain.data.weekStart, rMain.data.weekEnd], [10, A.weekStart(10), A.weekEnd(10)]);
-  check('snapshotBlock is the last block at or before week 10\'s start', rMain.data.snapshotBlock, blockOfWeek(10));
-  check('block is the chain head at run time', rMain.data.block, HEAD);
-  check('circulating is only alice (300) + bob (700) = 1000, not the curve\'s 5000 or the treasury\'s 400', rMain.data.circulating, '1000');
-  check('holders counts only the public wallets', rMain.data.holders, 2);
-  check('alice and bob are the only wallets with an allowance', Object.keys(rMain.data.wallets).sort(), [lower(ALICE), lower(BOB)].sort());
-  check('alice: 300 tokens, 30% share, $30 of the $100 budget', rMain.data.wallets[lower(ALICE)], { tokens: '300', share: 0.3, allowanceUsd: 30 });
-  check('bob: 700 tokens, 70% share, $70 of the $100 budget', rMain.data.wallets[lower(BOB)], { tokens: '700', share: 0.7, allowanceUsd: 70 });
-  checkThat('the curve and the treasury hold real balances on chain but neither has a wallets entry',
-    !(lower(CURVE) in rMain.data.wallets) && !(lower(TREASURY) in rMain.data.wallets));
-  checkThat('carol and dave both emptied themselves and are absent, not present at zero',
-    !(lower(CAROL) in rMain.data.wallets) && !(lower(DAVE) in rMain.data.wallets));
-  check('the budget is exactly week 9\'s $100 — the current week\'s $99999, the week-before-last\'s $88888, '
-    + 'and the curve\'s non-escrow $77 are all excluded', rMain.data.budgetUsd, 100);
-  check('budgetSource names the week the tax came from', rMain.data.budgetSource, 'tax collected in week 9');
-
-  const rangesFor = (node, address) => node.calls
-    .filter((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(address))
-    .map((c) => [Number(BigInt(c.params[0].fromBlock)), Number(BigInt(c.params[0].toBlock))]);
-  checkThat('the balance scan runs from the launch block through the snapshot block, inclusive on both ends',
-    JSON.stringify(rangesFor(mainNode, COIN)) === JSON.stringify([[900, blockOfWeek(10)]]), JSON.stringify(rangesFor(mainNode, COIN)));
-  checkThat('the tax scan covers exactly week 9\'s blocks and nothing from week 8 or week 10',
-    JSON.stringify(rangesFor(mainNode, USDG)) === JSON.stringify([[blockOfWeek(9), blockOfWeek(10) - 1]]), JSON.stringify(rangesFor(mainNode, USDG)));
-
-  console.log('\nbudgetBps holds back a reserve');
-  const bpsNode = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers });
-  const rBps = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY, budgetBps: 5000 }, addresses, rpc: bpsNode.rpc, out: path.join(tmp, 'bps.json'), week: 10, now: () => 1700000000000 });
-  check('5000 bps halves the $100 tax to a $50 budget', rBps.data.budgetUsd, 50);
-  check('and halves every wallet\'s allowanceUsd along with it', [rBps.data.wallets[lower(ALICE)].allowanceUsd, rBps.data.wallets[lower(BOB)].allowanceUsd], [15, 35]);
-  await rejects('a budgetBps outside 0-10000 makes no sense',
-    A.run({ config: { coin: COIN, budgetBps: 20000 }, addresses, rpc: fakeNode({ head: HEAD }).rpc, out: path.join(tmp, 'badbps.json'), week: 10 }), /budgetBps/);
-
-  console.log('\na zero-tax week produces a valid file with every allowance at 0, not a crash or a NaN');
-  const zeroTaxNode = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers: [] });
-  const rZero = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: zeroTaxNode.rpc, out: path.join(tmp, 'zerotax.json'), week: 10, now: () => 1700000000000 });
-  check('budgetUsd is 0', rZero.data.budgetUsd, 0);
-  check('shares are unchanged — the wallets still hold their coin, they just have nothing to spend this week',
-    [rZero.data.wallets[lower(ALICE)].share, rZero.data.wallets[lower(BOB)].share], [0.3, 0.7]);
-  check('every allowanceUsd is exactly 0', [rZero.data.wallets[lower(ALICE)].allowanceUsd, rZero.data.wallets[lower(BOB)].allowanceUsd], [0, 0]);
-  checkThat('and neither is NaN', !Number.isNaN(rZero.data.wallets[lower(ALICE)].allowanceUsd) && !Number.isNaN(rZero.data.wallets[lower(BOB)].allowanceUsd));
-
-  console.log('\nrun() over the same inputs twice produces byte-identical files');
-  const outA = path.join(tmp, 'repeat-a.json');
-  const outB = path.join(tmp, 'repeat-b.json');
-  await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: outA, week: 10, now: () => 1700000000000 });
-  await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: outB, week: 10, now: () => 1700000000000 });
-  check('the two runs\' files are byte-identical', fs.readFileSync(outA, 'utf8'), fs.readFileSync(outB, 'utf8'));
-
-  // Both workflows commit only when a data file actually changed, which is what makes a quiet
-  // half-hour cost nothing downstream. asOf and block move every run regardless, so writing them
-  // unconditionally made that guard a no-op: every run pushed a commit and triggered a redeploy,
-  // forty-eight times a day, for a file whose contents had not changed.
-  console.log('\na run that finds nothing new leaves the file alone');
-  const quiet = path.join(tmp, 'quiet.json');
-  const args = (at) => ({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: quiet, week: 10, now: () => at });
-  await A.run(args(1700000000000));
-  const firstBytes = fs.readFileSync(quiet, 'utf8');
-  const firstMtime = fs.statSync(quiet).mtimeMs;
-  await new Promise((r) => setTimeout(r, 20));
-  await A.run(args(1700003600000));   // an hour later; every figure the same
-  check('the file is untouched, clock and all', fs.readFileSync(quiet, 'utf8'), firstBytes);
-  check('and was not rewritten at all', fs.statSync(quiet).mtimeMs, firstMtime);
-  // A real change still lands, clock included — the guard skips noise, not news.
-  await A.run(Object.assign(args(1700007200000), { rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: coinTransfers.concat([xfer(ZERO, DAVE, 250, 1500)]), taxTransfers }).rpc }));
-  checkThat('a week whose balances moved is written', fs.readFileSync(quiet, 'utf8') !== firstBytes, 'unchanged');
-
-  console.log('\n--from-block and --to-block still work: they skip the launch lookup and pin the head');
-  const explicitNode = fakeNode({ head: 999999, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers });
-  const rExplicit = await A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: explicitNode.rpc, out: path.join(tmp, 'explicit.json'), week: 10, fromBlock: '900', toBlock: String(HEAD) });
-  check('the same wallets come out when the launch block and head are given explicitly', rExplicit.data.wallets, rMain.data.wallets);
-  checkThat('no TokenLaunched log lookup was needed since --from-block was given',
-    !explicitNode.calls.some((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(FACTORY)));
-  checkThat('no eth_blockNumber call was needed since --to-block was given',
-    !explicitNode.calls.some((c) => c.method === 'eth_blockNumber'));
-  check('block is pinned to --to-block (999999 was on the node but never asked for)', rExplicit.data.block, HEAD);
-
-  // An endpoint can answer eth_getLogs with a short list and HTTP 200 — no error for the retry
-  // loop to catch, nothing for the chunk-width heuristic to notice. The tell is arithmetic: a
-  // token can only be sent by someone who received it, so an address folding to a negative
-  // balance proves a Transfer INTO it was never seen. That matters far past the one wallet,
-  // because a negative balance is summed into `circulating` like any other and shrinks the
-  // denominator every share is divided by — one missing log would inflate every OTHER holder's
-  // allowance, in a file that otherwise looks entirely reasonable.
-  console.log('\na scan that came back short is caught by the arithmetic, not trusted');
-  const missedMint = [
-    xfer(ZERO, ALICE, 1000, 950),
-    xfer(ALICE, BOB, 400, 1100),
-    xfer(BOB, CAROL, 900, 1200),   // bob only ever received 400: his mint of 500 was not in the answer
-  ];
-  await rejects('a fold with a negative balance is refused rather than published',
-    A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: missedMint, taxTransfers }).rpc, out: path.join(tmp, 'short.json'), week: 10, now: () => 1700000000000 }),
-    /negative balance/);
-  check('and nothing was written', fs.existsSync(path.join(tmp, 'short.json')), false);
-
-  console.log('\nmembership: only wallets that burned 100,000 OTT earn, split by holdings with a cap');
+  console.log('\nthe next week: the snapshot and the split');
+  // Carol joins after Monday's snapshot; she is a member but does not share until next week.
+  await w1.buy(CAROL, OTT(3000000), at(W, 2000));
+  await w1.join(CAROL, OTT(900000), at(W, 2500));
   {
-    // Whole tokens at the fake coin's 9 decimals, so the threshold is 100,000 * 10^9 base units.
-    const tok = (n) => BigInt(n) * 10n ** 9n;
-    const DEAD = '0x000000000000000000000000000000000000dEaD';
-    const ERIN = addr('erin');
-    const burn = (from, to, n, block, tx) => Object.assign(xfer(from, to, tok(n), block), { transactionHash: tx });
-    const memberTransfers = [
-      xfer(ZERO, ALICE, tok(1000000), 950), xfer(ZERO, BOB, tok(400000), 950), xfer(ZERO, CAROL, tok(150000), 950),
-      xfer(ZERO, DAVE, tok(200000), 950), xfer(ZERO, ERIN, tok(500000), 950), xfer(ZERO, CURVE, tok(5000000), 950),
-      burn(ALICE, DEAD, 100000, 1000, '0xa1'),
-      burn(BOB, DEAD, 100000, 1100, '0xb1'),
-      burn(CAROL, DEAD, 50000, 1200, '0xc1'),
-      burn(CAROL, ZERO, 50000, 1210, '0xc2'),       // the token's own burn() counts, and burns add up
-      burn(CURVE, DEAD, 200000, 1300, '0xcc'),      // a contract retiring supply is not a member
-      burn(DAVE, DEAD, 100000, 1700, '0xd1'),       // after the week-10 snapshot (block 1680)
-    ];
-    const tax = [usdgXfer(CURVE, ESCROW, 1000, 1600)];
-    const membershipConfig = { burnTokens: '100000', burnAddress: DEAD, capMultiple: 1.5, welcome: { gb: 1, days: 7, maxUsd: 4 } };
-    const config = { coin: COIN, curve: CURVE, treasury: TREASURY, budgetBps: 8000, membership: membershipConfig };
-    const node = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: memberTransfers, taxTransfers: tax });
-    const r = await A.run({ config, addresses, rpc: node.rpc, out: path.join(tmp, 'members.json'), week: 10, now: () => 1700000000000 });
-    const d = r.data;
-
-    check('the member budget is 80% of last week\'s $1,000 tax', d.budgetUsd, 800);
-    check('burned tokens are not circulating: alice 900k + bob 300k + carol 50k + dave 200k + erin 500k',
-      d.circulating, tok(1950000).toString());
-    checkThat('the burn address is not a holder', !(DEAD.toLowerCase() in d.wallets));
-    check('three members share this week: alice, bob and carol, whose two burns add up', d.membership.members, 3);
-    check('the cap is 1.5x the $266.67 average', d.membership.capUsd, 400);
-    check('alice would take $576 by holdings and is held at the $400 cap', d.wallets[lower(ALICE)], { tokens: tok(900000).toString(), share: 900000 / 1950000, allowanceUsd: 400, member: true });
-    check('bob and carol share the other $400 by holdings, 300k to 50k',
-      [d.wallets[lower(BOB)].allowanceUsd, d.wallets[lower(CAROL)].allowanceUsd], [342.8571, 57.1428]);
-    check('dave joined after the snapshot, so he holds but does not share this week', d.wallets[lower(DAVE)], { tokens: tok(200000).toString(), share: 200000 / 1950000, allowanceUsd: 0, member: false });
-    check('erin holds more than bob but never burned, so she earns nothing', [d.wallets[lower(ERIN)].allowanceUsd, d.wallets[lower(ERIN)].member], [0, false]);
-    check('rounding dust stays in the pool rather than being promised', [d.membership.allocatedUsd, d.membership.unallocatedUsd], [799.9999, 0.0001]);
-    check('the summary records the rule that produced it', [d.membership.burnTokens, d.membership.burnUnits, d.membership.burnAddress, d.membership.capMultiple],
-      ['100000', tok(100000).toString(), DEAD.toLowerCase(), 1.5]);
-    check('every member up to the chain head is listed for the welcome eSIM, the curve excluded',
-      Object.keys(d.members).sort(), [lower(ALICE), lower(BOB), lower(CAROL), lower(DAVE)].sort());
-    check('each member records the burn that took them over the line', [d.members[lower(CAROL)], d.members[lower(DAVE)]],
-      [{ burned: tok(100000).toString(), sinceBlock: 1210, tx: '0xc2' }, { burned: tok(100000).toString(), sinceBlock: 1700, tx: '0xd1' }]);
-    checkThat('the scan ran past the snapshot to the head to find dave',
-      node.calls.some((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(COIN) && Number(BigInt(c.params[0].toBlock)) === HEAD));
-    checkThat('the summary counts members', /3 member\(s\) sharing, 4 member\(s\) in all/.test(r.summary), r.summary);
-
-    const legacyNode = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: memberTransfers, taxTransfers: tax });
-    const legacy = await A.run({ config: { coin: COIN, curve: CURVE, treasury: TREASURY, budgetBps: 8000 }, addresses,
-      rpc: legacyNode.rpc, out: path.join(tmp, 'legacy.json'), week: 10, now: () => 1700000000000 });
-    check('without a membership block the ledger has no members', [legacy.data.membership, legacy.data.members], [null, {}]);
-    checkThat('and every holder earns by share, as before', legacy.data.wallets[lower(ERIN)].allowanceUsd > 0 && !('member' in legacy.data.wallets[lower(ERIN)]));
-    const coinScans = legacyNode.calls.filter((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(COIN));
-    checkThat('and the scan stops at the snapshot', coinScans.length > 0 && coinScans.every((c) => Number(BigInt(c.params[0].toBlock)) <= blockOfWeek(10)),
-      coinScans.map((c) => c.params[0].toBlock).join(','));
-
-    await rejects('a broken membership block is refused rather than guessed at',
-      A.run({ config: Object.assign({}, config, { membership: Object.assign({}, membershipConfig, { capMultiple: 0 }) }), addresses, rpc: node.rpc, out: path.join(tmp, 'bad-members.json'), week: 10 }),
-      /capMultiple/);
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W, 3600), prices: prices(200) });
+    const f = readOut(ledger);
+    check('week W is priced afresh: $5 at twice the SOL price is 900,000 OTT', [f.membership.requirement.week, f.membership.requirement.burnTokens], [W, '900000']);
+    check('and week W-1\'s amount is kept as it was', f.membership.requirements, { [W - 1]: '1800000000000', [W]: '900000000000' });
+    check('Carol joined against this week\'s amount', f.members[CAROL].burned, '900000000000');
+    check('Alice and Bob share; Carol joined after the snapshot', Object.keys(f.wallets).sort(), [ALICE, BOB].sort());
+    check('holdings are what each held at the snapshot, after their sends', [f.wallets[ALICE].tokens, f.wallets[BOB].tokens], ['3200000000000', '8200000000000']);
+    check('the budget is 80% of week W-1\'s $80 of fees', [f.budgetUsd, f.budgetSource], [64, `creator fees collected in week ${W - 1}`]);
+    check('shared by holdings, under the 3x cap', [f.wallets[ALICE].allowanceUsd, f.wallets[BOB].allowanceUsd, f.membership.capUsd], [17.9649, 46.035, 96]);
+    check('shares are fractions of the members\' OTT', [f.memberTokens, f.wallets[BOB].share], ['11400000000000', 8200 / 11400]);
+    check('holders and the sharing count agree', [f.holders, f.membership.members], [2, 2]);
+    checkThat('the budget is fully placed', Math.abs(f.membership.allocatedUsd + f.membership.unallocatedUsd - 64) < 1e-9 && r.written);
+  }
+  {
+    // Later the same week: holdings are reused, not read again. Alice's history now cannot be read,
+    // which would fail the run if it were.
+    const aliceAta = await w1.ata(ALICE);
+    for (const s of w1.chain.history.get(aliceAta)) w1.chain.unreadable.add(s.signature);
+    const reads = w1.chain.count('getSignaturesForAddress', aliceAta);
+    let r = null, error = null;
+    try { r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W, 50000), prices: prices(300) }); } catch (e) { error = e.message; }
+    check('holdings read once a week are reused within it', [error, w1.chain.count('getSignaturesForAddress', aliceAta) - reads, r && r.written], [null, 0, false]);
+    check('and the week\'s amount is still 900,000', readOut(ledger).membership.requirement.burnTokens, '900000');
+    for (const s of w1.chain.history.get(aliceAta)) w1.chain.unreadable.delete(s.signature);
   }
 
-  console.log('\nrun() still refuses what it cannot index rather than write a ledger that lies');
-  await rejects('a coin the factory does not know',
-    A.run({ config: { coin: COIN }, addresses, rpc: fakeNode({ head: HEAD, factoryKnows: false }).rpc, out: path.join(tmp, 'x1.json'), week: 10 }), /does not know/);
-  await rejects('a curve in esim.json that disagrees with the factory',
-    A.run({ config: { coin: COIN, curve: BOB }, addresses, rpc: fakeNode({ head: HEAD }).rpc, out: path.join(tmp, 'x2.json'), week: 10 }), /factory says/);
-  await rejects('a native-ether pair has no Transfer events to sum a tax sweep from',
-    A.run({ config: { coin: COIN }, addresses, rpc: fakeNode({ head: HEAD, pair: '0x' + '0'.repeat(40) }).rpc, out: path.join(tmp, 'x3.json'), week: 10 }), /native ether/);
+  console.log('\na send that cannot be read holds the cursor');
+  await w1.buy(DAVE, OTT(2000000), at(W, 60000));
+  const daveJoin = await w1.join(DAVE, OTT(900000), at(W, 61000));
+  await w1.buy(ERIN, OTT(2000000), at(W, 62000));
+  await w1.join(ERIN, OTT(900000), at(W, 63000));
+  {
+    w1.chain.unreadable.add(daveJoin);
+    const r = await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W, 70000), prices: prices(100) });
+    const f = readOut(ledger);
+    check('neither Dave nor Erin, whose send comes after his, is a member yet', [!!f.members[DAVE], !!f.members[ERIN]], [false, false]);
+    check('the cursor stays on the send before Dave\'s', f.membership.cursor.signature, w1.chain.history.get(w1.burnAccount)[2].signature);
+    checkThat('and the run says why', r.warnings.some((w) => w.includes(daveJoin)), r.warnings.join('; '));
+    w1.chain.unreadable.delete(daveJoin);
+    await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W, 80000), prices: prices(100) });
+    const g = readOut(ledger);
+    check('the next run resumes from it and finds both', [g.members[DAVE].burned, g.members[ERIN].burned], ['900000000000', '900000000000']);
+    check('and the cursor reaches the newest send', g.membership.cursor.signature, w1.chain.history.get(w1.burnAccount)[0].signature);
+  }
 
-  // A coin with no curve beside it indexes fine — the factory knows the curve. The SITE does not:
-  // redeem.js and status.js both read "launched" as coin AND curve, so this half-filled state
-  // publishes a real ledger that nobody is allowed to spend. run() has to say so, and say which
-  // address is missing, because from the outside it looks like everything worked.
-  console.log('\ncoin filled in, curve left blank: the ledger is real but the site is still shut');
-  const half = await A.run({ config: { coin: COIN, treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: path.join(tmp, 'half.json'), week: 10, now: () => 1700000000000 });
-  check('run() flags it rather than reporting a clean run', half.curveMissing, true);
-  checkThat('the summary names the curve to paste and says the site is still closed',
-    /still closed/.test(half.summary) && half.summary.includes(CURVE.toLowerCase()), half.summary);
-  check('and the ledger it wrote is a real one, with the curve the factory gave it', [half.data.curve, half.data.holders > 0], [CURVE.toLowerCase(), true]);
-  const whole = await A.run({ config: { coin: COIN, curve: CURVE, treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers, taxTransfers }).rpc, out: path.join(tmp, 'whole.json'), week: 10, now: () => 1700000000000 });
-  check('with the curve filled in, nothing is flagged and the ledger is identical', [!!whole.curveMissing, whole.data.curve], [false, CURVE.toLowerCase()]);
+  console.log('\na new week recomputes holdings, and a holding that cannot be read stops the run');
+  await w1.sell(ALICE, OTT(1200000), at(W, 90000));
+  {
+    const aliceAta = await w1.ata(ALICE);
+    const newest = w1.chain.history.get(aliceAta)[0].signature;
+    w1.chain.unreadable.add(newest);
+    const before = fs.readFileSync(ledger, 'utf8');
+    await rejects('a member whose holding cannot be read fails the run', A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W + 1, 3600), prices: prices(100) }), new RegExp('what ' + ALICE + ' held'));
+    check('and nothing is written', fs.readFileSync(ledger, 'utf8') === before, true);
+    w1.chain.unreadable.delete(newest);
+    await A.run({ config: w1.config, rpc: w1.chain.rpc, out: ledger, now: clock(W + 1, 3600), prices: prices(100) });
+    const f = readOut(ledger);
+    check('week W+1\'s snapshot: Alice sold 1.2M, and the later joiners share now', [f.wallets[ALICE].tokens, Object.keys(f.wallets).length], ['2000000000000', 5]);
+    check('the budget follows week W\'s fees, of which there were none', f.budgetUsd, 0);
+    check('every week\'s amount is kept', Object.keys(f.membership.requirements), [String(W - 1), String(W), String(W + 1)]);
+  }
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-  console.log(failures ? `\n${failures} of ${total} check(s) failed` : `\nall ${total} checks passed`);
+  console.log('\ncollections are kept for three weeks, weekly totals for longer');
+  {
+    const r = A.mergeFees({ collections: [{ tx: 'a', at: at(W - 3, 10), slot: 1, usd: 5 }, { tx: 'b', at: at(W - 2, 10), slot: 2, usd: 7 }], weekUsd: { [W - 9]: 1, [W - 3]: 5 }, found: [{ tx: 'c', at: at(W, 10), slot: 3, usd: 2 }], week: W });
+    check('collections older than three weeks are dropped', r.collections.map((c) => c.tx), ['b', 'c']);
+    check('totals keep eight weeks and include the dropped collection\'s week', r.weekUsd, { [W - 3]: 5, [W - 2]: 7, [W]: 2 });
+  }
+
+  console.log('\nsends in a week the keeper never priced');
+  {
+    // The coin launched and people joined in week W-1, but the keeper's first run is in week W.
+    const w2 = await world();
+    const FRANK = wallet();
+    await w2.buy(FRANK, OTT(5000000), at(W - 1, 1000));
+    await w2.join(FRANK, OTT(1800000), at(W - 1, 2000));
+    const out = outPath('late-start');
+    await A.run({ config: w2.config, rpc: w2.chain.rpc, out, now: clock(W, 1000), prices: prices(100) });
+    const f = readOut(out);
+    check('a send before the first priced week is judged against the first amount', [f.members[FRANK] && f.members[FRANK].burned, f.membership.requirements], ['1800000000000', { [W - 1]: '1800000000000', [W]: '1800000000000' }]);
+    check('fillPastWeeks uses the most recent earlier amount when there is one', A.fillPastWeeks({ 10: '5', 12: '7' }, [11, 13, 14], 14), { 10: '5', 11: '5', 12: '7', 13: '7' });
+    check('and never fills the current week', A.fillPastWeeks({ 10: '5' }, [12], 12), { 10: '5' });
+  }
+
+  console.log('\na join amount that cannot be priced');
+  {
+    const w3 = await world();
+    const GINA = wallet();
+    await w3.buy(GINA, OTT(5000000), at(W, 1000));
+    await w3.join(GINA, OTT(1800000), at(W, 2000));
+    const out = outPath('no-price');
+    const r = await A.run({ config: w3.config, rpc: w3.chain.rpc, out, now: clock(W, 3000), prices: prices(new Error('Coinbase and Kraken are down')) });
+    const f = readOut(out);
+    check('leaves this week\'s amount unset', [f.membership.requirement, f.membership.requirements], [null, {}]);
+    check('and this week\'s sends wait, the cursor before them', [Object.keys(f.members).length, f.membership.cursor], [0, null]);
+    checkThat('with a warning, not a failure', r.warnings.some((w) => /could not be priced/.test(w)), r.warnings.join('; '));
+    await A.run({ config: w3.config, rpc: w3.chain.rpc, out, now: clock(W, 4000), prices: prices(100) });
+    check('once priced, they are judged', readOut(out).members[GINA].burned, '1800000000000');
+  }
+
+  console.log('\nthe join amount is held to 2% of the supply');
+  {
+    const w4 = await world({ priceVq: 1000000000n }); // 1 SOL of virtual reserves: a very cheap coin
+    const out = outPath('capped');
+    await A.run({ config: w4.config, rpc: w4.chain.rpc, out, now: clock(W, 100), prices: prices(100) });
+    const req = readOut(out).membership.requirement;
+    check('$5 would buy 50M OTT; the amount is held at 20M', [req.burnTokens, req.burnUnits, req.capped], ['20000000', '20000000000000', true]);
+  }
+
+  console.log('\nthe split caps a whale');
+  {
+    const w5 = await world();
+    const whale = wallet(), small = [wallet(), wallet(), wallet()];
+    await w5.collect(SOL(1), at(W - 1, 100));
+    await w5.buy(whale, OTT(101800000), at(W - 1, 1000));
+    await w5.join(whale, OTT(1800000), at(W - 1, 1100));
+    for (const [i, s] of small.entries()) { await w5.buy(s, OTT(2800000), at(W - 1, 2000 + i * 10)); await w5.join(s, OTT(1800000), at(W - 1, 2005 + i * 10)); }
+    const out = outPath('whale');
+    await A.run({ config: w5.config, rpc: w5.chain.rpc, out, now: clock(W - 1, 5000), prices: prices(100) });
+    await A.run({ config: w5.config, rpc: w5.chain.rpc, out, now: clock(W, 100), prices: prices(100) });
+    const f = readOut(out);
+    check('the budget is $80 among four members; the cap is 3x the $20 average', [f.budgetUsd, f.membership.capUsd], [80, 60]);
+    check('the whale, with 97% of the OTT, is held at $60', f.wallets[whale].allowanceUsd, 60);
+    check('the three small members share the rest equally', small.map((s) => f.wallets[s].allowanceUsd), [6.6666, 6.6666, 6.6666]);
+  }
+
+  console.log('\nthe coin must be the configured one');
+  {
+    const w6 = await world();
+    await rejects('a pump.fun creator other than the treasury is refused', A.run({ config: Object.assign({}, w6.config, { treasury: wallet() }), rpc: w6.chain.rpc, out: outPath('r1'), now: clock(W, 1) }), /pump\.fun creator is .* but esim\.json says the treasury is/);
+    await rejects('a mint owned by another program is refused', A.run({ config: Object.assign({}, w6.config, { tokenProgram: S.PROGRAMS.token }), rpc: w6.chain.rpc, out: outPath('r2'), now: clock(W, 1) }), /belongs to .* but esim\.json says tokenProgram/);
+    await rejects('a burn account that is not the incinerator\'s is refused', A.run({ config: Object.assign({}, w6.config, { membership: Object.assign({}, w6.config.membership, { burnAccount: wallet() }) }), rpc: w6.chain.rpc, out: outPath('r3'), now: clock(W, 1) }), /must be the incinerator's account for the coin/);
+    const w7 = await world({ holderReward: true });
+    await rejects('a holder rewards coin is refused: its creator fee never reaches the treasury', A.run({ config: w7.config, rpc: w7.chain.rpc, out: outPath('r4'), now: clock(W, 1) }), /holder rewards coin/);
+    const w8 = await world({ quoteMint: S.MINTS.usdc });
+    await rejects('a coin not paired with SOL is refused', A.run({ config: w8.config, rpc: w8.chain.rpc, out: outPath('r5'), now: clock(W, 1) }), /SOL-paired coins only/);
+    const w9 = await world({ cashback: true });
+    const r = await A.run({ config: w9.config, rpc: w9.chain.rpc, out: outPath('r6'), now: clock(W, 1), prices: prices(100) });
+    checkThat('a cashback coin is indexed, with a warning', r.warnings.some((w) => /cashback/.test(w)), r.warnings.join('; '));
+    checkThat('none of the refusals wrote a file', ['r1', 'r2', 'r3', 'r4', 'r5'].every((n) => !fs.existsSync(outPath(n))));
+  }
+
+  console.log('\na graduated coin is priced from its pool');
+  {
+    const w10 = await world();
+    w10.chain.accounts.set(w10.curve, { owner: S.PROGRAMS.pump, data: curveData({ complete: true, creator: w10.treasury }) });
+    const pool = await C.poolAddress(w10.coin);
+    const baseVault = randomAddress(), quoteVault = randomAddress();
+    w10.chain.accounts.set(pool, { owner: S.PROGRAMS.pumpAmm, data: poolData({ baseMint: w10.coin, baseVault, quoteVault, coinCreator: w10.treasury, creator: await C.poolAuthorityAddress(w10.coin), virtualQuote: SOL(10) }) });
+    w10.chain.accounts.set(baseVault, { owner: S.PROGRAMS.token2022, data: { parsed: { info: { tokenAmount: { amount: String(OTT(200000000)) } } } } });
+    w10.chain.accounts.set(quoteVault, { owner: S.PROGRAMS.token, data: { parsed: { info: { tokenAmount: { amount: String(SOL(90)) } } } } });
+    const out = outPath('graduated');
+    await A.run({ config: w10.config, rpc: w10.chain.rpc, out, now: clock(W, 1), prices: prices(100) });
+    const req = readOut(out).membership.requirement;
+    // (90 + 10) SOL over 200M OTT is 5e-7 SOL a token, $0.00005 at $100: $5 is 100,000 OTT.
+    check('from effective pool reserves', [req.source, req.burnTokens], ['pool', '100000']);
+    w10.chain.accounts.set(pool, { owner: S.PROGRAMS.pumpAmm, data: poolData({ baseMint: w10.coin, baseVault, quoteVault, coinCreator: wallet(), creator: await C.poolAuthorityAddress(w10.coin) }) });
+    await rejects('after graduation the pool\'s coin creator must be the treasury', A.run({ config: w10.config, rpc: w10.chain.rpc, out: outPath('r7'), now: clock(W, 1) }), /pump\.fun creator is/);
+  }
+
+  console.log('\nhistory goes only to nodes that keep it');
+  {
+    const HEAD = 458000000;
+    const fakeUrl = (first) => async (method) => { if (first instanceof Error) throw first; return method === 'getSlot' ? HEAD : first; };
+    const answers = { 'https://archive.test': fakeUrl(0), 'https://shallow.test': fakeUrl(HEAD - 412000), 'https://down.test': fakeUrl(new Error('HTTP 429')), 'https://old.test': fakeUrl(HEAD - A.DEEP_HISTORY_SLOTS) };
+    check('a node with all of history and one remembering 400 days qualify; two days, or no answer, do not',
+      await A.deepHistoryEndpoints(Object.keys(answers), { makeCall: (url) => answers[url] }), ['https://archive.test', 'https://old.test']);
+    // A public node with two days of ledger answers an older account's history with an empty list.
+    const w12 = await world();
+    const HANK = wallet();
+    await w12.buy(HANK, OTT(5000000), at(W - 1, 1000));
+    await w12.join(HANK, OTT(1800000), at(W - 1, 2000));
+    const shallow = async (method, params) => (method === 'getSignaturesForAddress' ? [] : w12.chain.rpc(method, params));
+    const blind = await A.run({ config: w12.config, rpc: shallow, historyRpc: shallow, out: outPath('shallow'), now: clock(W, 1000), prices: prices(100) });
+    check('read through such a node, the join is simply not there', Object.keys(blind.data.members).length, 0);
+    const seen = await A.run({ config: w12.config, rpc: shallow, historyRpc: w12.chain.rpc, out: outPath('deep'), now: clock(W, 1000), prices: prices(100) });
+    check('so history calls go to the history node, whatever the other one says', [Object.keys(seen.data.members), seen.data.wallets[HANK] && seen.data.wallets[HANK].tokens], [[HANK], '3200000000000']);
+  }
+  {
+    const waits = [];
+    let n = 0;
+    const busy = A.patient(async () => { n++; if (n < 3) throw new Error('getTransaction failed on every Solana endpoint: HTTP 429'); return 7; }, { sleep: async (ms) => { waits.push(ms); } });
+    check('a rate limit is waited out, with growing pauses', [await busy('getTransaction', []), waits], [7, [2000, 4000]]);
+    let m = 0;
+    const wrong = A.patient(async () => { m++; throw new Error('Invalid param: could not find account'); }, { sleep: async () => {} });
+    await rejects('anything else fails at once', wrong('getAccountInfo', []), /Invalid param/);
+    check('without a retry', m, 1);
+    const down = A.patient(async () => { throw new Error('HTTP 503'); }, { tries: 3, sleep: async () => {} });
+    await rejects('and a rate limit that never lifts fails in the end', down('getSlot', []), /HTTP 503/);
+  }
+
+  console.log('\nwrites, comparisons and the rehearsal guard');
+  {
+    const base = { asOf: 1, slot: 2, week: 3, fees: { cursor: { signature: 'x', slot: 1 }, weekUsd: {} }, membership: { cursor: { signature: 'y', slot: 1 }, members: 0 } };
+    check('the clock and the cursors are not changes', A.sameButForTheClock(base, Object.assign({}, base, { asOf: 9, slot: 9, fees: { cursor: { signature: 'z', slot: 2 }, weekUsd: {} }, membership: { cursor: null, members: 0 } })), true);
+    check('anything else is', A.sameButForTheClock(base, Object.assign({}, base, { membership: { cursor: null, members: 1 } })), false);
+    throws('a rehearsal without --out is refused', () => A.rehearsalOut(undefined), /needs --out/);
+    throws('a rehearsal never writes into site/data/', () => A.rehearsalOut(path.join(__dirname, '..', 'site', 'data', 'allowances.json')), /never writes into site\/data/);
+    check('anywhere else is fine', A.rehearsalOut(outPath('rehearsal')), outPath('rehearsal'));
+    check('the CLI flags', A.parseArgs(['--rehearse', 'Mint1', '--out', '/tmp/x.json', '--history-limit', '50']), { out: '/tmp/x.json', rehearse: 'Mint1', historyLimit: 50 });
+    const w11 = await world();
+    const cfg = await A.rehearsalConfig(w11.chain.rpc, { chain: 'solana', coin: '', tokenProgram: '', treasury: '', budgetBps: 8000, membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: '', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } } }, w11.coin);
+    check('a rehearsal takes the program, the creator and the burn account from chain', [cfg.coin, cfg.tokenProgram, cfg.treasury, cfg.membership.burnAccount], [w11.coin, T22, w11.treasury, w11.burnAccount]);
+  }
+
+  fs.rmSync(TMP, { recursive: true, force: true });
+  console.log(failures ? `\n${failures} of ${total} checks FAILED` : `\nall ${total} checks passed`);
   process.exit(failures ? 1 : 0);
-})().catch((e) => { console.error(e && e.stack ? e.stack : e); process.exit(1); });
+})().catch((e) => { console.error(e); process.exit(1); });

@@ -28,7 +28,17 @@ function portfolioUrl() {
   if (base) return base + '/esim/portfolio';
   return PUBLIC_PORTFOLIO_URL;
 }
-const { timedFetch } = require(path.join(__dirname, 'chain.js'));
+/** fetch with a deadline, so a hung portfolio read fails instead of stalling the run. */
+async function timedFetch(url, init = {}, ms = 20000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, Object.assign({}, init, { signal: ctl.signal }));
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('no answer from ' + String(url).replace(/\?.*$/, '') + ' within ' + Math.round(ms / 1000) + 's');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
 
 // Regions first (one eSIM for a whole trip), then the countries people actually fly to.
 const REGIONS = ['europe', 'north-america', 'oceania', 'south-east-asia', 'middle-east', 'asia', 'latam', 'global'];
@@ -117,7 +127,12 @@ async function fetchPortfolio(url, fetcher = timedFetch) {
   return validatePortfolio(j.data);
 }
 
-module.exports = { pick, fetchPortfolio, portfolioUrl, validatePortfolio, prepareConfig, PUBLIC_PORTFOLIO_URL, REGIONS, COUNTRIES, SIZES_GB };
+/** site/config/esim.json as it is kept in the repo: one line per package, everything else indented. */
+function formatConfig(config) {
+  return JSON.stringify(config, null, 1).replace(/\{\n\s+"code"/g, '{ "code"').replace(/,\n\s+"(slug|name|kind|gb|days|priceUsd|regions)"/g, ', "$1"').replace(/"\n\s+\}/g, '" }').replace(/(\d)\n\s+\}/g, '$1 }') + '\n';
+}
+
+module.exports = { pick, fetchPortfolio, portfolioUrl, validatePortfolio, prepareConfig, formatConfig, PUBLIC_PORTFOLIO_URL, REGIONS, COUNTRIES, SIZES_GB };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
@@ -136,8 +151,7 @@ if (require.main === module) {
       `cheapest entry $${Math.min(...packages.map((p) => p.priceUsd)).toFixed(2)}`);
     if (JSON.stringify(current.packages) === JSON.stringify(packages)) console.log('catalogue unchanged');
     if (write) {
-      const text = JSON.stringify(next, null, 1).replace(/\{\n\s+"code"/g, '{ "code"').replace(/,\n\s+"(slug|name|kind|gb|days|priceUsd|regions)"/g, ', "$1"').replace(/"\n\s+\}/g, '" }').replace(/(\d)\n\s+\}/g, '$1 }');
-      fs.writeFileSync(ESIM_PATH, text + '\n');
+      fs.writeFileSync(ESIM_PATH, formatConfig(next));
       console.log('wrote ' + path.relative(process.cwd(), ESIM_PATH));
     }
   }).catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });

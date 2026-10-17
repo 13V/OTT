@@ -1,144 +1,238 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * claim.js — sweep the creator tax out of Pons's fee escrow into the treasury.
+ * claim.js — collect the coin's pump.fun creator fees into the treasury.
  *
- * Every trade against the coin pays its creator tax into Pons's fee escrow, credited to the
- * recipient named at launch. Nothing moves until that recipient calls claim. This is the call, made
- * on a schedule so the tax is never sitting in somebody else's contract for longer than a day:
+ * pump.fun keeps the creator fee on the bonding curve (and, after graduation, in the PumpSwap pool)
+ * until someone pays it out; scripts/pump-fees.js has the details. This sends the one transaction
+ * that sweeps it and pays it to the treasury, on a schedule, so the fees never wait more than a day:
  *
- *   PRIVATE_KEY=… node scripts/claim.js              # claim whatever is there
- *   PRIVATE_KEY=… node scripts/claim.js --dry-run    # say what it would do, send nothing
- *   node scripts/claim.js --min-usd 5 --min-eth 0.01 # floors below which a claim is not worth gas
+ *   TREASURY_PRIVATE_KEY=… node scripts/claim.js            # collect whatever is waiting
+ *   TREASURY_PRIVATE_KEY=… node scripts/claim.js --dry-run  # build, sign and simulate it; send nothing
+ *   node scripts/claim.js --dry-run                         # no key: simulate it unsigned, as the treasury
+ *   node scripts/claim.js --rehearse <mint>                 # any live pump.fun coin, as its creator, simulated
+ *   node scripts/claim.js --min-sol 0.01                    # collect nothing below this (default 0.005 SOL)
  *
- * The key must be the treasury's — the recipient in site/config/esim.json — and the script refuses
- * to run with any other, because a claim from the wrong wallet is not an error, it is a successful
- * transaction that sweeps nothing. What it claims is written to site/data/claims.json (the last
- * hundred, tx hash and amount), which the Data page reads to show when the treasury was last paid.
+ * The key must be the treasury's — the creator wallet in site/config/esim.json, as a base58 secret
+ * key (Phantom's export) or a JSON byte array — and anything else is refused before any call.
+ * Collecting is permissionless and can only ever pay the creator, so the key buys exactly one thing:
+ * paying the transaction fee. The transaction is simulated before it is sent. What a confirmed claim
+ * paid is read back from the chain and appended to site/data/claims.json (the newest hundred), which
+ * the status page reads to show when the treasury was last paid.
  *
- * Both of the escrow's claim shapes are handled: `claimToken(token)` for the whole balance, and
- * `claimToken(token, amount)` if the first is refused, because the escrow's selectors were read off
- * its bytecode rather than its source and the one-argument form is an inference. The call is
- * simulated before it is sent, so a wrong inference costs nothing.
+ * --rehearse is the proof that the account lists are right before there is a coin to claim for: it
+ * builds the same transaction for a real coin, with that coin's creator as the payer, and simulates
+ * it unsigned (sigVerify false, the blockhash replaced). It has no path that sends anything.
  */
 const fs = require('fs');
 const path = require('path');
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
+const C = require(path.join(__dirname, 'solana-chain.js'));
+const P = require(path.join(__dirname, 'pump-fees.js'));
 
 const SITE = path.join(__dirname, '..', 'site');
 const ESIM_PATH = path.join(SITE, 'config', 'esim.json');
-const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
 const CLAIMS_PATH = path.join(SITE, 'data', 'claims.json');
 const KEEP = 100;
+const DEFAULT_MIN_SOL = 0.005;
 
-const lower = (a) => String(a || '').toLowerCase();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const round2 = (x) => Math.round(x * 100) / 100;
+const sol = (lamports) => Number(lamports) / 1e9;
+const fmtSol = (lamports) => sol(lamports).toFixed(6) + ' SOL';
+function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; } }
 
 // ---------------------------------------------------------------------------
 // The pure part.
 // ---------------------------------------------------------------------------
 
-/** Which claims are worth making. Floors keep a Sunday with three cents of tax from burning gas. */
-function plan({ claimableUsd, claimableEth, minUsd = 1, minEth = 0.001 }) {
-  const out = [];
-  if (claimableUsd >= minUsd) out.push({ kind: 'usdg', amount: claimableUsd });
-  if (claimableEth >= minEth) out.push({ kind: 'eth', amount: claimableEth });
-  return out;
+/** What to collect: nothing under the floor, otherwise whichever of curve and pool has fees. */
+function plan({ curveLamports, poolLamports, minLamports }) {
+  const total = curveLamports + poolLamports;
+  if (total < minLamports || total <= 0n) return { sources: [], lamports: total };
+  const sources = [];
+  if (curveLamports > 0n) sources.push('curve');
+  if (poolLamports > 0n) sources.push('pool');
+  return { sources, lamports: total };
 }
 
 /** Append to the log and keep the newest KEEP. Newest last, so the page reads the tail. */
 function appendClaims(existing, entries) {
-  const list = (Array.isArray(existing) ? existing : []).concat(entries);
-  return list.slice(-KEEP);
-}
-
-function readJson(p, fallback) {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; }
+  return (Array.isArray(existing) ? existing : []).concat(entries).slice(-KEEP);
 }
 
 // ---------------------------------------------------------------------------
-// The run. `chain` is scripts/chain.js or a test double with the same four methods.
+// The chain.
 // ---------------------------------------------------------------------------
-async function run({ chain, config, addresses, treasury, minUsd, minEth, dryRun = false, out = CLAIMS_PATH, now = () => Date.now(), log = () => {} }) {
-  const want = lower(config.treasury);
-  if (!want) throw new Error('site/config/esim.json has no treasury yet; nothing to claim for');
-  if (lower(treasury) !== want) {
-    throw new Error(`the key is for ${treasury}, but the treasury is ${config.treasury}; refusing to claim from the wrong wallet`);
+
+/**
+ * Simulate `wire`. Signed, it is checked as it will be sent; `unsigned` skips the signature check
+ * and replaces the blockhash, which is what a rehearsal or a key-free dry run needs. `watch` asks
+ * for those accounts' state afterwards. Throws with the program's last log lines on failure.
+ */
+async function simulate(rpc, wire, { unsigned = false, watch = [] } = {}) {
+  const opts = { encoding: 'base64', commitment: 'confirmed' };
+  if (unsigned) { opts.sigVerify = false; opts.replaceRecentBlockhash = true; } else opts.sigVerify = true;
+  if (watch.length) opts.accounts = { encoding: 'base64', addresses: watch };
+  const r = await rpc('simulateTransaction', [S.encodeBase64(wire), opts]);
+  const value = r && r.value;
+  if (!value) throw new Error('the simulation returned nothing');
+  if (value.err) {
+    const logs = (value.logs || []).slice(-6).join(' | ');
+    throw new Error('the claim would fail: ' + JSON.stringify(value.err) + (logs ? ' — ' + logs : ''));
   }
-  const escrow = addresses.pons.feeEscrow;
-  const usdg = addresses.usdg;
-  const decimals = Number(addresses.usdgDecimals || 6);
+  return value;
+}
 
-  const [usdgUnits] = await chain.call(escrow, 'balanceOfToken(address,address)', [treasury, usdg], ['uint256']);
-  const [wei] = await chain.call(escrow, 'balanceOf(address)', [treasury], ['uint256']);
-  const claimableUsd = Number(usdgUnits) / 10 ** decimals;
-  const claimableEth = Number(wei) / 1e18;
-  log(`claimable: $${claimableUsd.toFixed(2)} USDG, ${claimableEth.toFixed(6)} ETH`);
+/** The lamports a watched account holds after a simulation, or null. */
+function simulatedLamports(value, i = 0) {
+  const a = value && Array.isArray(value.accounts) ? value.accounts[i] : null;
+  return a && a.lamports !== undefined && a.lamports !== null ? BigInt(a.lamports) : null;
+}
 
-  const todo = plan({ claimableUsd, claimableEth, minUsd, minEth });
-  if (!todo.length) return { claimed: [], claimableUsd, claimableEth, summary: 'claim: nothing above the floor; no transaction sent' };
+/**
+ * Wait for `signature` to confirm. A wait that runs out is not proof it failed: if the
+ * transaction is on chain and succeeded, that is a confirmation too. Anything else rethrows.
+ */
+async function confirmed(rpc, signature, options, log = () => {}) {
+  try {
+    return await C.confirmTransaction(rpc, signature, options);
+  } catch (e) {
+    let tx = null;
+    try { tx = await C.getTransaction(rpc, signature); } catch (err) { tx = null; }
+    if (!tx || !tx.meta || tx.meta.err !== null) throw e;
+    log(`  ${e.message}, but it is on chain and succeeded`);
+    return 'confirmed';
+  }
+}
 
-  const claimed = [];
-  // Written after each item rather than after the loop. `todo` can hold both a USDG and an ether
-  // claim, and the loop throws when every call shape for one of them reverts — which the escrow's
-  // selectors being read off its bytecode rather than its source makes a real possibility. With
-  // one write at the end, a USDG claim that had already been sent, mined and confirmed was
-  // discarded from the log by the ether claim failing after it: a real transaction, on chain, with
-  // no record anywhere but that one run's console.
-  // Read once, up front: writing after every item means re-reading what this run just wrote, and
-  // appending `claimed` to that would record each claim again on every subsequent write.
-  const before = readJson(out, []);
-  const record = () => {
-    if (dryRun || !claimed.length) return;
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, JSON.stringify(appendClaims(before, claimed), null, 1) + '\n');
+/** What a confirmed claim paid `treasury`: its balance change plus the fee it paid, or null if unreadable. */
+async function collectedBy(rpc, signature, treasury, { attempts = 5, pauseMs = 2000 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    let tx = null;
+    try { tx = await C.getTransaction(rpc, signature); } catch (e) { tx = null; }
+    if (tx && tx.meta) {
+      const delta = S.lamportsChange(tx, treasury);
+      if (delta !== null) return delta + (S.feePayer(tx) === treasury ? BigInt(tx.meta.fee || 0) : 0n);
+    }
+    if (i + 1 < attempts) await sleep(pauseMs);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The run.
+// ---------------------------------------------------------------------------
+async function run({ rpc, config, key = null, minSol = DEFAULT_MIN_SOL, dryRun = false, microLamports, out = CLAIMS_PATH,
+  now = () => Date.now(), log = () => {}, solUsd = () => C.solUsdNow(), confirmOptions = {}, measureOptions = {} }) {
+  const treasury = config.treasury;
+  if (!S.isAddress(treasury)) throw new Error('site/config/esim.json has no treasury yet; nothing to claim for');
+  if (!S.isAddress(config.coin)) throw new Error('site/config/esim.json has no coin yet; nothing to claim');
+  if (key && key.address !== treasury) {
+    throw new Error(`wrong wallet: the key is for ${key.address}, but the treasury is ${treasury}; refusing to claim from the wrong wallet`);
+  }
+  if (!key && !dryRun) throw new Error('TREASURY_PRIVATE_KEY is required to claim; use --dry-run to simulate without it');
+
+  const waiting = await P.claimable(rpc, { mint: config.coin, creator: treasury });
+  log(`waiting: ${fmtSol(waiting.curveLamports)} from the curve, ${fmtSol(waiting.poolLamports)} from the pool`
+    + (waiting.accounts.pool ? '' : ' (not graduated)'));
+  const p = plan({ curveLamports: waiting.curveLamports, poolLamports: waiting.poolLamports, minLamports: BigInt(Math.round(minSol * 1e9)) });
+  if (!p.sources.length) {
+    return { claimed: [], waitingLamports: p.lamports, summary: `claim: ${fmtSol(p.lamports)} waiting, under the ${minSol} SOL floor; no transaction sent` };
+  }
+
+  const instructions = P.claimInstructions({ payer: treasury, accounts: waiting.accounts, sources: p.sources, microLamports });
+  const { blockhash, lastValidBlockHeight } = await C.latestBlockhash(rpc);
+  let wire, signature = null;
+  if (key) ({ wire, signature } = C.signedTransaction({ payer: treasury, blockhash, instructions, signers: [key] }));
+  else wire = S.wireTransaction(S.compileMessage({ payer: treasury, blockhash, instructions }));
+  const sim = await simulate(rpc, wire, { unsigned: !key, watch: [treasury] });
+  log(`  simulated: ${sim.unitsConsumed || '?'} compute units, ok`);
+  if (dryRun) {
+    return { claimed: [], dryRun: true, plannedLamports: p.lamports, sources: p.sources,
+      summary: `claim: would collect ${fmtSol(p.lamports)} from the ${p.sources.join(' and ')} (dry run, nothing sent)` };
+  }
+
+  const sent = await C.sendTransaction(rpc, wire);
+  if (sent !== signature) log(`  the node answered ${sent} for ${signature}`);
+  log(`  sent ${signature}`);
+  await confirmed(rpc, signature, Object.assign({ wire, lastValidBlockHeight }, confirmOptions), log);
+  // What the chain says it paid, not what was waiting a moment before: a trade can add to the fee
+  // between the reading and the claim, and the ledger values exactly this figure.
+  const measured = await collectedBy(rpc, signature, treasury, measureOptions);
+  const lamports = measured !== null && measured > 0n ? measured : p.lamports;
+  let price = null;
+  try { price = await solUsd(); } catch (e) { log(`  no SOL price for the log: ${e.message}`); }
+  const entry = {
+    at: Math.floor(now() / 1000), lamports: lamports.toString(), sol: sol(lamports), solUsd: price,
+    usd: price === null ? null : round2(sol(lamports) * price), tx: signature, sources: p.sources, dryRun: false,
   };
-  for (const item of todo) {
-    // One-argument first, two-argument if the escrow wants the amount spelled out.
-    const candidates = item.kind === 'usdg'
-      ? [['claimToken(address)', [usdg]], ['claimToken(address,uint256)', [usdg, usdgUnits]]]
-      : [['claim()', []], ['claim(uint256)', [wei]]];
-    let sent = null, lastErr = null;
-    for (const [sig, args] of candidates) {
-      const data = chain.encodeCall(sig, args);
-      try {
-        await chain.rpc('eth_call', [{ from: treasury, to: escrow, data }, 'latest']);
-      } catch (e) { lastErr = e; log(`  ${sig} would revert (${e.message.slice(0, 80)}); trying the next shape`); continue; }
-      if (dryRun) { log(`  [dry-run] would send ${sig}`); sent = { sig, transactionHash: null }; break; }
-      const receipt = await chain.send({ to: escrow, data });
-      sent = { sig, transactionHash: receipt.transactionHash };
-      break;
-    }
-    if (!sent) {
-      // Whatever was claimed before this one is on chain and has to stay in the log, even though
-      // this run is about to fail.
-      record();
-      throw new Error(`could not claim ${item.kind}: every claim shape reverts (${lastErr && lastErr.message})`);
-    }
-    claimed.push({ at: Math.floor(now() / 1000), kind: item.kind, amount: item.amount, call: sent.sig, txHash: sent.transactionHash, dryRun });
-    log(`  claimed ${item.kind} ${item.amount}${sent.transactionHash ? ' in ' + sent.transactionHash : ''}`);
-    record();
-  }
-
-  const summary = `claim: ${claimed.map((c) => `${c.kind} ${c.amount}`).join(', ')}${dryRun ? ' (dry run, nothing sent)' : ' -> ' + path.relative(process.cwd(), out)}`;
-  return { claimed, claimableUsd, claimableEth, summary };
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, JSON.stringify(appendClaims(readJson(out, []), [entry]), null, 1) + '\n');
+  return { claimed: [entry], summary: `claim: collected ${fmtSol(lamports)} from the ${p.sources.join(' and ')} in ${signature} -> ${path.relative(process.cwd(), out)}` };
 }
 
-module.exports = { plan, appendClaims, run, CLAIMS_PATH };
+/**
+ * The same claim for any live pump.fun coin, as its creator, simulated unsigned. Never sends.
+ * Returns what was waiting, the simulated change in the creator's balance and the compute used.
+ */
+async function rehearse({ rpc, mint, microLamports, log = () => {} }) {
+  if (!S.isAddress(mint)) throw new Error('--rehearse needs a coin mint address');
+  let state = await C.coinState(rpc, mint);
+  const creator = state.curveState.creator;
+  if (state.poolState && state.poolState.coinCreator !== creator) {
+    log(`  the pool's coin creator (${state.poolState.coinCreator}) is not the curve's (${creator}); rehearsing the curve part only`);
+    state = Object.assign({}, state, { pool: null, poolState: null });
+  }
+  const waiting = await P.claimable(rpc, { mint, creator, state });
+  // Both parts, whatever is waiting: the point is to prove every account list, empty or not.
+  const sources = waiting.accounts.pool ? ['curve', 'pool'] : ['curve'];
+  const instructions = P.claimInstructions({ payer: creator, accounts: waiting.accounts, sources, microLamports });
+  const { blockhash } = await C.latestBlockhash(rpc);
+  const wire = S.wireTransaction(S.compileMessage({ payer: creator, blockhash, instructions }));
+  const before = await rpc('getBalance', [creator, { commitment: 'confirmed' }]);
+  const sim = await simulate(rpc, wire, { unsigned: true, watch: [creator] });
+  const after = simulatedLamports(sim);
+  const pre = before && before.value !== undefined ? BigInt(before.value) : null;
+  return {
+    mint, creator, graduated: !!waiting.accounts.pool, source: state.source, sources,
+    waitingCurve: waiting.curveLamports, waitingPool: waiting.poolLamports,
+    unitsConsumed: sim.unitsConsumed || null,
+    balanceChange: pre !== null && after !== null ? after - pre : null,
+    logs: (sim.logs || []).filter((l) => /invoke|success|failed|Error/i.test(l)).slice(0, 40),
+  };
+}
+
+module.exports = { plan, appendClaims, simulate, simulatedLamports, confirmed, collectedBy, run, rehearse, CLAIMS_PATH, DEFAULT_MIN_SOL };
 
 if (require.main === module) {
-  const chain = require(path.join(__dirname, 'chain.js'));
-  const flag = (name, dflt) => { const v = chain.flagValue(name); return v === undefined ? dflt : Number(v); };
-  const key = process.env.PRIVATE_KEY || '';
-  if (!key) { console.error('PRIVATE_KEY is required — the treasury\'s key, in the environment, never in a file'); process.exit(1); }
-  run({
-    chain,
-    config: readJson(ESIM_PATH, {}),
-    addresses: readJson(ADDRESSES_PATH, {}),
-    treasury: chain.secp.addressOf(key),
-    minUsd: flag('--min-usd', 1),
-    minEth: flag('--min-eth', 0.001),
-    dryRun: chain.dryRun,
-    log: (m) => process.stderr.write(m + '\n'),
-  })
-    .then(({ summary }) => console.log(summary))
-    .catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
+  const argv = process.argv.slice(2);
+  const arg = (name) => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : undefined; };
+  const has = (name) => argv.includes('--' + name);
+  const log = (m) => process.stderr.write(m + '\n');
+  const rpc = C.makeRpc({ log });
+  const priority = arg('priority') === undefined ? undefined : Number(arg('priority'));
+  if (has('rehearse')) {
+    rehearse({ rpc, mint: arg('rehearse'), microLamports: priority, log })
+      .then((r) => console.log(JSON.stringify(r, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 1)))
+      .catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
+  } else {
+    const secret = process.env.TREASURY_PRIVATE_KEY || process.env.PRIVATE_KEY || '';
+    let key = null;
+    try { key = secret ? C.keypairFromSecret(secret) : null; } catch (e) { console.error('TREASURY_PRIVATE_KEY: ' + e.message); process.exit(1); }
+    const dryRun = has('dry-run');
+    const config = readJson(ESIM_PATH, {});
+    // Before launch there is nothing to collect, and an unattended keeper should say so and stop
+    // cleanly rather than fail every day and open an issue about it.
+    if (!S.isAddress(config.coin) || !S.isAddress(config.treasury)) { console.log('claim: the coin is not launched yet (no coin or treasury in site/config/esim.json); nothing to claim'); process.exit(0); }
+    if (!key && !dryRun) { console.error('TREASURY_PRIVATE_KEY is required — the treasury\'s Solana secret key, in the environment, never in a file'); process.exit(1); }
+    run({
+      rpc, config, key, dryRun, microLamports: priority,
+      minSol: arg('min-sol') === undefined ? DEFAULT_MIN_SOL : Number(arg('min-sol')),
+      out: arg('out') ? path.resolve(process.cwd(), arg('out')) : CLAIMS_PATH,
+      log,
+    })
+      .then(({ summary }) => console.log(summary))
+      .catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
+  }
 }

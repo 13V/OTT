@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * The claim keeper and the treasury monitor, offline.
- *
- * Both scripts have a pure core and a thin shell around chain.js; the core is what is tested. The
- * claim run is driven with a fake chain that records what it was asked to simulate and send, so the
- * two things that matter — that a wrong key is refused before any call, and that a claim shape
- * which reverts in simulation is never sent — are asserted rather than hoped.
+ * The treasury monitor (scripts/treasury.js), offline: the arithmetic the card and the alert rely
+ * on, and the run against a fake Solana RPC — the treasury's SOL, the creator fees still waiting in
+ * pump.fun's vaults for a coin on its curve and for a graduated one (real mainnet accounts from
+ * test/fixtures/solana/pump-accounts.json), each read failing on its own, and the file before
+ * launch. scripts/claim.js has its own suite, test/claim.test.js.
  *
  *   node test/treasury.test.js
  */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-
-const C = require(path.join(__dirname, '..', 'scripts', 'claim.js'));
+const crypto = require('crypto');
 const T = require(path.join(__dirname, '..', 'scripts', 'treasury.js'));
-const chainLib = require(path.join(__dirname, '..', 'scripts', 'chain.js'));
+const S = require(path.join(__dirname, '..', 'site', 'solana.js'));
+const C = require(path.join(__dirname, '..', 'scripts', 'solana-chain.js'));
+const P = require(path.join(__dirname, '..', 'scripts', 'pump-fees.js'));
+const PUMP = require(path.join(__dirname, 'fixtures', 'solana', 'pump-accounts.json'));
 
 let failures = 0, checks = 0;
 const check = (what, got, want) => {
@@ -24,17 +25,11 @@ const check = (what, got, want) => {
   const ok = JSON.stringify(got) === JSON.stringify(want);
   if (ok) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}\n       got  ${JSON.stringify(got)}\n       want ${JSON.stringify(want)}`); }
 };
-const rejects = async (what, p, re) => {
-  checks++;
-  try { await p; failures++; console.error(`  FAIL ${what}: did not throw`); }
-  catch (e) { if (re.test(e.message)) console.log(`  ok   ${what}`); else { failures++; console.error(`  FAIL ${what}: threw "${e.message}"`); } }
-};
 
-const TREASURY = '0x3333333333333333333333333333333333333333';
-const ESCROW = '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e';
-const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
-const addresses = { usdg: USDG, usdgDecimals: 6, pons: { feeEscrow: ESCROW } };
+const wallet = () => S.encodeBase58(new Uint8Array(crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12)));
+const TREASURY = wallet();
 const config = {
+  coin: PUMP.curveCoin.mint,
   treasury: TREASURY,
   packages: [
     { code: 'EU-35_1_7', packageCode: 'P2CYMUS93', priceUsd: 0.62 },
@@ -42,84 +37,29 @@ const config = {
   ],
 };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'treasury-'));
+const withData = (account, base64) => Object.assign({}, account, { data: [base64, 'base64'] });
+function patch(base64, edits) {
+  const b = Buffer.from(base64, 'base64');
+  for (const [at, value] of edits) {
+    if (typeof value === 'string') Buffer.from(S.addressBytes(value)).copy(b, at);
+    else b.writeBigUInt64LE(BigInt(value), at);
+  }
+  return b.toString('base64');
+}
 
-/** A chain that holds `usd` and `eth` claimable and either accepts or reverts a given claim shape. */
-function fakeChain({ usd = 0, eth = 0, revert = [] }) {
-  const log = { simulated: [], sent: [] };
-  return {
-    log,
-    encodeCall: chainLib.encodeCall,
-    async call(to, sig) {
-      if (sig === 'balanceOfToken(address,address)') return [BigInt(Math.round(usd * 1e6))];
-      if (sig === 'balanceOf(address)') return [BigInt(Math.round(eth * 1e18))];
-      throw new Error('unexpected call ' + sig);
-    },
-    async rpc(method, params) {
-      if (method !== 'eth_call') throw new Error('unexpected rpc ' + method);
-      const sel = params[0].data.slice(0, 10);
-      log.simulated.push(sel);
-      if (revert.includes(sel)) throw new Error('execution reverted');
-      return '0x';
-    },
-    async send({ to, data }) {
-      log.sent.push({ to, sel: data.slice(0, 10) });
-      return { transactionHash: '0x' + 'ab'.repeat(32), status: '0x1' };
-    },
+/** A fake RPC over accounts; `down` names methods that fail. */
+function fakeRpc({ accounts = {}, lamports = 0, down = [] }) {
+  return async (method, params) => {
+    if (down.includes(method)) throw new Error(method + ' unavailable');
+    if (method === 'getBalance') return { value: lamports };
+    if (method === 'getAccountInfo') return { value: accounts[params[0]] || null };
+    if (method === 'getMultipleAccounts') return { value: params[0].map((a) => accounts[a] || null) };
+    throw new Error('unexpected ' + method);
   };
 }
-const SEL = {
-  claimToken1: chainLib.selector('claimToken(address)'),
-  claimToken2: chainLib.selector('claimToken(address,uint256)'),
-  claim0: chainLib.selector('claim()'),
-  claim1: chainLib.selector('claim(uint256)'),
-};
 
 (async () => {
-  console.log('claim: the plan');
-  check('nothing above the floors is nothing to do', C.plan({ claimableUsd: 0.5, claimableEth: 0.0001 }), []);
-  check('both above the floors is both', C.plan({ claimableUsd: 12, claimableEth: 0.5 }), [{ kind: 'usdg', amount: 12 }, { kind: 'eth', amount: 0.5 }]);
-  check('floors are settable', C.plan({ claimableUsd: 3, claimableEth: 0, minUsd: 5 }), []);
-  check('the log keeps the newest hundred', C.appendClaims(Array.from({ length: 120 }, (_, i) => ({ i })), [{ i: 'new' }]).length, 100);
-
-  console.log('\nclaim: the run');
-  await rejects('a key that is not the treasury is refused before any call', C.run({ chain: fakeChain({ usd: 50 }), config, addresses, treasury: '0x4444444444444444444444444444444444444444' }), /wrong wallet/);
-  await rejects('no treasury configured is refused', C.run({ chain: fakeChain({ usd: 50 }), config: { treasury: '' }, addresses, treasury: TREASURY }), /no treasury/);
-
-  let chain = fakeChain({ usd: 0.2, eth: 0 });
-  let r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c1.json') });
-  check('twenty cents claimable sends nothing', [r.claimed, chain.log.sent], [[], []]);
-
-  chain = fakeChain({ usd: 41.7, eth: 0 });
-  r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c2.json'), now: () => 1_800_000_000_000 });
-  check('the one-argument claim is simulated first, then sent', [chain.log.simulated, chain.log.sent.map((s) => s.sel)], [[SEL.claimToken1], [SEL.claimToken1]]);
-  check('and logged with its hash', JSON.parse(fs.readFileSync(path.join(tmp, 'c2.json'), 'utf8')), [{ at: 1800000000, kind: 'usdg', amount: 41.7, call: 'claimToken(address)', txHash: '0x' + 'ab'.repeat(32), dryRun: false }]);
-
-  // A claim already sent, mined and confirmed must survive a LATER item failing in the same run.
-  // `todo` puts USDG before ether, and the loop throws when every call shape for one of them
-  // reverts — which the escrow's selectors being read off its bytecode rather than its source
-  // makes a live possibility. Writing the log once at the end meant a real, on-chain transaction
-  // vanished from the record because the thing after it went wrong.
-  chain = fakeChain({ usd: 41.7, eth: 1.5, revert: [SEL.claim0, SEL.claim1] });
-  const partial = path.join(tmp, 'c-partial.json');
-  await rejects('a run whose second claim cannot be made fails', C.run({ chain, config, addresses, treasury: TREASURY, out: partial, now: () => 1_800_000_000_000 }), /every claim shape reverts/);
-  check('and the first claim, which really happened, is still in the log',
-    JSON.parse(fs.readFileSync(partial, 'utf8')).map((c) => [c.kind, c.amount, c.txHash]),
-    [['usdg', 41.7, '0x' + 'ab'.repeat(32)]]);
-  check('the ether claim was attempted and is not in the log', chain.log.sent.map((x) => x.sel), [SEL.claimToken1]);
-
-  chain = fakeChain({ usd: 41.7, eth: 0, revert: [SEL.claimToken1] });
-  r = await C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c3.json') });
-  check('a shape that reverts in simulation is never sent; the next shape is', [chain.log.simulated, chain.log.sent.map((s) => s.sel)], [[SEL.claimToken1, SEL.claimToken2], [SEL.claimToken2]]);
-
-  chain = fakeChain({ usd: 41.7, eth: 0, revert: [SEL.claimToken1, SEL.claimToken2] });
-  await rejects('every shape reverting is an error, not a silent nothing', C.run({ chain, config, addresses, treasury: TREASURY, out: path.join(tmp, 'c4.json') }), /every claim shape reverts/);
-
-  chain = fakeChain({ usd: 9, eth: 0.02 });
-  r = await C.run({ chain, config, addresses, treasury: TREASURY, dryRun: true, out: path.join(tmp, 'c5.json') });
-  check('a dry run simulates both and sends neither', [chain.log.simulated, chain.log.sent, r.claimed.map((c) => c.kind)], [[SEL.claimToken1, SEL.claim0], [], ['usdg', 'eth']]);
-  check('and writes no log', fs.existsSync(path.join(tmp, 'c5.json')), false);
-
-  console.log('\ntreasury: the arithmetic');
+  console.log('treasury: the arithmetic');
   const now = Date.parse('2026-09-14T12:00:00Z');
   const day = 86400 * 1000;
   const orders = [
@@ -142,42 +82,86 @@ const SEL = {
   check('status: fine with no spend yet', T.statusOf({ balanceUsd: 200, runwayDays: null }), 'funded');
   // A pool can be comfortably full by every backward-looking measure and still be unable to pay
   // what this week has already promised — which is the shape a good week takes, not a bad one.
-  check('status: full by the old measure, short of what this week promised',
-    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 4000 }), 'behind');
-  check('status: enough of the promise covered to be getting on with',
-    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 300 }), 'funded');
-  check('status: nothing promised yet is not behind',
-    T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 0 }), 'funded');
+  check('status: full by the old measure, short of what this week promised', T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 4000 }), 'behind');
+  check('status: enough of the promise covered to be getting on with', T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 300 }), 'funded');
+  check('status: nothing promised yet is not behind', T.statusOf({ balanceUsd: 200, runwayDays: 400, owedUsd: 0 }), 'funded');
   check('status: empty still beats behind', T.statusOf({ balanceUsd: 0, runwayDays: null, owedUsd: 4000 }), 'empty');
+  check('owed: this week\'s budget less what this week redeemed', T.owing({ orders, config, budgetUsd: 25, weekStartMs: now - 3 * day }), { budgetUsd: 25, redeemedUsd: 5.22, owedUsd: 19.78 });
+  check('owed: no budget, no figure', T.owing({ orders, config, budgetUsd: undefined, weekStartMs: 0 }), { budgetUsd: null, redeemedUsd: null, owedUsd: null });
+  check('the last claim as the card shows it', T.lastClaimOf([{ at: 1, sol: 0.1 }, { at: 1789300000, lamports: '120000000', sol: 0.12, solUsd: 104, usd: 12.48, tx: 'sig', sources: ['curve'] }]),
+    { at: 1789300000, sol: 0.12, usd: 12.48, tx: 'sig' });
+  check('no claims yet', T.lastClaimOf([]), null);
 
   console.log('\ntreasury: the run');
-  const rpc = async (method, params) => {
-    const sel = params[0].data.slice(0, 10);
-    if (sel === chainLib.selector('balanceOfToken(address,address)')) return '0x' + (123_450000n).toString(16).padStart(64, '0');
-    if (sel === chainLib.selector('balanceOf(address)')) return '0x' + (67_890000n).toString(16).padStart(64, '0');
-    throw new Error('unexpected ' + sel);
+  const curveCoin = PUMP.curveCoin, gradCoin = PUMP.graduatedCoin;
+  const vault = await C.creatorVaultAddress(TREASURY);
+  const curveAccounts = {
+    // Our treasury as the curve's creator, with 0.002 SOL waiting on the curve.
+    [curveCoin.curve]: withData(curveCoin.curveAccount, patch(curveCoin.curveAccount.data[0], [[49, TREASURY], [125, 2000000]])),
+    [vault]: { lamports: Number(P.RENT_EXEMPT_EMPTY) + 30000000, owner: S.PROGRAMS.system, data: ['', 'base64'] },
   };
   const provider = { name: 'fake', async balanceUsd() { return 412; }, async listOrders() { return orders; } };
   const lightning = { name: 'wholesale', async balanceUsd() { return 412; }, async balance() { return { sats: 515000, usd: 412, usdPerSat: 0.0008 }; }, async listOrders() { return orders; } };
-  const claims = [{ at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }];
-  r = await T.run({ rpc, config, addresses, provider, claims, now: () => now, out: path.join(tmp, 't1.json') });
+  const claims = [{ at: 1789300000, lamports: '41700000', sol: 0.0417, solUsd: 100, usd: 4.17, tx: 'sigA', sources: ['curve'], dryRun: false }];
+  const allowancesPath = path.join(tmp, 'allowances.json');
+  fs.writeFileSync(allowancesPath, JSON.stringify({ week: 2963, budgetUsd: 0 }));
+  const run = (over) => T.run(Object.assign({ rpc: fakeRpc({ accounts: curveAccounts, lamports: 1500000000 }), config, provider, claims, now: () => now,
+    out: path.join(tmp, 't.json'), allowancesPath, solUsd: async () => 100 }, over));
+
+  let r = await run({});
   check('the file has every number the card needs', r.data, {
-    asOf: Math.floor(now / 1000), treasury: TREASURY, escrowClaimableUsd: 123.45, walletUsd: 67.89,
+    asOf: Math.floor(now / 1000), treasury: TREASURY, solUsd: 100,
+    walletSol: 1.5, walletUsd: 150, claimableSol: 0.032, claimableUsd: 3.2,
     reseller: { name: 'fake', balanceUsd: 412, asOf: Math.floor(now / 1000) },
     spend30dUsd: 10.44, redemptions30d: 4, perDayUsd: 0.35, runwayDays: 1177,
     weekBudgetUsd: 0, weekRedeemedUsd: 0, owedUsd: 0,
-    lastClaim: { at: 1789300000, kind: 'usdg', amount: 41.7, txHash: '0xabc' }, status: 'funded',
+    lastClaim: { at: 1789300000, sol: 0.0417, usd: 4.17, tx: 'sigA' }, status: 'funded',
   });
   process.env.LN_PAYER = 'blink';
-  r = await T.run({ rpc, config, addresses, provider: lightning, claims, now: () => now, out: path.join(tmp, 't1b.json') });
+  r = await run({ provider: lightning, out: path.join(tmp, 't1b.json') });
   check('a Lightning-paid provider also writes the sats and the wallet', r.data.reseller, { name: 'wholesale', balanceUsd: 412, asOf: Math.floor(now / 1000), sats: 515000, wallet: 'blink' });
-  r = await T.run({ rpc, config, addresses, provider: null, claims: [], now: () => now, out: path.join(tmp, 't2.json') });
-  check('without a provider the reseller side is null and the status unknown', [r.data.reseller, r.data.status, r.data.escrowClaimableUsd], [null, 'unknown', 123.45]);
+
+  {
+    const ammVault = await C.ammCreatorVaultAccount(TREASURY);
+    const gradAccounts = {
+      [gradCoin.curve]: withData(gradCoin.curveAccount, patch(gradCoin.curveAccount.data[0], [[49, TREASURY], [125, 0]])),
+      [gradCoin.pool]: withData(gradCoin.poolAccount, patch(gradCoin.poolAccount.data[0], [[211, TREASURY], [279, 250000000]])),
+      [gradCoin.baseVault]: gradCoin.baseVaultAccount, [gradCoin.quoteVault]: gradCoin.quoteVaultAccount,
+      [vault]: { lamports: Number(P.RENT_EXEMPT_EMPTY), owner: S.PROGRAMS.system, data: ['', 'base64'] },
+      [ammVault]: { data: { parsed: { info: { tokenAmount: { amount: '750000000' } } } } },
+    };
+    r = await run({ rpc: fakeRpc({ accounts: gradAccounts, lamports: 2000000000 }), config: Object.assign({}, config, { coin: gradCoin.mint }), out: path.join(tmp, 't-grad.json') });
+    check('a graduated coin: the pool\'s waiting fee and the PumpSwap vault, not the vault\'s rent', [r.data.claimableSol, r.data.claimableUsd, r.data.walletSol], [1, 100, 2]);
+  }
+
+  r = await run({ provider: null, claims: [], out: path.join(tmp, 't2.json') });
+  check('without a provider the reseller side is null and the status unknown', [r.data.reseller, r.data.status, r.data.claimableSol], [null, 'unknown', 0.032]);
   const broken = { name: 'fake', async balanceUsd() { throw new Error('HTTP 503'); } };
-  r = await T.run({ rpc, config, addresses, provider: broken, claims: [], now: () => now, out: path.join(tmp, 't3.json') });
+  r = await run({ provider: broken, claims: [], out: path.join(tmp, 't3.json') });
   check('a reseller that cannot answer is recorded as such, not thrown', [r.data.reseller.balanceUsd, r.data.reseller.error, r.data.status], [null, 'HTTP 503', 'unknown']);
-  r = await T.run({ rpc: async () => { throw new Error('no route'); }, config, addresses, provider, claims: [], now: () => now, out: path.join(tmp, 't4.json') });
-  check('a chain that cannot answer leaves nulls and keeps the reseller reading', [r.data.escrowClaimableUsd, r.data.walletUsd, r.data.reseller.balanceUsd], [null, null, 412]);
+  r = await run({ rpc: async () => { throw new Error('no route'); }, out: path.join(tmp, 't4.json') });
+  check('a chain that cannot answer leaves nulls and keeps the reseller reading', [r.data.walletSol, r.data.claimableSol, r.data.walletUsd, r.data.reseller.balanceUsd], [null, null, null, 412]);
+  r = await run({ rpc: fakeRpc({ accounts: curveAccounts, lamports: 1500000000, down: ['getAccountInfo'] }), out: path.join(tmp, 't5.json') });
+  check('one failed read costs one figure', [r.data.walletSol, r.data.claimableSol], [1.5, null]);
+  r = await run({ solUsd: async () => { throw new Error('no price'); }, out: path.join(tmp, 't6.json') });
+  check('no SOL price: the SOL figures stay, the dollar ones are null', [r.data.walletSol, r.data.walletUsd, r.data.claimableUsd, r.data.solUsd], [1.5, null, null, null]);
+  r = await run({ rpc: fakeRpc({ accounts: { [curveCoin.curve]: withData(curveCoin.curveAccount, patch(curveCoin.curveAccount.data[0], [[49, wallet()]])) }, lamports: 1 }), out: path.join(tmp, 't7.json') });
+  check('a coin created by another wallet is not counted as ours', r.data.claimableSol, null);
+
+  let calls = 0;
+  r = await run({ config: Object.assign({}, config, { coin: '', treasury: '' }), rpc: async () => { calls++; throw new Error('no'); }, solUsd: async () => { calls++; return 1; }, out: path.join(tmp, 't8.json') });
+  check('before launch the chain side is skipped and the file still written', [calls, r.data.treasury, r.data.walletSol, r.data.claimableSol, r.data.solUsd, fs.existsSync(path.join(tmp, 't8.json'))], [0, '', null, null, null, true]);
+  r = await run({ config: Object.assign({}, config, { coin: '' }), out: path.join(tmp, 't9.json') });
+  check('a treasury before the coin: its SOL is read, no fees yet', [r.data.walletSol, r.data.claimableSol], [1.5, null]);
+
+  // The workflows commit only when a data file changed; the clock and the price alone must not.
+  const out = path.join(tmp, 't10.json');
+  await run({ out, now: () => now });
+  const first = fs.readFileSync(out, 'utf8');
+  await run({ out, now: () => now + 60000, solUsd: async () => 100.001 });
+  check('a later run with nothing else changed leaves the file alone', fs.readFileSync(out, 'utf8'), first);
+  await run({ out, now: () => now + 120000, rpc: fakeRpc({ accounts: curveAccounts, lamports: 1600000000 }) });
+  check('a changed balance rewrites it', JSON.parse(fs.readFileSync(out, 'utf8')).walletSol, 1.6);
 
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
   process.exit(failures ? 1 : 0);

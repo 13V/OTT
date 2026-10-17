@@ -11,7 +11,6 @@ const { parseArgs, configureApp } = require('../scripts/configure-app.js');
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ott-configure-app-'));
 const filename = path.join(scratch, 'app.json');
-const projectId = '0123456789abcdef0123456789abcdef';
 let checks = 0;
 function check(name, callback) {
   callback(); checks++; console.log('  ok   ' + name);
@@ -20,26 +19,21 @@ const write = value => fs.writeFileSync(filename, JSON.stringify(value, null, 2)
 const read = () => JSON.parse(fs.readFileSync(filename, 'utf8'));
 
 try {
-  check('independent project setting preserves the backend and unrelated fields', () => {
-    write({ walletConnect: { projectId: '', future: 'keep' }, apiBaseUrl: 'https://old.example', theme: { name: 'clay' } });
-    assert.equal(configureApp(['--project-id', projectId.toUpperCase()], filename).changed, true);
-    assert.deepEqual(read(), { walletConnect: { projectId, future: 'keep' }, apiBaseUrl: 'https://old.example', theme: { name: 'clay' } });
+  check('the backend setting stores a canonical origin and preserves unrelated fields', () => {
+    write({ apiBaseUrl: 'https://old.example', theme: { name: 'clay' } });
+    assert.equal(configureApp(['--api-origin', 'https://Backend.example:443/'], filename).changed, true);
+    assert.deepEqual(read(), { apiBaseUrl: 'https://backend.example', theme: { name: 'clay' } });
   });
-  check('independent backend setting stores a canonical origin and preserves wallet settings', () => {
-    configureApp(['--api-origin', 'https://Backend.example:443/'], filename);
-    assert.equal(read().apiBaseUrl, 'https://backend.example');
-    assert.deepEqual(read().walletConnect, { projectId, future: 'keep' });
-  });
-  check('both settings update together and repeated identical input does not rewrite bytes', () => {
-    configureApp(['--project-id', projectId, '--api-origin', 'https://api.example:8443'], filename);
+  check('repeated identical input does not rewrite bytes', () => {
+    configureApp(['--api-origin', 'https://api.example:8443'], filename);
     const before = fs.readFileSync(filename);
-    assert.equal(configureApp(['--project-id', projectId, '--api-origin', 'https://api.example:8443'], filename).changed, false);
+    assert.equal(configureApp(['--api-origin', 'https://api.example:8443'], filename).changed, false);
     assert.deepEqual(fs.readFileSync(filename), before);
     assert.equal(read().theme.name, 'clay');
   });
   check('unrelated JSON keys are preserved as data without changing object prototypes', () => {
     fs.writeFileSync(filename, '{"__proto__":{"keep":"root"},"walletConnect":{"projectId":"","__proto__":{"keep":"wallet"}}}');
-    configureApp(['--project-id', projectId], filename);
+    configureApp(['--api-origin', 'https://api.example'], filename);
     assert.equal(Object.hasOwn(read(), '__proto__'), true);
     assert.equal(read().__proto__.keep, 'root');
     assert.equal(Object.hasOwn(read().walletConnect, '__proto__'), true);
@@ -47,9 +41,10 @@ try {
   });
   check('missing, duplicate, unknown and secret-shaped inputs make no writes', () => {
     const before = fs.readFileSync(filename);
-    for (const args of [[], ['--project-id'], ['--api-origin', ''], ['--project-id', '--api-origin', 'https://api.example'],
-      ['--project-id', projectId, '--project-id', projectId], ['--token', 'sample-private-token'],
-      ['--project-id', 'vcp_private_token'], ['--project-id', 'not-a-project'], ['--project-id=' + projectId]]) {
+    for (const args of [[], ['--api-origin'], ['--api-origin', ''], ['--api-origin', '--api-origin'],
+      ['--api-origin', 'https://api.example', '--api-origin', 'https://api.example'], ['--token', 'sample-private-token'],
+      // The WalletConnect project id belonged to the Robinhood Chain wallet and is no longer a setting.
+      ['--project-id', '0123456789abcdef0123456789abcdef'], ['--api-origin=https://api.example']]) {
       assert.throws(() => configureApp(args, filename));
       assert.deepEqual(fs.readFileSync(filename), before);
     }
@@ -60,28 +55,29 @@ try {
       'https://api.example/..', 'https://api.example/./', 'https://api.example?token=sample-private-token',
       'https://api.example#fragment', 'https://user:sample-private-token@api.example', 'https://api.example\\',
       ' https://api.example', 'https://api.example ', 'https://api.example:99999', 'https://']) {
-      assert.throws(() => configureApp(['--project-id', projectId, '--api-origin', origin], filename));
+      assert.throws(() => configureApp(['--api-origin', origin], filename));
       assert.deepEqual(fs.readFileSync(filename), before);
     }
   });
-  check('malformed configuration or wallet shape remains untouched', () => {
-    for (const value of ['{"invalid":"sample-private-token"', '[]', 'null', '{"walletConnect":"sample-private-token"}']) {
+  check('malformed configuration remains untouched', () => {
+    for (const value of ['{"invalid":"sample-private-token"', '[]', 'null']) {
       fs.writeFileSync(filename, value);
-      assert.throws(() => configureApp(['--project-id', projectId], filename));
+      assert.throws(() => configureApp(['--api-origin', 'https://api.example'], filename));
       assert.equal(fs.readFileSync(filename, 'utf8'), value);
     }
     assert.throws(() => configureApp(['--api-origin', 'https://api.example'], path.join(scratch, 'missing.json')));
     assert.equal(fs.existsSync(path.join(scratch, 'missing.json')), false);
   });
   check('saved API origin matches the runtime client resolver', () => {
-    write({ walletConnect: { projectId: '' }, apiBaseUrl: '' });
-    configureApp(['--project-id', projectId, '--api-origin', 'https://api.example'], filename);
+    write({ apiBaseUrl: '' });
+    configureApp(['--api-origin', 'https://api.example'], filename);
     const window = {};
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'site', 'client-config.js'), 'utf8'), { window, URL, location: { hostname: '13v.github.io' } });
     window.OTTClientConfig.configure(read());
     assert.equal(window.OTTClientConfig.apiUrl('./api/redeem?address=public'), 'https://api.example/api/redeem?address=public');
     assert.equal(window.OTTClientConfig.apiUrl('./api/status'), 'https://api.example/api/status');
-    assert.equal(window.OTTClientConfig.apiUrl('./api/auth'), 'https://api.example/api/auth');
+    // Only the two API routes the site has are allowed; the old Solana sign-in route is gone.
+    assert.throws(() => window.OTTClientConfig.apiUrl('./api/auth'));
   });
   check('CLI usage and error output never print supplied secret values', () => {
     const script = path.join(__dirname, '..', 'scripts', 'configure-app.js');

@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const CONFIG_FILE = path.join(__dirname, '..', 'site', 'config', 'app.json');
-const USAGE = 'Usage: node scripts/configure-app.js [--project-id <32 hexadecimal characters>] [--api-origin <HTTPS origin>]';
+const USAGE = 'Usage: node scripts/configure-app.js --api-origin <HTTPS origin>';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function parseArgs(args) {
@@ -14,18 +14,14 @@ function parseArgs(args) {
   const input = {};
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
-    if (flag !== '--project-id' && flag !== '--api-origin') throw new Error('Unknown option. Only --project-id and --api-origin are accepted.');
-    const key = flag === '--project-id' ? 'projectId' : 'apiOrigin';
+    if (flag !== '--api-origin') throw new Error('Unknown option. Only --api-origin is accepted.');
+    const key = 'apiOrigin';
     if (Object.hasOwn(input, key)) throw new Error('Each public setting can be supplied only once.');
     const value = args[++index];
     if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('Each option requires an explicit value.');
     input[key] = value;
   }
-  if (!Object.keys(input).length) throw new Error('Supply --project-id or --api-origin with its public value.');
-  if (Object.hasOwn(input, 'projectId')) {
-    if (!/^[\da-f]{32}$/i.test(input.projectId)) throw new Error('The public Reown project ID must contain exactly 32 hexadecimal characters.');
-    input.projectId = input.projectId.toLowerCase();
-  }
+  if (!Object.keys(input).length) throw new Error('Supply --api-origin with its public value.');
   if (Object.hasOwn(input, 'apiOrigin')) {
     let url;
     try { url = new URL(input.apiOrigin); } catch (_) { throw new Error('The backend address must be a valid HTTPS origin.'); }
@@ -56,11 +52,6 @@ function configureApp(args, filename = CONFIG_FILE) {
   if (!object(config)) throw new Error('The public app configuration must be a JSON object.');
   const next = { ...config };
   const fields = [];
-  if (Object.hasOwn(input, 'projectId')) {
-    if (config.walletConnect !== undefined && !object(config.walletConnect)) throw new Error('The existing walletConnect settings must be a JSON object.');
-    next.walletConnect = { ...config.walletConnect || {}, projectId: input.projectId };
-    if (config.walletConnect?.projectId !== input.projectId) fields.push('Reown project ID');
-  }
   if (Object.hasOwn(input, 'apiOrigin')) {
     next.apiBaseUrl = input.apiOrigin;
     if (config.apiBaseUrl !== input.apiOrigin) fields.push('backend origin');
