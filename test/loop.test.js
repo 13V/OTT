@@ -1119,7 +1119,7 @@ async function main() {
     check('BOB redeems Germany from his own $12.00: $10.01 left', [bobGermany.status, bobGermany.body.remainingUsd], [200, 10.01]);
 
     const carolTry = await POST(redeemBody(CAROL, 'fixed_1GB_7D_DE', 0));
-    check('CAROL\'s weekly redemption is refused: she has no share this week', [carolTry.status, carolTry.body.error], [409, 'this wallet holds no OTT this week']);
+    check('CAROL\'s weekly redemption is refused: weekly credit is for members', [carolTry.status, carolTry.body.error], [409, 'weekly credit is for members, from the first Monday snapshot after they join']);
     const carolWelcome = await POST(welcomeBody(CAROL, 'fixed_1GB_7D_DE'));
     check('and so is a welcome eSIM: she never joined', [carolWelcome.status, carolWelcome.body.error], [409, 'join OT+T first']);
 
@@ -1133,7 +1133,7 @@ async function main() {
     const daveWelcome = await POST(welcomeBody(DAVE, 'fixed_1GB_7D_DE', daveJoin));
     check('DAVE claims his welcome eSIM by naming his join, which the API reads from the chain', [daveWelcome.status, daveWelcome.body.order.welcome, daveWelcome.body.order.stage], [200, true, 'done']);
     const daveWeekly = await POST(redeemBody(DAVE, 'fixed_1GB_7D_DE', 0));
-    check('but he has no weekly credit until the next snapshot', [daveWeekly.status, daveWeekly.body.error], [409, 'this wallet holds no OTT this week']);
+    check('but he has no weekly credit until the next snapshot', [daveWeekly.status, daveWeekly.body.error], [409, 'weekly credit is for members, from the first Monday snapshot after they join']);
 
     // ===========================================================================================
     console.log('\nSTAGE 7 — what the standings say now');

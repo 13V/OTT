@@ -293,6 +293,23 @@ async function main() {
   r = await GET(MEMBER);
   check('the standing now shows the welcome order, without its code', [r.body.membership.welcomeOrder.welcome, r.body.membership.welcomeOrder.ac], [true, '']);
   check('and the welcome eSIM did not touch weekly credit', [r.body.redeemedUsd, r.body.remainingUsd, r.body.orders.length], [0, 3, 0]);
+  {
+    // A weekly order from a wallet with nothing to spend says why, for each kind of wallet.
+    const weekly = (key) => { const msg = message(key.address, 'redeem', 'fixed_1GB_7D_AU', { n: 0 }); return { address: key.address, message: msg, signature: key.sign(msg), packageCode: 'fixed_1GB_7D_AU', n: 0 }; };
+    r = await POST(weekly(STRANGER));
+    check('a wallet that never joined is told weekly credit is for members', [r.status, r.body.error], [409, 'weekly credit is for members, from the first Monday snapshot after they join']);
+    const LATE = newWallet(), EMPTY = newWallet();
+    const ledger = allowances();
+    ledger.members[LATE.address] = { burned: UNITS.toString(), since: { at: START + 7200, slot: 457600000, tx: randomSignature() } };
+    ledger.members[EMPTY.address] = { burned: UNITS.toString(), since: MEMBER_SINCE };
+    ledger.wallets[EMPTY.address] = { tokens: '0', share: 0, allowanceUsd: 0, member: true };
+    serve(standardFiles({ '/data/allowances.json': ledger }));
+    r = await POST(weekly(LATE));
+    check('a member who joined after the snapshot shares from the next one', [r.status, r.body.error], [409, 'your weekly share starts at the next Monday snapshot']);
+    r = await POST(weekly(EMPTY));
+    check('a member who held no OTT at the snapshot is told so', [r.status, r.body.error], [409, 'this wallet held no OTT at this week’s snapshot']);
+    serve(standardFiles());
+  }
   r = await POST(welcome(MEMBER, 'fixed_1GB_7D_AU'));
   check('repeating the same claim returns the same order', [r.status, r.body.replayed, r.body.order.transactionId], [200, true, redeem.welcomeIdFor(MEMBER.address)]);
   r = await POST(welcome(MEMBER, 'fixed_1GB_7D_JP'));

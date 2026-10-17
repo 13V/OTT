@@ -76,7 +76,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { keccak256Hex } = require('./_lib/keccak');
 const solanaAuth = require('./_lib/solana-auth');
 const S = require('../solana.js');
 const { provider: chooseProvider } = require('./_lib/providers');
@@ -211,28 +210,9 @@ const safeHref = (u) => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
 const safeImg = (u) => (/^(data:image\/|https:\/\/)/i.test(String(u || '')) ? String(u) : '');
 const round6 = (x) => Math.round(x * 1e6) / 1e6;
 
-/**
- * The wallet's Nth redemption id, in week `week`. Fixed forever: change this and every past order
- * goes missing. Scoped by week (rather than just address:n, as it was when a rebate was banked
- * forever) so that each week's sequence starts fresh at n=0 — the mechanism that makes an
- * allowance which expires at the end of the week actually expire: last week's ids are simply not
- * the ids this week's redemptions are looked up or placed under.
- *
- * The formula lowercases its input, as it did for 0x addresses. A base58 address lowercased is
- * still unique in practice: two wallets would have to differ only in letter case, and keys cannot
- * be ground to collide like that (docs/membership.md).
- */
-function transactionIdFor(address, week, n) {
-  return 'ott-' + keccak256Hex(address.toLowerCase() + ':' + week + ':' + n).slice(2, 34);
-}
-
-/**
- * A member's one welcome order. Fixed forever, like transactionIdFor. "welcome" can never be a
- * week number, so this id can never be one a weekly redemption looks under.
- */
-function welcomeIdFor(address) {
-  return 'ott-' + keccak256Hex(address.toLowerCase() + ':welcome:0').slice(2, 34);
-}
+// The order ids (fixed forever; see _lib/order-ids.js): a wallet's Nth redemption in week W, and
+// its one welcome order.
+const { transactionIdFor, welcomeIdFor } = require('./_lib/order-ids');
 
 /**
  * What a past order cost, from the catalogue. The provider's record carries the package (as its
@@ -824,7 +804,17 @@ module.exports = async (req, res) => {
     // Below this point a fresh order is actually being placed, so the wallet's standing has to be
     // real: not a stale file, and not a wallet with nothing to spend.
     if (s.stale) return fail(res, 409, "this week's allowance has not been published yet");
-    if (!s.holds) return fail(res, 409, 'this wallet holds no OTT this week');
+    if (!s.holds) {
+      // Say why there is nothing to spend. With membership on, weekly credit is for the members at
+      // Monday's snapshot: a wallet the ledger doesn't list as a member (yet) shares from the first
+      // snapshot after its join, and a member who joined after this one, from the next.
+      if (membershipRules(config)) {
+        if (!ledgerMember(config, allowances, address)) return fail(res, 409, 'weekly credit is for members, from the first Monday snapshot after they join');
+        if (!rowOf(allowances.wallets, address)) return fail(res, 409, 'your weekly share starts at the next Monday snapshot');
+        return fail(res, 409, 'this wallet held no OTT at this week’s snapshot');
+      }
+      return fail(res, 409, 'this wallet holds no OTT this week');
+    }
     if (s.remainingUsd + 1e-9 < priceUsd) return fail(res, 409, 'not enough data credit: $' + s.remainingUsd.toFixed(2) + ' banked, $' + priceUsd.toFixed(2) + ' needed');
 
     // find() first, even though pastOrders() just said the slot was free: a racing request may

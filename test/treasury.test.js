@@ -88,6 +88,19 @@ function fakeRpc({ accounts = {}, lamports = 0, down = [] }) {
   check('status: empty still beats behind', T.statusOf({ balanceUsd: 0, runwayDays: null, owedUsd: 4000 }), 'empty');
   check('owed: this week\'s budget less what this week redeemed', T.owing({ orders, config, budgetUsd: 25, weekStartMs: now - 3 * day }), { budgetUsd: 25, redeemedUsd: 5.22, owedUsd: 19.78 });
   check('owed: no budget, no figure', T.owing({ orders, config, budgetUsd: undefined, weekStartMs: 0 }), { budgetUsd: null, redeemedUsd: null, owedUsd: null });
+  {
+    // A welcome eSIM is paid from the reserve: it is spend, but it doesn't use up anyone's weekly
+    // credit, so what the week still owes stays the same.
+    const { welcomeIdFor, transactionIdFor } = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'order-ids.js'));
+    const wallet = 'Bb8RRCgXw3vXEdYFxF4h8Pv4mxXHy3mDZhGJ2pFzKJcQ'.toLowerCase();
+    const at = new Date(now - day).toISOString();
+    const welcome = { transactionId: welcomeIdFor(wallet), address: wallet, packageCode: orders[0].packageCode, createdAt: at };
+    const weekly = { transactionId: transactionIdFor(wallet, 2962, 0), address: wallet, packageCode: orders[0].packageCode, createdAt: at };
+    const base = T.owing({ orders, config, budgetUsd: 25, weekStartMs: now - 3 * day });
+    check('owed: a welcome order is not counted against the week', T.owing({ orders: [...orders, welcome], config, budgetUsd: 25, weekStartMs: now - 3 * day }), base);
+    check('owed: a weekly order from the same wallet still is', T.owing({ orders: [...orders, weekly], config, budgetUsd: 25, weekStartMs: now - 3 * day }).owedUsd < base.owedUsd, true);
+    check('spend: the welcome order is still money the pool paid', T.summarise({ orders: [welcome], config, now }).count, 1);
+  }
   check('the last claim as the card shows it', T.lastClaimOf([{ at: 1, sol: 0.1 }, { at: 1789300000, lamports: '120000000', sol: 0.12, solUsd: 104, usd: 12.48, tx: 'sig', sources: ['curve'] }]),
     { at: 1789300000, sol: 0.12, usd: 12.48, tx: 'sig' });
   check('no claims yet', T.lastClaimOf([]), null);

@@ -525,7 +525,7 @@ async function main() {
   check('GET is a clean zero, and says the wallet holds nothing', [r.status, r.body.tokens, r.body.allowanceUsd, r.body.remainingUsd, r.body.orders], [200, '0', 0, 0, []]);
   r = await POST(signed(POOR, 'EU-35_1_7'));
   check('POST is refused', r.status, 409);
-  checkThat('and says plainly that the wallet holds nothing, not just "not enough"', /holds no ott/i.test(r.body.error), r.body.error);
+  check('and says plainly that weekly credit is for members, not just "not enough"', r.body.error, 'weekly credit is for members, from the first Monday snapshot after they join');
 
   console.log('\nthe week boundary: last week\'s orders do not spend this week\'s allowance, and ids do not collide');
   mock._reset(); redeem._resetCaches();

@@ -32,6 +32,7 @@ const ALLOWANCES_PATH = path.join(SITE, 'data', 'allowances.json');
 // The one place week arithmetic lives, so this file and the indexer can never disagree on when a
 // week started — which is the boundary "what has been spent this week" is measured from.
 const { weekStart } = require(path.join(SITE, 'api', '_lib', 'week.js'));
+const { isWelcomeOrder } = require(path.join(SITE, 'api', '_lib', 'order-ids.js'));
 const OUT_PATH = path.join(SITE, 'data', 'treasury.json');
 
 const DAYS = 30;
@@ -76,9 +77,11 @@ function priceOf(order, config) {
  */
 function owing({ orders, config, budgetUsd, weekStartMs }) {
   if (!Number.isFinite(Number(budgetUsd))) return { budgetUsd: null, redeemedUsd: null, owedUsd: null };
+  // A welcome eSIM is paid from the reserve, not from anyone's weekly credit, so it doesn't reduce
+  // what the week still owes (docs/membership.md). It still counts as spend in summarise().
   const thisWeek = (orders || []).filter((o) => {
     const at = Date.parse(o && o.createdAt);
-    return Number.isFinite(at) && at >= weekStartMs;
+    return Number.isFinite(at) && at >= weekStartMs && !isWelcomeOrder(o);
   });
   const redeemedUsd = round2(thisWeek.reduce((sum, o) => sum + priceOf(o, config), 0));
   return { budgetUsd: round2(Number(budgetUsd)), redeemedUsd, owedUsd: round2(Math.max(0, Number(budgetUsd) - redeemedUsd)) };
