@@ -37,6 +37,7 @@ const TREASURY_PATH = path.join(SITE, 'data', 'treasury.json');
 // Both exchanges are reached with a deadline: this runs unattended, on a job with a wall clock,
 // and an endpoint that accepts the connection and then says nothing would burn the whole run.
 const { timedFetch } = require(path.join(__dirname, 'chain.js'));
+const { membershipConfig } = require(path.join(SITE, 'api', '_lib', 'membership.js'));
 const HTTP_TIMEOUT_MS = 30000;
 const KEEP = 100;
 
@@ -113,24 +114,38 @@ function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf
  * exposure in a single run; and the treasury's own balance, because we cannot move what we do not
  * have. When a bound is what stops it, the reason says which — a pool deliberately behind reads
  * very differently from a pool nobody noticed was behind.
+ *
+ * `reserveUsd` is headroom for welcome eSIMs (docs/membership.md), which the same pool pays for.
+ * Aiming at exactly what the week owes would leave nothing for them, and the API stops offering
+ * the burn once the pool less what is owed cannot cover one. It is 0 without membership.
  */
-function plan({ walletUsd, poolUsd, owedUsd = null, targetUsd = DEFAULTS.targetUsd, minUsd = DEFAULTS.minUsd, maxUsd = DEFAULTS.maxUsd, maxPoolUsd = DEFAULTS.maxPoolUsd }) {
+function plan({ walletUsd, poolUsd, owedUsd = null, reserveUsd = 0, targetUsd = DEFAULTS.targetUsd, minUsd = DEFAULTS.minUsd, maxUsd = DEFAULTS.maxUsd, maxPoolUsd = DEFAULTS.maxPoolUsd }) {
   const owed = Number.isFinite(Number(owedUsd)) ? Number(owedUsd) : null;
-  const wanted = owed !== null && owed > targetUsd ? Math.min(owed, maxPoolUsd) : targetUsd;
-  const capped = owed !== null && owed > maxPoolUsd;
+  const reserve = Number.isFinite(Number(reserveUsd)) && Number(reserveUsd) > 0 ? Number(reserveUsd) : 0;
+  const promised = owed === null ? null : owed + reserve;
+  const wanted = promised !== null && promised > targetUsd ? Math.min(promised, maxPoolUsd) : targetUsd;
+  const capped = promised !== null && promised > maxPoolUsd;
   const aim = `pool $${poolUsd.toFixed(2)}, aiming at $${wanted.toFixed(2)}`
-    + (owed === null ? '' : ` of $${owed.toFixed(2)} promised this week`)
+    + (owed === null ? '' : ` of $${owed.toFixed(2)} promised this week`
+      + (reserve ? ` plus a $${reserve.toFixed(2)} welcome reserve` : ''))
     + (capped ? ` (held at the $${maxPoolUsd.toFixed(2)} ceiling)` : '');
   const need = round2(wanted - poolUsd);
-  if (need < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reason: `${aim}; the shortfall is under the $${minUsd.toFixed(2)} floor` };
+  if (need < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve, reason: `${aim}; the shortfall is under the $${minUsd.toFixed(2)} floor` };
   const amountUsd = round2(Math.min(need, walletUsd, maxUsd));
-  if (amountUsd < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reason: `${aim}; the treasury holds $${walletUsd.toFixed(2)} USDG, under the $${minUsd.toFixed(2)} floor` };
+  if (amountUsd < minUsd) return { amountUsd: 0, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve, reason: `${aim}; the treasury holds $${walletUsd.toFixed(2)} USDG, under the $${minUsd.toFixed(2)} floor` };
   const short = round2(need - amountUsd);
   return {
-    amountUsd, targetUsd: wanted, owedUsd: owed,
+    amountUsd, targetUsd: wanted, owedUsd: owed, reserveUsd: reserve,
     reason: `${aim}, treasury $${walletUsd.toFixed(2)}`
       + (short > 0 ? ` — $${short.toFixed(2)} short of the aim this run, ${amountUsd === maxUsd ? 'capped per run' : 'all the treasury has'}` : ''),
   };
+}
+
+/** Welcome eSIMs the pool keeps room for beyond what the week owes: five at the dearest welcome price. */
+const WELCOME_RESERVE_COUNT = 5;
+function welcomeReserveFor(config) {
+  const membership = membershipConfig(config);
+  return membership ? round2(WELCOME_RESERVE_COUNT * membership.welcome.maxUsd) : 0;
 }
 
 /** This week's outstanding allowances, from the treasury file, or null when it cannot say. */
@@ -195,7 +210,7 @@ function across({ api = ACROSS_API() } = {}) {
 // ---------------------------------------------------------------------------
 // The run.
 // ---------------------------------------------------------------------------
-async function run({ chain, config, addresses, treasury, payer, ff, bridge, targetUsd, minUsd, maxUsd, maxPoolUsd, dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH, now = () => Date.now(), log = () => {} }) {
+async function run({ chain, config, addresses, treasury, payer, ff, bridge, targetUsd, minUsd, maxUsd, maxPoolUsd, reserveUsd, dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH, now = () => Date.now(), log = () => {} }) {
   const want = lower(config.treasury);
   if (!want) throw new Error('no treasury in site/config/esim.json');
   if (lower(treasury) !== want) throw new Error(`wrong wallet: the key is for ${treasury}, the treasury is ${config.treasury}`);
@@ -211,7 +226,8 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   // worst — the keepers run in the order claim, fund, treasury — which is close enough to aim by
   // and enormously better than the flat target this used before. Absent, the flat target stands.
   const owedUsd = owedFrom(readJson(treasuryPath, null));
-  const p = plan({ walletUsd, poolUsd: Number(pool.usd), owedUsd, targetUsd, minUsd, maxUsd, maxPoolUsd });
+  const reserve = reserveUsd === undefined ? welcomeReserveFor(config) : reserveUsd;
+  const p = plan({ walletUsd, poolUsd: Number(pool.usd), owedUsd, reserveUsd: reserve, targetUsd, minUsd, maxUsd, maxPoolUsd });
   log(`  pool $${Number(pool.usd).toFixed(2)} (${pool.sats} sats), treasury $${walletUsd.toFixed(2)} USDG`);
   if (!p.amountUsd) { log(`  nothing to move: ${p.reason}`); return { action: 'none', reason: p.reason }; }
   const amountUsd = p.amountUsd;
@@ -317,7 +333,7 @@ async function run({ chain, config, addresses, treasury, payer, ff, bridge, targ
   }
 }
 
-module.exports = { plan, appendLog, owedFrom, run, fixedFloat, across, DEFAULTS, OUT_PATH, TREASURY_PATH, USDC_BASE, BASE_CHAIN_ID };
+module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, run, fixedFloat, across, DEFAULTS, OUT_PATH, TREASURY_PATH, USDC_BASE, BASE_CHAIN_ID };
 
 if (require.main === module) {
   const chain = require(path.join(__dirname, 'chain.js'));
@@ -338,6 +354,7 @@ if (require.main === module) {
     minUsd: flag('min', DEFAULTS.minUsd),
     maxUsd: flag('max', DEFAULTS.maxUsd),
     maxPoolUsd: flag('max-pool', DEFAULTS.maxPoolUsd),
+    reserveUsd: flag('reserve', undefined),
     dryRun: chain.dryRun,
     log: (m) => process.stderr.write(m + '\n'),
   })

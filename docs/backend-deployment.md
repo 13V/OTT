@@ -2,7 +2,7 @@
 
 GitHub Pages serves the app interface. A separate Node backend runs the account, signed installation-detail and redemption handlers. `scripts/serve-api.js` provides a portable HTTP server using Node's standard library; it needs Node 22 or newer and no runtime npm dependencies.
 
-The server exposes only `/api/status` and `/api/redeem`. It does not serve the website, configuration files, repository contents or environment files. There is no separate public health route: use `GET /api/status` for hosting checks, then examine its readiness fields. HTTP 200 means the status response loaded; it does not mean the programme is ready to issue eSIMs.
+The server exposes only `/api/status`, `/api/redeem` and `/api/auth`. It does not serve the website, configuration files, repository contents or environment files. There is no separate public health route: use `GET /api/status` for hosting checks, then examine its readiness fields. HTTP 200 means the status response loaded; it does not mean the programme is ready to issue eSIMs.
 
 ## Local checks
 

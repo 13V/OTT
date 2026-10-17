@@ -50,6 +50,7 @@ const { allowRequestOrigin } = require('./_lib/request-origin');
 const { redemptionsEnabled } = require('./_lib/redemption-policy');
 const { catalogueReady, catalogueFingerprint } = require('./_lib/catalogue');
 const { redactError } = require('./_lib/redact');
+const rules = require('./_lib/membership');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const FETCH_TIMEOUT_MS = 4500;     // the raw HTTP layer: aborts before a check's own race does
@@ -159,7 +160,19 @@ function summariseConfig(config) {
     // is actually in effect rather than a bare zero that would read as "no budget at all".
     budgetBps: Number.isFinite(Number(config.budgetBps)) ? Number(config.budgetBps) : 10000,
     taxBps: Number.isFinite(Number(config.taxBps)) ? Number(config.taxBps) : 0,
+    membership: membershipSummary(config),
   };
+}
+
+/**
+ * The membership rules in effect (docs/membership.md). The redeem API treats a malformed block as
+ * no membership at all, so this is where an operator sees that it is malformed.
+ */
+function membershipSummary(config) {
+  let m;
+  try { m = rules.membershipConfig(config); } catch (e) { return { configured: false, error: 'the membership block in esim.json is invalid' }; }
+  if (!m) return { configured: false };
+  return { configured: true, burnTokens: m.burnTokens, burnAddress: m.burnAddress, capMultiple: m.capMultiple, welcome: m.welcome };
 }
 
 // What is actually selected, by env var, right now — as opposed to what esim.json merely says.

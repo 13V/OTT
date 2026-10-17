@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-OT+T (ticker OTT) is a prelaunch programme that turns a memecoin's trading tax into mobile data. The coin is planned on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax. Each week, the previous week's tax (USDG) becomes a dollar budget, split among holders by their share of the circulating supply. Holders spend it on eSIM bundles that the backend buys over Bitcoin Lightning. Credit is in dollars, not gigabytes, and expires at the end of the week.
+OT+T (ticker OTT) is a prelaunch programme that turns a memecoin's trading tax into mobile data. The coin is planned on Pons on Robinhood Chain (chain id 4663) with a 10% creator tax. Members spend credit on eSIM bundles that the backend buys over Bitcoin Lightning. Credit is in dollars, not gigabytes, and weekly credit expires at the end of the week.
+
+Membership (decided 17 October 2026; `docs/membership.md` has the rules and the data contract):
+- A wallet joins by burning 100,000 OTT to `0x…dEaD`. That includes one welcome eSIM: any 1 GB, 7-day plan up to $4.
+- Each week, 80% of the previous week's tax (`budgetBps: 8000`) is split among members by their holdings at the snapshot, with no member above 3× the average.
+- Non-members earn nothing, and the remaining 20% stays in the pool as a reserve.
+- The settings live in the `membership` block of `site/config/esim.json`.
 
 Nothing has launched. `coin`, `curve` and `treasury` in `site/config/esim.json` are empty, and production redemption is off (`REDEMPTIONS_ENABLED=0`). README.md explains the economics and the reasons behind most design decisions.
 
@@ -71,7 +77,9 @@ Three parts share the repo:
 
 `scripts/allowances.js` builds the weekly ledger:
 - It works out balances at the week's first block by folding the coin's `Transfer` logs. It deliberately avoids archive `eth_call`, which this chain's public RPCs can't be relied on to answer.
-- It sums the USDG that the curve paid into the fee escrow during the previous week; that is the budget.
+- It sums the USDG that the curve paid into the fee escrow during the previous week; `budgetBps` of that is the budget.
+- It finds members from the same logs: wallets whose transfers to the burn address (or the zero address) add up to `burnTokens`. Project contracts are never members. The coin scan runs on to the chain head, so wallets that joined after the snapshot are listed in `members` for their welcome eSIM. Only snapshot members share this week.
+- It splits the budget with `cappedShares()` from `site/api/_lib/membership.js`. Without a `membership` block it falls back to the old every-holder-by-share split.
 - It writes `site/data/allowances.json`, stamped with its `week`.
 
 `/api/redeem` fetches that file over HTTP (`ALLOWANCES_URL`), never from a bundled copy. If the file's `week` isn't the current week, every wallet's spendable credit counts as zero. `site/config/esim.json` (coin, terms and the package catalogue) is bundled into the functions through `includeFiles` in `site/vercel.json`.
@@ -82,6 +90,9 @@ Three parts share the repo:
 - EVM sign-in is a per-request EIP-191 `personal_sign` over a labelled message, valid for 10 minutes. The message names the action, and for a redemption also the plan and slot, so one signature authorises one order. The client builds this message in `site/esim.js` and `checkMessage()` validates it, so change both together.
 - **There is no wallet database.** A wallet's nth order in week w has the id `transactionIdFor(address, w, n)`, which is `'ott-' + keccak(address:w:n)`. Standing is found by calling `provider.find()` for n = 0, 1, … until one is missing. Changing that formula, or the week constants in `_lib/week.js`, loses every past order.
 - Re-sending a filled slot with the same package returns the existing order. A slot that doesn't match the ledger gets a 409.
+- The standing includes a `membership` object, whose `enrolment.open` says whether the app may offer the burn right now.
+- A welcome claim is `POST { welcome: true, packageCode, burnTx? }`, signed with the `OT+T — claim my welcome eSIM` message. It uses its own fixed id, `welcomeIdFor(address)` (`keccak(address:welcome:0)`), so it never uses weekly credit.
+- Membership is proven by the ledger's `members`. For a burn newer than the ledger, `_lib/rpc.js` reads the burn's receipt from the chain.
 
 ### Adapters
 
@@ -120,6 +131,7 @@ This is Phantom sign-in-with-Solana (SIWS). The API issues single-use challenges
   - `site/api/_lib/keccak.js` and `secp256k1.js` are verbatim copies of the files in `scripts/`. Re-copy rather than editing one side.
   - `config/addresses.json` must be byte-identical to `site/config/addresses.json`; lint fails otherwise.
   - `site/esim.js` carries its own browser copy of the week arithmetic in `site/api/_lib/week.js` (weeks run Monday 00:00 UTC to Monday). `test/week.test.js` loads `esim.js` under Node with only a bare `window` global and checks the copies agree, so keep `esim.js` free of DOM access at load time.
+- **The membership rules live in `site/api/_lib/membership.js`.** The indexer, the API and `scripts/fund.js` (which keeps a five-welcome reserve) all use it. The browser can't load it, so `site/esim.js` has its own `welcomeEligible()` and `burnCalldata()`, and builds the welcome message that `checkMessage()` validates. `test/membership-client.test.js` loads `esim.js` under Node and fails if they drift.
 - **`site/data/*.json` files are generated** by the keepers; don't hand-edit them. When a workflow's push hits a rebase conflict in those files, it keeps its own output.
 - **Versioned assets must match the service worker.** `site/index.html` loads some files with a `?v=<tag>` query, and the same URL strings must appear in the `SHELL` list in `site/sw.js`, because the worker only caches query URLs listed there. Bump `CACHE_NAME` when the shell changes, so returning PWA visitors get the new files. `test/site/pwa.spec.js` hard-codes which files carry a tag. The worker must never cache config, ledgers, `/api/*` or activation data.
 - **Secrets and activation codes:**

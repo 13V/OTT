@@ -40,6 +40,14 @@
  * Until the coin is launched, site/config/esim.json carries an empty coin address; this script then
  * writes a valid, empty ledger and exits 0, so the site and the API always have a file to read.
  *
+ * Membership (docs/membership.md). When esim.json has a `membership` block, only members earn: a
+ * member is a wallet that has burned at least `burnTokens` OTT, found in the same Transfer logs as
+ * the balances. The week's budget is split among the members at the snapshot by their holdings,
+ * with nobody above `capMultiple` times the average (site/api/_lib/membership.js). The scan then
+ * runs on to the chain head, so that wallets which joined since the snapshot are listed in
+ * `members` for their welcome eSIM; their weekly share starts at the next snapshot. Without the
+ * block, every holder earns in proportion to holdings, as before.
+ *
  * The pure parts (weekOf/weekStart/weekEnd, foldBalances, buildWallets, sumTaxUsd, round4,
  * emptyAllowances, run) are exported for test/allowances.test.js; the CLI runs only under
  * require.main === module.
@@ -48,6 +56,7 @@ const fs = require('fs');
 const path = require('path');
 const chain = require(path.join(__dirname, 'chain.js'));
 const { timedFetch } = chain;
+const { membershipConfig, unitsOf, foldBurns, membersFrom, cappedShares } = require(path.join(__dirname, '..', 'site', 'api', '_lib', 'membership.js'));
 
 const SITE = path.join(__dirname, '..', 'site');
 const ADDRESSES_PATH = path.join(SITE, 'config', 'addresses.json');
@@ -228,6 +237,7 @@ function emptyAllowances({ asOf, block = 0, week }) {
     snapshotBlock: 0, coin: '', curve: '',
     budgetUsd: 0, budgetSource: 'the coin is not launched yet',
     circulating: '0', decimals: 18, holders: 0,
+    membership: null, members: {},
     wallets: {},
   };
 }
@@ -458,11 +468,12 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
     const b = Number(config.budgetBps);
     if (!(b >= 0 && b <= 10000)) throw new Error('esim.json needs a budgetBps between 0 and 10000');
   }
+  const membership = membershipConfig(config);
 
   const coin = lower(config.coin);
   const usdg = lower(addresses.usdg);
   const usdgDecimals = Number(addresses.usdgDecimals || 6);
-  const { factory, feeEscrow, memeHook } = addresses.pons;
+  const { factory, feeEscrow, memeHook, poolManager } = addresses.pons;
   const treasury = lower(config.treasury || '');
 
   const launched = await launchedToken(rpc, factory, coin);
@@ -505,15 +516,21 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
   const snapshotBlock = (await firstBlockAtOrAfter(rpc, weekStart(wk) + 1, head)) - 1;
   const launchBlk = fromBlock != null ? Number(fromBlock) : await launchBlock({ rpc, factory, coin, curve, head, log });
 
-  let balances = new Map();
-  if (snapshotBlock >= launchBlk) {
-    const { logs } = await scanTransfers({
-      rpc, address: coin, topics: [TRANSFER], fromBlock: launchBlk, toBlock: snapshotBlock,
+  // With membership on, the scan runs past the snapshot to the head, so wallets that joined since
+  // Monday are listed for their welcome eSIM. Balances, and this week's members, are still taken
+  // from the logs up to the snapshot only.
+  const scanTo = membership ? head : snapshotBlock;
+  let coinLogs = [];
+  if (scanTo >= launchBlk) {
+    ({ logs: coinLogs } = await scanTransfers({
+      rpc, address: coin, topics: [TRANSFER], fromBlock: launchBlk, toBlock: scanTo,
       onChunk: ({ from, to, count }) => log(`  balances: blocks ${from}-${to}: ${count} transfers of the coin so far`),
-    });
-    balances = foldBalances(logs);
+    }));
   }
-  const exclude = [curve, feeEscrow, factory, memeHook, treasury].filter(Boolean);
+  const atSnapshot = coinLogs.filter((entry) => Number(BigInt(entry.blockNumber)) <= snapshotBlock);
+  const balances = snapshotBlock >= launchBlk ? foldBalances(atSnapshot) : new Map();
+  // Burned tokens sit at the burn address, which is not a holder and is not circulating.
+  const exclude = [curve, feeEscrow, factory, memeHook, treasury, membership && membership.burnAddress].filter(Boolean);
 
   // The budget: last week's curve -> feeEscrow USDG only, found the same way as the snapshot.
   const budgetFromBlock = await firstBlockAtOrAfter(rpc, weekStart(wk - 1), head);
@@ -532,16 +549,46 @@ async function run({ config, addresses, rpc, out = DEFAULT_OUT, week, fromBlock,
 
   const { circulating, wallets, holders } = buildWallets({ balances, exclude, budgetUsd });
 
+  // Membership replaces "every holder by share" with "members by holdings, capped". A project
+  // contract that sends tokens to the burn address — the curve retiring unsold supply, say — is
+  // not a member: with its holdings it would otherwise take the largest share of every week.
+  let membershipSummary = null;
+  let members = {};
+  if (membership) {
+    const contracts = new Set([...exclude, poolManager].filter(Boolean).map(lower));
+    const threshold = unitsOf(membership.burnTokens, decimals);
+    const notContract = (found) => new Map([...found].filter(([address]) => !contracts.has(address)));
+    const sharing = notContract(membersFrom(foldBurns(atSnapshot, membership.destinations, threshold), threshold));
+    const joined = notContract(membersFrom(foldBurns(coinLogs, membership.destinations, threshold), threshold));
+    const memberList = [...sharing.keys()].sort();
+    const split = cappedShares({ members: memberList, weights: balances, budgetUsd, capMultiple: membership.capMultiple });
+    for (const [address, row] of Object.entries(wallets)) {
+      const member = sharing.has(address);
+      wallets[address] = { tokens: row.tokens, share: row.share, allowanceUsd: member ? split.allocations.get(address) : 0, member };
+    }
+    membershipSummary = {
+      burnTokens: membership.burnTokens, burnUnits: threshold.toString(), burnAddress: membership.burnAddress,
+      capMultiple: membership.capMultiple, members: memberList.length,
+      capUsd: split.capUsd, allocatedUsd: split.allocatedUsd, unallocatedUsd: split.unallocatedUsd,
+    };
+    members = Object.fromEntries([...joined.keys()].sort().map((address) => {
+      const entry = joined.get(address);
+      return [address, { burned: entry.burned.toString(), sinceBlock: entry.sinceBlock, tx: entry.tx }];
+    }));
+  }
+
   const data = {
     asOf, block: head, week: wk, weekStart: weekStart(wk), weekEnd: weekEnd(wk),
     snapshotBlock, coin, curve,
     budgetUsd, budgetSource,
     circulating: circulating.toString(), decimals, holders,
+    membership: membershipSummary, members,
     wallets,
   };
   writeAllowances(out, data);
 
   const summary = `allowances: ${coin} week ${wk}, snapshot block ${snapshotBlock}: ${holders} holder(s), `
+    + (membershipSummary ? `${membershipSummary.members} member(s) sharing, ${Object.keys(members).length} member(s) in all, ` : '')
     + `${chain.fromUnits(circulating, decimals)} tokens circulating, $${budgetUsd.toFixed(4)} budget (${budgetSource}) -> ${rel}`
     + (curveMissing ? `\n  ! the site is still closed: site/config/esim.json needs curve ${launched.curve}` : '');
   return { data, summary, curveMissing };

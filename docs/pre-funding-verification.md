@@ -201,8 +201,10 @@ The [customer account audit](customer-account-audit.md) records the live visitor
 walkthrough, cryptographically signed local API journey, account-race fixes,
 body limits, signature timing and remaining real-wallet verification.
 
-Token, curve and treasury addresses are still blank. The allocation code remains
-proportional to eligible holdings. The proposed $50 entry allowance and 40 GB
-weekly maximum are not implemented or validated. They must not be advertised as
-guaranteed benefits. Launch also needs a current funded allocation ledger and a
-reviewed operating policy before the public purchase gate can be enabled.
+Token, curve and treasury addresses are still blank. Allocation now follows the
+membership rules in [membership.md](membership.md): members are wallets that burned
+100,000 OTT, and they share 80% of each week's tax by holdings, capped at 3× the
+average. The earlier proposals for a $50 entry allowance and a 40 GB weekly maximum
+are not implemented and must not be advertised. Launch also needs a current funded
+allocation ledger and a reviewed operating policy before the public purchase gate
+can be enabled.

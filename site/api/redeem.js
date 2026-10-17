@@ -55,6 +55,13 @@
  * filled with a different package, the caller's picture is stale and it is told to reload (409). A
  * replayed signature therefore cannot redeem more than the request it was made for.
  *
+ * Membership (docs/membership.md): a wallet joins by burning OTT. The standing reports whether it
+ * is a member and whether the app may offer the burn right now (`membership.enrolment`). A member
+ * claims one welcome eSIM with
+ *   POST /api/redeem  { address, message, signature, welcome: true, packageCode, burnTx? }
+ * under its own fixed id (welcomeIdFor), outside every week, paid from the reserve. Membership is
+ * proven by the weekly ledger, or, for a burn newer than the ledger, by that burn's receipt.
+ *
  * Config is explicitly included in Vercel's function bundles by site/vercel.json and normally
  * read from disk (fast, no fetch). ESIM_CONFIG_URL can select a different reviewed config, and
  * an HTTP fallback covers a missing bundled file. allowances.json is only
@@ -71,8 +78,18 @@ const { weekOf, weekEnd: weekEndOf } = require('./_lib/week');
 const { allowRequestOrigin, isProduction } = require('./_lib/request-origin');
 const { redemptionsEnabled } = require('./_lib/redemption-policy');
 const { redactError, orderSecrets } = require('./_lib/redact');
+const rules = require('./_lib/membership');
+const chainRpc = require('./_lib/rpc');
 
 const MESSAGE_HEAD = 'OT+T';
+// What each kind of signature authorises. The first line is what tells them apart, so a read can
+// never place an order and a weekly redemption can never claim a welcome eSIM, or the reverse.
+const HEADS = {
+  redeem: MESSAGE_HEAD + ' — authorise a data redemption',
+  read: MESSAGE_HEAD + ' — show my eSIM codes',
+  welcome: MESSAGE_HEAD + ' — claim my welcome eSIM',
+};
+const ACTION_NAMES = { redeem: 'a redemption', read: 'a read', welcome: 'a welcome eSIM claim' };
 const SIGNIN_WINDOW_S = 10 * 60;
 // Allow brief client clock drift without giving a future timestamp another ten minutes.
 const SIGNIN_FUTURE_SKEW_S = 30;
@@ -188,6 +205,14 @@ const round6 = (x) => Math.round(x * 1e6) / 1e6;
  */
 function transactionIdFor(address, week, n) {
   return 'ott-' + keccak256Hex(address.toLowerCase() + ':' + week + ':' + n).slice(2, 34);
+}
+
+/**
+ * A member's one welcome order. Fixed forever, like transactionIdFor. "welcome" can never be a
+ * week number, so this id can never be one a weekly redemption looks under.
+ */
+function welcomeIdFor(address) {
+  return 'ott-' + keccak256Hex(address.toLowerCase() + ':welcome:0').slice(2, 34);
 }
 
 /**
@@ -309,12 +334,13 @@ function knownHosts() {
  * line stays because it is what gives a person reading their wallet prompt a chance to notice, and
  * because the server rejects one naming somewhere else.
  *
- * `want` is { action: 'redeem', packageCode, n } or { action: 'read' }.
+ * `want` is { action: 'redeem', packageCode, n }, { action: 'welcome', packageCode } or
+ * { action: 'read' }.
  */
 function checkMessage(message, address, nowS, want) {
   const lines = String(message || '').split('\n');
-  const head = want.action === 'redeem' ? MESSAGE_HEAD + ' — authorise a data redemption' : MESSAGE_HEAD + ' — show my eSIM codes';
-  if (lines[0] !== head) return 'this signature does not authorise ' + (want.action === 'redeem' ? 'a redemption' : 'a read');
+  if (!Object.hasOwn(HEADS, want.action)) return 'unknown signature action';
+  if (lines[0] !== HEADS[want.action]) return 'this signature does not authorise ' + ACTION_NAMES[want.action];
   const field = (name) => {
     const line = lines.find((l) => l.startsWith(name + ': '));
     return line === undefined ? null : line.slice(name.length + 2);
@@ -325,8 +351,10 @@ function checkMessage(message, address, nowS, want) {
   if (!hosts.length && isProduction()) return 'sign-in host is not configured';
   if (hosts.length && !hosts.includes(site)) return 'sign-in message was signed for ' + site + ', not this site';
   if (field('Wallet') !== address) return 'sign-in message is for another address';
-  if (want.action === 'redeem') {
+  if (want.action === 'redeem' || want.action === 'welcome') {
     if (field('Plan') !== String(want.packageCode)) return 'this signature authorises a different plan';
+  }
+  if (want.action === 'redeem') {
     if (field('Slot') !== String(want.n)) return 'this signature authorises a different order; sign again';
   }
   const issued = field('Issued');
@@ -428,7 +456,7 @@ async function simsFor(prov, address, order) {
 }
 
 /** The standing as the wire shows it — the shape both GET and a signed read answer with. */
-function standingBody(s, address, allowances, config, codes) {
+function standingBody(s, address, allowances, config, codes, membership = { configured: false }) {
   const fileWeek = Number(allowances && allowances.week);
   return {
     ok: true, address,
@@ -444,7 +472,111 @@ function standingBody(s, address, allowances, config, codes) {
     orders: s.orders.map((o) => publicOrder(o, config, { codes })),
     history: s.history.map((o) => publicOrder(o, config, { codes })),
     sims: (s.sims || []).map((x) => publicSim(x, { codes })),
+    membership,
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Membership (docs/membership.md): burn to join, one welcome eSIM, a capped weekly share.
+// ---------------------------------------------------------------------------------------------
+
+/** esim.json's membership rules, or null when membership is off or its block is malformed. */
+function membershipRules(config) {
+  try { return rules.membershipConfig(config); } catch (e) { return null; }
+}
+
+/** The ledger's token decimals, but only when the ledger is about the configured coin. */
+function ledgerDecimals(config, allowances) {
+  if (!allowances || String(allowances.coin || '').toLowerCase() !== String(config.coin || '').toLowerCase()) return null;
+  const decimals = Number(allowances.decimals);
+  return Number.isSafeInteger(decimals) && decimals >= 0 && decimals <= 36 ? decimals : null;
+}
+
+/** This wallet's entry in the ledger's members list, or null. */
+function ledgerMember(config, allowances, address) {
+  if (ledgerDecimals(config, allowances) === null) return null;
+  const row = allowances.members && allowances.members[address];
+  return row && typeof row === 'object' ? row : null;
+}
+
+/**
+ * Whether the app may offer the burn right now. A burn can't be undone, so it is offered only
+ * when a welcome eSIM can actually be bought: purchases are on, the ledger knows the coin, the
+ * treasury reports the pool funded, and the pool less what this week still owes members covers
+ * the dearest welcome plan. The treasury file is up to half an hour old; this is a gate on the
+ * offer, and the order itself still fails safely if the pool turns out short.
+ */
+function enrolmentOf(m, burnUnits, treasury) {
+  if (!redemptionsEnabled()) return { open: false, reason: 'Joining opens when eSIM purchases are switched on.' };
+  if (burnUnits === null) return { open: false, reason: 'Joining opens once the weekly ledger includes the token.' };
+  const balance = Number(treasury && treasury.reseller && treasury.reseller.balanceUsd);
+  const owed = Number(treasury && treasury.owedUsd);
+  if (!treasury || treasury.reseller?.balanceUsd == null || treasury.owedUsd == null || !Number.isFinite(balance) || !Number.isFinite(owed)) {
+    return { open: false, reason: 'The reserve that pays for welcome eSIMs cannot be confirmed right now.' };
+  }
+  if (treasury.status !== 'funded' || balance - owed < m.welcome.maxUsd) {
+    return { open: false, reason: 'The reserve is too low to pay for a welcome eSIM right now. Try again after the next top-up.' };
+  }
+  return { open: true, reason: '' };
+}
+
+/** A welcome order as the wire shows it: an ordinary order, marked, and outside every week. */
+function welcomeOrderOut(order, config, codes) {
+  return Object.assign(publicOrder(Object.assign({}, order, { n: 0, week: null }), config, { codes }), { welcome: true });
+}
+
+/** The `membership` object that GET and a signed read both answer with. */
+async function membershipOf(prov, config, allowances, address, week, treasury, { codes = false } = {}) {
+  const m = membershipRules(config);
+  if (!m) return { configured: false };
+  const decimals = ledgerDecimals(config, allowances);
+  const burnUnits = decimals === null ? null : rules.unitsOf(m.burnTokens, decimals).toString();
+  const row = ledgerMember(config, allowances, address);
+  const fileRow = allowances && allowances.wallets && allowances.wallets[address];
+  const found = await prov.find(welcomeIdFor(address));
+  const since = row ? Number(row.sinceBlock) : NaN;
+  return {
+    configured: true,
+    burnTokens: m.burnTokens, burnUnits,
+    burnAddress: config.membership.burnAddress,
+    coin: config.coin,
+    welcome: m.welcome, capMultiple: m.capMultiple,
+    member: !!row,
+    memberSinceBlock: Number.isSafeInteger(since) ? since : null,
+    sharing: Number(allowances && allowances.week) === week && !!fileRow && fileRow.member === true,
+    welcomeOrder: found ? welcomeOrderOut(found, config, codes) : null,
+    enrolment: enrolmentOf(m, burnUnits, treasury),
+  };
+}
+
+/**
+ * A signed welcome claim, already checked for shape and signature. The existing order comes back
+ * for a repeat of the same plan; otherwise the wallet must be a member, by the ledger or by the
+ * receipt of the burn it names, and then the order is placed under the wallet's fixed welcome id.
+ */
+async function claimWelcome(res, { prov, config, m, allowances, address, pkg, burnTx }) {
+  const transactionId = welcomeIdFor(address);
+  const supplierPackage = pkg.packageCode || pkg.code;
+  const place = pkg.slug || pkg.code;
+  const recordedPackage = prov.name === 'wholesale' ? supplierPackage : place;
+  const matchesOrder = (order) => order && order.packageCode === recordedPackage
+    && (prov.name !== 'wholesale' || order.slug === place);
+  const existing = await prov.find(transactionId);
+  if (existing) {
+    if (!matchesOrder(existing)) return fail(res, 409, 'your welcome eSIM has already been claimed');
+    return send(res, 200, { ok: true, order: welcomeOrderOut(existing, config, true), sims: await simsFor(prov, address, existing), replayed: true });
+  }
+  if (!ledgerMember(config, allowances, address)) {
+    if (!burnTx) return fail(res, 409, 'burn ' + Number(m.burnTokens).toLocaleString('en-US') + ' OTT to join first');
+    const decimals = ledgerDecimals(config, allowances) ?? await chainRpc.decimalsOf(config.coin);
+    const receipt = await chainRpc.call('eth_getTransactionReceipt', [burnTx]);
+    const burned = rules.burnedInReceipt(receipt, { coin: config.coin, address, destinations: m.destinations });
+    if (burned < rules.unitsOf(m.burnTokens, decimals)) return fail(res, 409, 'the burn transaction was not found or did not burn enough OTT');
+  }
+  const order = await prov.order({ transactionId, packageCode: supplierPackage, slug: place, code: pkg.code, priceUsd: Number(pkg.priceUsd), address });
+  // Another claim for a different plan can win the id while this one waits.
+  if (!matchesOrder(order)) return fail(res, 409, 'your welcome eSIM has already been claimed');
+  return send(res, 200, { ok: true, order: welcomeOrderOut(order, config, true), sims: await simsFor(prov, address, order) });
 }
 
 module.exports = async (req, res) => {
@@ -481,8 +613,10 @@ module.exports = async (req, res) => {
         return fail(res, 429, 'too many requests; try again in a moment');
       }
       const prov = chooseProvider();
-      const s = await standing(prov, config, allowances, address, week, await readTreasury());
-      const out = standingBody(s, address, allowances, config, false);
+      const treasury = await readTreasury();
+      const s = await standing(prov, config, allowances, address, week, treasury);
+      const membership = await membershipOf(prov, config, allowances, address, week, treasury);
+      const out = standingBody(s, address, allowances, config, false, membership);
       standingCache.set(key, { at: nowMs, body: out });
       // Bounded, because the keys come from the caller: an attacker walking addresses must not be
       // able to grow this instance's memory without limit. Oldest out first.
@@ -505,8 +639,10 @@ module.exports = async (req, res) => {
 
     // A signed request with no package is a read: the standing, with the codes this time. Which it
     // is has to be settled BEFORE the signature is checked, because the signature says which one it
-    // authorises — that is the whole point of binding the action into it.
-    const reading = body.packageCode === undefined || body.packageCode === null || body.packageCode === '';
+    // authorises — that is the whole point of binding the action into it. A welcome claim names a
+    // plan but no slot: it fills the wallet's one welcome order.
+    const welcomeClaim = body.welcome === true;
+    const reading = !welcomeClaim && (body.packageCode === undefined || body.packageCode === null || body.packageCode === '');
 
     // A host can be fully configured and funded while purchases are still closed. Keep account
     // and installation reads available, but refuse every package POST before provider work.
@@ -515,8 +651,16 @@ module.exports = async (req, res) => {
     // The shape of the request is settled before the signature, because the signature now names
     // the plan and the slot: a body missing either is a malformed request, not a bad signature,
     // and answering 401 for it would send a caller looking for a wallet problem they do not have.
-    let pkg = null, priceUsd = 0;
-    if (!reading) {
+    let pkg = null, priceUsd = 0, m = null;
+    if (welcomeClaim) {
+      m = membershipRules(config);
+      if (!m) return fail(res, 503, 'membership is not configured');
+      pkg = config.packages.find((p) => p && p.code === body.packageCode);
+      if (!pkg) return fail(res, 400, 'unknown package');
+      if (!rules.welcomeEligible(pkg, m.welcome)) return fail(res, 400, 'this plan is not included with membership');
+      const tx = body.burnTx;
+      if (tx !== undefined && tx !== null && tx !== '' && !/^0x[0-9a-fA-F]{64}$/.test(String(tx))) return fail(res, 400, 'burnTx must be a transaction hash');
+    } else if (!reading) {
       pkg = config.packages.find((p) => p && p.code === body.packageCode);
       if (!pkg) return fail(res, 400, 'unknown package');
       priceUsd = Number(pkg.priceUsd);
@@ -526,7 +670,8 @@ module.exports = async (req, res) => {
 
     const nowS = Math.floor(Date.now() / 1000);
     const why = checkMessage(body.message, address, nowS,
-      reading ? { action: 'read' } : { action: 'redeem', packageCode: String(body.packageCode), n: String(body.n) });
+      welcomeClaim ? { action: 'welcome', packageCode: String(body.packageCode) }
+        : reading ? { action: 'read' } : { action: 'redeem', packageCode: String(body.packageCode), n: String(body.n) });
     if (why) return fail(res, 401, why);
     const signer = eip191.recoverAddress(body.message, body.signature);
     if (!signer || signer !== address) return fail(res, 401, 'signature does not match address');
@@ -540,8 +685,14 @@ module.exports = async (req, res) => {
     // redeemed must not be shown their balance from ten seconds ago — and the key carries the
     // ledger's stamp, so every picture of this wallet goes, not just the one matching this read.
     for (const k of standingCache.keys()) if (k.startsWith(address + ':')) standingCache.delete(k);
+    if (welcomeClaim) {
+      return await claimWelcome(res, { prov, config, m, allowances, address, pkg, burnTx: body.burnTx ? String(body.burnTx).toLowerCase() : '' });
+    }
     const s = await standing(prov, config, allowances, address, week, null, { includeSims: reading });
-    if (reading) return send(res, 200, standingBody(s, address, allowances, config, true));
+    if (reading) {
+      const membership = await membershipOf(prov, config, allowances, address, week, await readTreasury(), { codes: true });
+      return send(res, 200, standingBody(s, address, allowances, config, true, membership));
+    }
 
     const supplierPackage = pkg.packageCode || pkg.code;
     const place = pkg.slug || pkg.code;
@@ -601,6 +752,8 @@ module.exports = async (req, res) => {
 
 // Exposed for tests; not part of the HTTP contract.
 module.exports.transactionIdFor = transactionIdFor;
+module.exports.welcomeIdFor = welcomeIdFor;
+module.exports.HEADS = HEADS;
 module.exports.MESSAGE_HEAD = MESSAGE_HEAD;
 module.exports.checkMessage = checkMessage;
 // Tests only. The public GET is answered from memory for a few seconds, which is correct in a

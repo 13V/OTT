@@ -154,6 +154,7 @@ check('shape', A.emptyAllowances({ asOf: 1700000000, block: 42, week: 100 }), {
   snapshotBlock: 0, coin: '', curve: '',
   budgetUsd: 0, budgetSource: 'the coin is not launched yet',
   circulating: '0', decimals: 18, holders: 0,
+  membership: null, members: {},
   wallets: {},
 });
 
@@ -453,6 +454,66 @@ const readBack = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     A.run({ config: { coin: COIN, curve: '', treasury: TREASURY }, addresses, rpc: fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: missedMint, taxTransfers }).rpc, out: path.join(tmp, 'short.json'), week: 10, now: () => 1700000000000 }),
     /negative balance/);
   check('and nothing was written', fs.existsSync(path.join(tmp, 'short.json')), false);
+
+  console.log('\nmembership: only wallets that burned 100,000 OTT earn, split by holdings with a cap');
+  {
+    // Whole tokens at the fake coin's 9 decimals, so the threshold is 100,000 * 10^9 base units.
+    const tok = (n) => BigInt(n) * 10n ** 9n;
+    const DEAD = '0x000000000000000000000000000000000000dEaD';
+    const ERIN = addr('erin');
+    const burn = (from, to, n, block, tx) => Object.assign(xfer(from, to, tok(n), block), { transactionHash: tx });
+    const memberTransfers = [
+      xfer(ZERO, ALICE, tok(1000000), 950), xfer(ZERO, BOB, tok(400000), 950), xfer(ZERO, CAROL, tok(150000), 950),
+      xfer(ZERO, DAVE, tok(200000), 950), xfer(ZERO, ERIN, tok(500000), 950), xfer(ZERO, CURVE, tok(5000000), 950),
+      burn(ALICE, DEAD, 100000, 1000, '0xa1'),
+      burn(BOB, DEAD, 100000, 1100, '0xb1'),
+      burn(CAROL, DEAD, 50000, 1200, '0xc1'),
+      burn(CAROL, ZERO, 50000, 1210, '0xc2'),       // the token's own burn() counts, and burns add up
+      burn(CURVE, DEAD, 200000, 1300, '0xcc'),      // a contract retiring supply is not a member
+      burn(DAVE, DEAD, 100000, 1700, '0xd1'),       // after the week-10 snapshot (block 1680)
+    ];
+    const tax = [usdgXfer(CURVE, ESCROW, 1000, 1600)];
+    const membershipConfig = { burnTokens: '100000', burnAddress: DEAD, capMultiple: 1.5, welcome: { gb: 1, days: 7, maxUsd: 4 } };
+    const config = { coin: COIN, curve: CURVE, treasury: TREASURY, budgetBps: 8000, membership: membershipConfig };
+    const node = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: memberTransfers, taxTransfers: tax });
+    const r = await A.run({ config, addresses, rpc: node.rpc, out: path.join(tmp, 'members.json'), week: 10, now: () => 1700000000000 });
+    const d = r.data;
+
+    check('the member budget is 80% of last week\'s $1,000 tax', d.budgetUsd, 800);
+    check('burned tokens are not circulating: alice 900k + bob 300k + carol 50k + dave 200k + erin 500k',
+      d.circulating, tok(1950000).toString());
+    checkThat('the burn address is not a holder', !(DEAD.toLowerCase() in d.wallets));
+    check('three members share this week: alice, bob and carol, whose two burns add up', d.membership.members, 3);
+    check('the cap is 1.5x the $266.67 average', d.membership.capUsd, 400);
+    check('alice would take $576 by holdings and is held at the $400 cap', d.wallets[lower(ALICE)], { tokens: tok(900000).toString(), share: 900000 / 1950000, allowanceUsd: 400, member: true });
+    check('bob and carol share the other $400 by holdings, 300k to 50k',
+      [d.wallets[lower(BOB)].allowanceUsd, d.wallets[lower(CAROL)].allowanceUsd], [342.8571, 57.1428]);
+    check('dave joined after the snapshot, so he holds but does not share this week', d.wallets[lower(DAVE)], { tokens: tok(200000).toString(), share: 200000 / 1950000, allowanceUsd: 0, member: false });
+    check('erin holds more than bob but never burned, so she earns nothing', [d.wallets[lower(ERIN)].allowanceUsd, d.wallets[lower(ERIN)].member], [0, false]);
+    check('rounding dust stays in the pool rather than being promised', [d.membership.allocatedUsd, d.membership.unallocatedUsd], [799.9999, 0.0001]);
+    check('the summary records the rule that produced it', [d.membership.burnTokens, d.membership.burnUnits, d.membership.burnAddress, d.membership.capMultiple],
+      ['100000', tok(100000).toString(), DEAD.toLowerCase(), 1.5]);
+    check('every member up to the chain head is listed for the welcome eSIM, the curve excluded',
+      Object.keys(d.members).sort(), [lower(ALICE), lower(BOB), lower(CAROL), lower(DAVE)].sort());
+    check('each member records the burn that took them over the line', [d.members[lower(CAROL)], d.members[lower(DAVE)]],
+      [{ burned: tok(100000).toString(), sinceBlock: 1210, tx: '0xc2' }, { burned: tok(100000).toString(), sinceBlock: 1700, tx: '0xd1' }]);
+    checkThat('the scan ran past the snapshot to the head to find dave',
+      node.calls.some((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(COIN) && Number(BigInt(c.params[0].toBlock)) === HEAD));
+    checkThat('the summary counts members', /3 member\(s\) sharing, 4 member\(s\) in all/.test(r.summary), r.summary);
+
+    const legacyNode = fakeNode({ head: HEAD, launchBlockNum: 900, coinDecimals: 9, coinTransfers: memberTransfers, taxTransfers: tax });
+    const legacy = await A.run({ config: { coin: COIN, curve: CURVE, treasury: TREASURY, budgetBps: 8000 }, addresses,
+      rpc: legacyNode.rpc, out: path.join(tmp, 'legacy.json'), week: 10, now: () => 1700000000000 });
+    check('without a membership block the ledger has no members', [legacy.data.membership, legacy.data.members], [null, {}]);
+    checkThat('and every holder earns by share, as before', legacy.data.wallets[lower(ERIN)].allowanceUsd > 0 && !('member' in legacy.data.wallets[lower(ERIN)]));
+    const coinScans = legacyNode.calls.filter((c) => c.method === 'eth_getLogs' && c.params[0].address.toLowerCase() === lower(COIN));
+    checkThat('and the scan stops at the snapshot', coinScans.length > 0 && coinScans.every((c) => Number(BigInt(c.params[0].toBlock)) <= blockOfWeek(10)),
+      coinScans.map((c) => c.params[0].toBlock).join(','));
+
+    await rejects('a broken membership block is refused rather than guessed at',
+      A.run({ config: Object.assign({}, config, { membership: Object.assign({}, membershipConfig, { capMultiple: 0 }) }), addresses, rpc: node.rpc, out: path.join(tmp, 'bad-members.json'), week: 10 }),
+      /capMultiple/);
+  }
 
   console.log('\nrun() still refuses what it cannot index rather than write a ledger that lies');
   await rejects('a coin the factory does not know',

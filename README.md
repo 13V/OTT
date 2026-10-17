@@ -1,11 +1,14 @@
 # OT+T
 
 OT+T (Onchain Telephone + Telegraph, ticker OTT) is a prelaunch project that turns token trading
-fees into mobile-data credit for eligible holders. The planned token uses Pons on Robinhood Chain
-(chain id 4663) with a 10% creator tax. Under the current allocation model, the previous week's
-collected tax funds a weekly budget, split by each eligible wallet's share of the circulating
-supply. Holders would use that credit for eSIM packages at home or abroad. The verified catalogue
-currently includes 84 packages across 28 countries and regions.
+fees into mobile-data credit for members. The planned token uses Pons on Robinhood Chain
+(chain id 4663) with a 10% creator tax. A wallet joins by burning 100,000 OTT, which also earns it
+a welcome eSIM: any 1 GB, 7-day plan up to $4. Each week, 80% of the previous week's tax is split
+among members by how much OTT they hold, with no member above 3× the average share. The rest
+stays in the pool as a reserve for welcome eSIMs and fees. Members use that credit for eSIM
+packages at home or abroad. The verified catalogue currently includes 84 packages across 28
+countries and regions. [docs/membership.md](docs/membership.md) sets out the rules and the data
+contract.
 
 **Current status:** OTT has not launched. The public app offers a sample account and phone setup
 guidance; weekly holder credit and real eSIM redemption are unavailable. Production purchases
@@ -40,11 +43,13 @@ Meanwhile `scripts/allowances.js` re-derives the week's plan. It sums the coin's
 logs to fold every wallet's balance as of the week's first block — a log sum rather than an archive
 `eth_call`, because this chain's public endpoints cannot be relied on to answer a historical block
 tag, and folding transfers is exact on any endpoint that can serve `eth_getLogs`. The circulating
-supply excludes the curve, the fee escrow, the factory, the hook and the treasury: the curve holds
-all the unsold supply before graduation, so counting it would hand most of every week's budget to a
-contract. The budget itself is the USDG the curve paid into the fee escrow during the previous
-week. Nothing is stored on top of chain data; `site/data/allowances.json` is rebuilt from logs on
-every run.
+supply excludes the curve, the fee escrow, the factory, the hook, the treasury and the burn
+address: the curve holds all the unsold supply before graduation, so counting it would hand most
+of every week's budget to a contract. The budget itself is 80% of the USDG the curve paid into the
+fee escrow during the previous week. The same logs show who has burned 100,000 OTT, and so who is
+a member. The budget is split among the members at the snapshot by their holdings, capped at 3×
+the average, and project contracts can never be members. Nothing is stored on top of chain data;
+`site/data/allowances.json` is rebuilt from logs on every run.
 
 Taking the snapshot at the week boundary rather than at the moment of redemption is deliberate: an
 allowance computed from a live balance can be taken by borrowing a large position, redeeming the
@@ -53,10 +58,12 @@ Lightning wallet's balance, the last 30 days of what redemptions actually cost, 
 imply — into `site/data/treasury.json`, which is where the pool's status (funded, low, empty,
 unknown) comes from.
 
-A holder spends the week's allowance at `/api/redeem`: sign in with a wallet signature, pick a
+A member spends the week's allowance at `/api/redeem`: sign in with a wallet signature, pick a
 wholesale package, and it places the order — invoice, payment and completion, all against the
 Lightning wallet `fund.js` keeps stocked — and hands back the ICCID, the QR and the install links
-wholesale returns.
+wholesale returns. The welcome eSIM goes through the same endpoint, as one signed claim under a
+fixed id of its own. The ledger proves membership, or, for a burn newer than the ledger, that
+burn's transaction receipt does.
 
 ## Why dollars, and not gigabytes
 
@@ -73,8 +80,8 @@ expires. It is not a dividend: nothing is paid out in money, nothing accrues, an
 is not a claim on the treasury. That distinction is the whole reason the allowance expires weekly
 and is denominated in data rather than dollars paid out — a pool of other people's fees paid to
 whoever holds, in cash and without limit, is a shape worth not having on a chain run by a US
-broker. The coin is the subscription; what it entitles you to is a share of one week of data, and
-if you do not use it, it is gone.
+broker. The burn is the subscription; what it entitles you to is a welcome eSIM and a share of
+one week of data at a time, and if you do not use a week's share, it is gone.
 
 ## What is verified, and what is guaranteed
 
@@ -135,7 +142,7 @@ stale.
 |---|---|
 | `site/` | The front end: plain files, no build step |
 | `site/index.html` | The one HTML shell; a hash router picks what fills it |
-| `site/app.js` | The hash router: mounts `site/esim.js` at `#/` and `#/data`, `site/status.js` at `#/status`, and draws About at `#/about` |
+| `site/app.js` | The hash router: mounts `site/home.js` at `#/`, `site/esim.js` at `#/data`, `site/status.js` at `#/status`, `site/holders.js` at `#/holders`, `site/mobile-app.js` at `#/app`, and draws About at `#/about` |
 | `site/esim.js` | Destination discovery and catalogue (`#/`), the holder dashboard (`#/data`), credit and eSIM display, and the redeem flow |
 | `site/status.js` | The status dashboard (`#/status`): the whole machine on one screen — what's running, what isn't, and every number behind it |
 | `site/ui.js`, `site/ui.css` | Shared visual components: the token badge, the delta pill, the small charts |
@@ -148,15 +155,17 @@ stale.
 | `site/api/_lib/providers/` | `wholesale.js`, against the verified API, paid by Lightning; `esimaccess.js`, an alternative reseller; `mock.js`, for tests and a keyless deploy |
 | `site/api/_lib/payers/` | `blink.js` pays and prices in Lightning through Blink's API; `mock.js`, for tests |
 | `site/api/_lib/store.js` | The wholesale provider's record of each redemption — Upstash Redis over REST, or in memory for tests |
+| `site/api/_lib/membership.js` | The membership rules — burns, the capped split by holdings, welcome-plan eligibility, the burn-receipt check — shared by the indexer and the redeem API |
+| `site/api/_lib/rpc.js` | The redeem API's few chain reads: a welcome claim's burn receipt, and the coin's decimals before the ledger knows them |
 | `site/api/_lib/bolt11.js` | Decodes a Lightning invoice far enough to check its amount and payment hash before it's paid |
 | `site/api/_lib/eip191.js`, `site/api/_lib/secp256k1.js`, `site/api/_lib/keccak.js` | Verify the wallet signature a redeem signs in with |
 | `site/config/esim.json` | The coin (empty until launch day), the terms, the brand, and the dated catalogue from wholesale |
 | `site/config/addresses.json` | Chain id, RPC endpoints, USDG, the Pons factory and its friends — the copy the site and the API read |
-| `site/data/allowances.json` | The week's plan: each wallet's balance, share and allowance — written by `scripts/allowances.js` |
+| `site/data/allowances.json` | The week's plan: members, and each wallet's balance, share and allowance — written by `scripts/allowances.js` |
 | `site/data/claims.json` | A log of every sweep out of the fee escrow — written by `scripts/claim.js` |
 | `site/data/funding.json` | A log of every top-up of the Lightning wallet — written by `scripts/fund.js` |
 | `site/data/treasury.json` | The pool card's numbers: balance, 30-day spend, runway, status — written by `scripts/treasury.js` |
-| `scripts/allowances.js` | Re-derives every wallet's credit from USDG `Transfer` logs |
+| `scripts/allowances.js` | Re-derives members and every member's credit from the coin's and USDG's `Transfer` logs |
 | `scripts/catalogue.js` | Regenerates the package list in `site/config/esim.json` from wholesale's portfolio |
 | `scripts/claim.js` | Sweeps the creator tax from Pons's escrow into the treasury; simulates before it sends |
 | `scripts/fund.js` | Tops the Lightning wallet up from the treasury's USDG, over FixedFloat and Across |
@@ -311,6 +320,9 @@ settings in agreement and preserve paid order history.
 
 New purchases also default to closed in production. Keep `REDEMPTIONS_ENABLED=0` through setup;
 only exact `1` permits orders. Account and signed installation reads remain available while closed.
+Joining needs no separate switch. The app offers the burn once purchases are on, the weekly
+ledger knows the coin, and the treasury reports the pool funded with room for a welcome eSIM
+beyond what the week owes.
 `npm run check:prelaunch -- --remote` verifies setup without treating wallet funding or token launch
 as completed. Follow [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
 before enabling live redemption.
@@ -327,8 +339,9 @@ If the frontend itself is hosted on Vercel, its CSP includes the SDK's Reown end
 chosen separate API origin to `connect-src` before using it from that deployment. GitHub Pages
 does not apply `site/vercel.json` headers. Neither hosting the frontend nor setting a project ID
 creates holder credit: launched coin addresses, fresh funded allocations, the durable store and
-the real provider/payer must all be configured. The allocation algorithm is still proportional;
-the proposed entry allowance and 40 GB weekly cap are not implemented or promised by the app.
+the real provider/payer must all be configured. Weekly credit goes to members by holdings,
+capped at 3× the average member share (`membership.capMultiple`). The earlier proposals for a $50
+entry allowance and a 40 GB weekly cap are not implemented or promised by the app.
 
 Then `site/config/esim.json`, in this order, because the order matters:
 
@@ -353,7 +366,10 @@ Two things to know about how it runs once it is on. The funding keeper aims at w
 owes its holders — the published budget less what has been redeemed — rather than a flat target, so
 a big week pulls more across; it is bounded by a ceiling on the standing Lightning balance
 (`--max-pool`), a per-run cap on a single FixedFloat order (`--max`), and the treasury's own
-balance, and it says which of the three stopped it. And `site/data/treasury.json` carries a
+balance, and it says which of the three stopped it. With membership on, it also keeps room for
+five welcome eSIMs at the $4 maximum on top of what the week owes (`--reserve` overrides that),
+because the API stops offering the burn once the pool can't pay for one. And
+`site/data/treasury.json` carries a
 `behind` status, for a pool that is not low by any backward-looking measure and still cannot cover
 what this week has already promised.
 

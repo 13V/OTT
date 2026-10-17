@@ -211,9 +211,19 @@ async function main() {
     FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, packages: [PACKAGES[0], PACKAGES[0]] };
     r = await GET();
     check('duplicate provider SKUs cannot report configuration ready', [r.body.ready.config, r.body.config.catalogueFingerprint], [false, '']);
+    const membership = { burnTokens: '100000', burnAddress: '0x000000000000000000000000000000000000dEaD', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } };
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership };
+    r = await GET();
+    check('the membership rules in effect are reported', r.body.config.membership,
+      { configured: true, burnTokens: '100000', burnAddress: '0x000000000000000000000000000000000000dead', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } });
+    FILES['/config/esim.json'] = { ...LAUNCHED_CONFIG, membership: { ...membership, capMultiple: 0 } };
+    r = await GET();
+    check('a malformed membership block is reported, since the redeem API would quietly treat it as off', r.body.config.membership,
+      { configured: false, error: 'the membership block in esim.json is invalid' });
   } finally { FILES['/config/esim.json'] = LAUNCHED_CONFIG; }
   r = await GET();
   check('launched, budget and tax also come from the config', [r.body.config.launched, r.body.config.coin, r.body.config.budgetBps, r.body.config.taxBps], [true, COIN, 10000, 1000]);
+  check('a config without a membership block reports membership off', r.body.config.membership, { configured: false });
   check('the pool is filled from the mock wallet\'s own numbers', r.body.pool, { usd: 800, sats: 1000000 });
   check('wiring names what env vars actually selected, not just what esim.json says', r.body.wiring, { provider: 'wholesale', payer: 'mock', store: 'memory' });
   check('healthy development fixtures never claim live redemption is ready', r.body.redemption, { enabled: true, ready: false });

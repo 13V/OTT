@@ -142,6 +142,16 @@ function fakeChain({ usd }) {
   checkThat('a treasury too poor to cover the promise says that instead',
     /short of the aim this run, all the treasury has/.test(owed(900, { walletUsd: 300 }).reason), owed(900, { walletUsd: 300 }).reason);
   check('an unreadable treasury file falls back to the flat target', [F.owedFrom(null), F.owedFrom({}), F.owedFrom({ owedUsd: 12.5 })], [null, null, 12.5]);
+
+  // Welcome eSIMs come out of the same pool, so with membership on the aim leaves room for them.
+  check('a welcome reserve is added to what the week owes', owed(420, { reserveUsd: 20 }).targetUsd, 440);
+  check('it can lift a week just under the floor above it', owed(90, { reserveUsd: 20 }).targetUsd, 110);
+  check('the floor still applies when owed plus reserve is under it', owed(40, { reserveUsd: 20 }).targetUsd, 100);
+  check('the ceiling still holds with a reserve', owed(995, { reserveUsd: 20 }).targetUsd, 1000);
+  checkThat('the reason names the reserve', /plus a \$20\.00 welcome reserve/.test(owed(420, { reserveUsd: 20 }).reason), owed(420, { reserveUsd: 20 }).reason);
+  check('without a reserve nothing changes', owed(420).targetUsd, 420);
+  check('the reserve is five welcome eSIMs at the dearest welcome price',
+    [F.welcomeReserveFor({ membership: { burnTokens: '100000', burnAddress: '0x000000000000000000000000000000000000dEaD', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } } }), F.welcomeReserveFor({})], [20, 0]);
   check('the log keeps the newest hundred', F.appendLog(Array.from({ length: 120 }, (_, i) => ({ i })), { i: 'new' }).length, 100);
 
   console.log('\nrefusals before anything moves');

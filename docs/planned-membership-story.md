@@ -1,11 +1,30 @@
-# Planned membership: public story
+# Membership: public story
 
-The homepage, About page, app prelaunch introduction and sample account now describe the proposed model: a one-time OTT burn enrols a member for their first eSIM; collected trading fees fund ongoing member data, without a further burn for each package.
+The homepage, About page, app prelaunch introduction and sample account describe the membership
+model: a one-time OTT burn enrols a member and includes their first eSIM, and collected trading
+fees then fund ongoing member data, with no further burn for each package.
 
-This is a public explanation and design update. The current backend holding-based weekly prototype has not been changed. Public burn enrolment stays closed, redemptions remain paused, and no payment, signature or real-wallet test is part of this release.
+On 17 October 2026 the operator settled the open terms, and the backend now implements them. The
+rules and the data contract are in [membership.md](membership.md):
 
-The calculator demonstrates a possible equal-share formula: daily fees × 7 × illustrative data allocation ÷ enrolled users. The default $1,000/day, 80% allocation and 1,000 users produces $5.60/week each. These are editable illustrations, not approved terms, a forecast or an account balance. Final allocation, burn amount, initial package, duration, expiry and multiple-membership rules are pending.
+- **Burn:** 100,000 OTT, sent straight to the burn address. There is no escrow, so a burn can't
+  be refunded. The app offers the burn only while the reserve can pay for a welcome eSIM.
+- **First eSIM:** any 1 GB, 7-day plan costing $4 or less.
+- **Ongoing data:** 80% of each week's tax, split among members by holdings, with no member above
+  3× the average share.
+- **Membership:** one per wallet, and it doesn't expire.
 
-The Trust section lists pending first-delivery escrow, issuance verification and recovery rules, independent contract review, reserve approvals, public reporting and a funded phone test. It distinguishes on-chain transaction evidence from reported external-provider balances and keeps activation codes private. None of these planned safeguards is presented as a completed audit or live refund guarantee.
+The earlier calculator illustrated an equal split: daily fees × 7 × data allocation ÷ enrolled
+users. The average share is still that figure, but a member's actual share now follows their
+holdings, up to the 3× cap.
 
-The new illustration follows the existing character identity and the requested standing pose, eSIM pass and OTT token with a sculpted clay flame. The final prompt and tool mode are recorded in `membership-art-direction.md`.
+Enrolment stays closed until the token launches and purchases are switched on. The Trust section
+lists independent review, reserve approvals and public reporting as pending. It separates
+on-chain evidence from reported external-provider balances and keeps activation codes private.
+The funded phone test passed on 17 October 2026: the supplier's eSIM installed and gave mobile
+data on the operator's phone in Australia. That test bought the eSIM directly from the supplier,
+so it didn't exercise OTT's automated Lightning payment.
+
+The illustration keeps the existing character identity and the requested standing pose, holding
+an eSIM pass and an OTT token with a sculpted clay flame. The final prompt and tool mode are
+recorded in `membership-art-direction.md`.
