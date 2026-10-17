@@ -191,11 +191,12 @@ test('codes that arrive after the wallet disconnects are never shown, and reconn
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
   await page.getByRole('button', { name: 'Show my eSIM codes', exact: true }).click();
   await expect(page.locator('.data-ac')).toContainText('FIXTURE-ONLY');
-  // Each read was its own signature over its own message, and each checks out for this wallet.
+  // Each read needed its own approval in the wallet, and each checks out for this wallet. (Two
+  // reads within the same second sign the same text, so the proof is the prompt, not the text.)
   expect(wallet.calls('signMessage')).toHaveLength(2);
   expect(posts).toHaveLength(2);
   expect(posts.every(body => !body.packageCode && body.address === ADDRESS && wallet.verify(body.message, body.signature))).toBe(true);
-  expect(posts[0].message).not.toBe(posts[1].message);
+  expect(wallet.calls('signMessage').map(call => call.message)).toEqual(posts.map(body => body.message));
   expect(posts.map(body => body.message.split('\n')[0])).toEqual(['OT+T — show my eSIM codes', 'OT+T — show my eSIM codes']);
 });
 

@@ -274,10 +274,11 @@ Pages cannot run the redemption/status functions. A backend deployment is needed
 using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
 
 The Vercel backend is connected to `13V/OTT`, with production deployments from `main` and Root
-Directory `site`. The reviewed release `094057b` deployed successfully on 6 October 2026 and passed
-all 15 remote prelaunch checks, including the catalogue fingerprint. Future changes to `site/`
-deploy through Git. Token launch, wallet funding, a real payment and installation on a phone remain
-deferred; public redemption stays disabled.
+Directory `site`. The Solana release deployed on 17 October 2026 and passed all 14 remote
+prelaunch checks, including the catalogue fingerprint, durable order storage and the Pages CORS
+preflight, and GitHub Pages serves the same build. Future changes to `site/` deploy through Git.
+The coin's creation, funding the Lightning wallet, a real payment and installation on a phone
+remain; public redemption stays disabled until launch.
 
 `npm run serve:api` runs the same redemption/status handlers as a portable Node server. It listens
 on `127.0.0.1:3000` by default and serves only those two API routes. A public `HOST` forces

@@ -29,8 +29,8 @@ The Vercel configuration explicitly skips project install/build commands: the re
 the committed frontend assets and bundles the existing Node handlers. This keeps the parent
 repository's frontend tooling and open-ended Node engine range out of the backend deployment.
 
-The **ott-prelaunch** project is now connected to the `13V/OTT` Git repository. Release
-`094057b` deployed to production on 6 October 2026 and passed all 15 remote prelaunch checks.
+The **ott-prelaunch** project is now connected to the `13V/OTT` Git repository. The Solana
+release deployed to production on 17 October 2026 and passed all 14 remote prelaunch checks.
 Use the latest reviewed **`main`** commit for future deployments. The Git checkout contains `site/`
 directory, so keep Root Directory **`site`** for that source. Connecting Git does not prove that
 the latest production deployment is Ready or that the live catalogue matches the release;
