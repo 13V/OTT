@@ -22,11 +22,32 @@
   };
   const MESSAGE_HEAD = 'OT+T';
   const LAUNCHPAD_URL = 'https://whatever-fun.vercel.app/#/new';
+  // The membership burn is a plain ERC-20 transfer to the burn address, and the proof the API
+  // accepts is that transfer's own Transfer log, so these are the whole on-chain contract here.
+  const TRANSFER_SELECTOR = '0xa9059cbb';  // transfer(address,uint256)
+  const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';  // Transfer(address,address,uint256)
+  const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
   let selectedPackageCode = '';
   let myDataRender = 0;
 
   // ============================================================================ small helpers
   const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
+  const word32 = (hex) => String(hex).replace(/^0x/i, '').toLowerCase().padStart(64, '0');
+  /** The calldata for transfer(burnAddress, burnUnits): what the wallet is asked to send to the coin. */
+  function burnCalldata(burnAddress, burnUnits) {
+    if (!isAddress(burnAddress) || burnAddress.toLowerCase() === ZERO_ADDRESS) throw new Error('The burn address is not valid.');
+    if (!/^\d{1,78}$/.test(String(burnUnits))) throw new Error('The burn amount is not valid.');
+    const units = BigInt(String(burnUnits));
+    if (units <= BigInt(0) || units >= BigInt(2) ** BigInt(256)) throw new Error('The burn amount is not valid.');
+    return TRANSFER_SELECTOR + word32(burnAddress) + word32(units.toString(16));
+  }
+  /** Whether a catalogue package can be the welcome eSIM: the welcome size and term, at or under its price cap. */
+  function welcomeEligible(pkg, welcome) {
+    if (!pkg || !welcome || typeof welcome !== 'object') return false;
+    const gb = Number(welcome.gb), days = Number(welcome.days), maxUsd = Number(welcome.maxUsd), price = Number(pkg.priceUsd);
+    return [gb, days, maxUsd, price].every(Number.isFinite) && price > 0
+      && Number(pkg.gb) === gb && Number(pkg.days) === days && price <= maxUsd;
+  }
   // The carrier brand, when the config carries one. Every string built from it falls back to the
   // pre-brand wording when this is null, so a fork that has not set cfg.brand renders exactly as
   // the page did before the brand existed.
@@ -184,13 +205,18 @@
   // order and nothing else — someone who talks a holder into signing it gets at most that single
   // eSIM, not the run of their week. It is also written to be read: a person squinting at their
   // wallet prompt should be able to tell what they are about to approve, and on whose site.
+  // A welcome claim's message names its plan and nothing else: a member has exactly one welcome
+  // eSIM, so there is no slot to bind, and the API answers a repeat for the same plan with the
+  // order it already placed.
   function signInMessage(address, want) {
-    const head = want.action === 'redeem' ? MESSAGE_HEAD + ' — authorise a data redemption' : MESSAGE_HEAD + ' — show my eSIM codes';
+    const heads = { redeem: ' — authorise a data redemption', welcome: ' — claim my welcome eSIM' };
+    const head = MESSAGE_HEAD + (heads[want.action] || ' — show my eSIM codes');
     const lines = [head, 'Site: ' + location.host.toLowerCase(), 'Wallet: ' + address.toLowerCase()];
     if (want.action === 'redeem') {
       lines.push('Plan: ' + want.packageCode);
       lines.push('Slot: ' + want.n);
     }
+    if (want.action === 'welcome') lines.push('Plan: ' + want.packageCode);
     lines.push('Issued: ' + Math.floor(Date.now() / 1000));
     return lines.join('\n');
   }
@@ -263,7 +289,7 @@
       const error = new Error(j.error || 'redeem API refused (HTTP ' + res.status + ')');
       // Validation/auth/slot refusals happen before provider dispatch. A server or
       // gateway failure can follow a payment, so it must keep its unconfirmed state.
-      const beforeDispatch = ['data redemption is not enabled yet', 'data config unavailable', 'package has no price', 'allowances unavailable'];
+      const beforeDispatch = ['data redemption is not enabled yet', 'data config unavailable', 'package has no price', 'allowances unavailable', 'membership is not configured'];
       error.requestDeclined = [400, 401, 403, 409, 422].includes(res.status)
         || res.status === 503 && beforeDispatch.includes(j.error);
       throw error;
@@ -288,9 +314,57 @@
       usedUsd: stale ? null : amount(standing.redeemedUsd),
       weekEnd: stale ? null : Number(standing.weekEnd),
       orderCount: (standing.orders || []).length + (standing.history || []).length,
+      membership: publicMembership(standing.membership, address),
       sims: (Array.isArray(standing.sims) ? standing.sims : []).slice(0, 200).filter(sim => sim && typeof sim.slug === 'string')
         .map(sim => ({ slug: sim.slug.slice(0, 80), iccid: typeof sim.iccid === 'string' ? sim.iccid.slice(0, 80) : '',
           createdAt: typeof sim.createdAt === 'string' ? sim.createdAt.slice(0, 40) : null })) };
+  }
+
+  /** The membership facts a summary screen may show: public figures and states, never an order's details. */
+  function publicMembership(m, address) {
+    if (!m || m.configured !== true) return { configured: false };
+    const welcome = m.welcome && typeof m.welcome === 'object'
+      ? { gb: Number(m.welcome.gb), days: Number(m.welcome.days), maxUsd: Number(m.welcome.maxUsd) } : null;
+    return {
+      configured: true,
+      member: m.member === true || !!knownBurn(String(address || '').toLowerCase()),
+      sharing: m.sharing === true,
+      welcomeClaimed: !!m.welcomeOrder,
+      enrolmentOpen: !!(m.enrolment && m.enrolment.open === true),
+      reason: m.enrolment && typeof m.enrolment.reason === 'string' ? m.enrolment.reason.slice(0, 200) : '',
+      burnTokens: /^\d{1,30}$/.test(String(m.burnTokens || '')) ? String(m.burnTokens) : '',
+      capMultiple: Number.isFinite(Number(m.capMultiple)) && Number(m.capMultiple) > 0 ? Number(m.capMultiple) : null,
+      welcome: welcome && [welcome.gb, welcome.days, welcome.maxUsd].every(Number.isFinite) ? welcome : null,
+    };
+  }
+
+  // A burn this page has seen confirm, per wallet. The API's ledger lists a member only after the
+  // indexer runs again, and the welcome claim can prove a newer burn with its transaction hash, so
+  // the hash is kept: in memory, and in browser storage so a reload cannot invite a second burn.
+  // It is public chain data. The API checks it on chain, and a hash it rejects is forgotten.
+  const BURN_STORAGE = 'ott-membership-burn:';
+  const confirmedBurns = new Map();
+  // A burn sent but not yet confirmed. While one is outstanding the page offers a status check,
+  // never a second burn.
+  const pendingBurns = new Map();
+  const isTxHash = (value) => /^0x[0-9a-fA-F]{64}$/.test(String(value || ''));
+  function knownBurn(addr) {
+    if (!isAddress(addr)) return null;
+    if (confirmedBurns.has(addr)) return confirmedBurns.get(addr);
+    try {
+      const stored = window.localStorage && window.localStorage.getItem(BURN_STORAGE + addr);
+      if (isTxHash(stored)) { confirmedBurns.set(addr, stored.toLowerCase()); return stored.toLowerCase(); }
+    } catch (e) { /* Storage can be unavailable; memory still holds this page's own burns. */ }
+    return null;
+  }
+  function rememberBurn(addr, hash) {
+    if (!isAddress(addr) || !isTxHash(hash)) return;
+    confirmedBurns.set(addr, hash.toLowerCase());
+    try { window.localStorage && window.localStorage.setItem(BURN_STORAGE + addr, hash.toLowerCase()); } catch (e) { /* memory is enough */ }
+  }
+  function forgetBurn(addr) {
+    confirmedBurns.delete(addr);
+    try { window.localStorage && window.localStorage.removeItem(BURN_STORAGE + addr); } catch (e) { /* nothing stored */ }
   }
 
   // ============================================================================ the page
@@ -369,7 +443,7 @@
         h('span', { class: 'state-pill' }, launched ? 'DATA PROGRAMME ACTIVE' : 'PRELAUNCH · CATALOGUE PREVIEW'),
         h('h1', { class: 'hero-title' }, 'A memecoin with a data plan.'),
         h('p', { class: 'hero-kicker' }, 'Last week’s creator tax. This week’s mobile data.'),
-        h('p', { class: 'hero-sub' }, 'Eligible OTT holders receive a share of a variable weekly data budget to redeem for available travel eSIMs.'),
+        h('p', { class: 'hero-sub' }, 'Members who burn OTT once receive a share of a variable weekly data budget to redeem for available travel eSIMs.'),
         h('div', { class: 'hero-actions' }, primary,
           h('a', { class: 'btn btn-ghost', href: '#plans' }, 'Explore destinations'),
           h('a', { class: 'hero-text-link', href: '#/data' }, 'My data ↗')),
@@ -391,7 +465,7 @@
     return h('section', { class: 'section mechanism', id: 'how-it-works' }, h('div', { class: 'wrap mechanism-grid' },
       h('div', { class: 'mechanism-intro' }, h('span', { class: 'label label--accent' }, 'THE CONNECTION'),
         h('h2', {}, 'A trade creates the tax. A snapshot sets the share.'),
-        h('p', {}, 'The creator tax collected in the previous week sets the next week’s data budget. An eligible wallet gets a share based on its OTT balance at the Monday snapshot relative to circulating supply.'),
+        h('p', {}, 'The creator tax collected in the previous week sets the next week’s member data budget. A member wallet’s share follows its OTT balance at the Monday snapshot, capped at a multiple of the average member share.'),
         h('a', { href: '#/about', class: 'text-arrow' }, 'Read the full rules ↗')),
       h('div', { class: 'mechanism-facts' },
         h('div', { class: 'mechanism-fact' }, h('span', {}, '01 / FUNDING'), h('strong', {}, 'Budget varies with trading.'), h('p', {}, 'Only collected creator tax funds the weekly credit.')),
@@ -501,10 +575,10 @@
     const brand = brandOf(cfg);
     const carrier = brand ? brand.name : 'the coin';
     const steps = [
-      { title: 'Hold OTT',
-        body: 'Keep any amount of OTT in your wallet. No trading, no staking, no claim to file — holding is the whole mechanism.' },
+      { title: 'Burn once to join',
+        body: 'Burn OTT once from your wallet to become a member and claim a welcome eSIM. Holding alone does not earn weekly credit.' },
       { title: 'Receive weekly credit',
-        body: 'Each Monday, last week’s creator tax on ' + carrier + '’s trades funds a variable data budget. Your share depends on your balance at the weekly snapshot and the circulating supply.' },
+        body: 'Each Monday, last week’s creator tax on ' + carrier + '’s trades funds a variable data budget. A member’s share follows their balance at the weekly snapshot, capped at a multiple of the average member share.' },
       { title: 'Redeem an eSIM and scan it',
         body: 'Choose a destination and package, then sign with your wallet to redeem. Unused weekly credit expires at the week’s end; a purchased package has its own validity period.' },
     ];
@@ -553,7 +627,7 @@
   function faqSection(ctx) {
     const { h } = ctx;
     const entries = [
-      ['How is my weekly credit calculated?', 'The previous week’s creator tax funds a data budget. An eligible wallet’s share is based on its OTT balance at the weekly snapshot relative to the circulating supply. Funding and eligibility can change week to week.'],
+      ['How is my weekly credit calculated?', 'The previous week’s creator tax funds a member data budget. A member wallet’s share follows its OTT balance at the weekly snapshot, and no member gets more than a capped multiple of the average share. Funding can change week to week.'],
       ['When does credit expire?', 'Unused credit expires at the end of the week it was published for. It does not roll over. A redeemed eSIM package has separate validity rules.'],
       ['Can I install the eSIM on my phone?', 'Your device must support eSIMs. Check your device and carrier settings before redeeming. After redemption, use the install link or scan the QR code on another screen.'],
       ['What if I already have an eSIM for a place?', 'A further package for the same place can be added to that eSIM. Packages run consecutively. The provider’s guidance on how long an unused package may wait before activation is unresolved, so do not assume a queued package can be stored indefinitely.'],
@@ -692,11 +766,20 @@
         + (fmtDate(publishedWeekEnd) || 'last week') + '. A fresh file is written every half hour.', 'plain'));
     }
 
-    if (panel.classList.contains('dashboard-panel')) {
+    // Membership is settled first. A holder who has not joined has no weekly credit, so they see
+    // how to join rather than a $0.00 card and a row of zero tiles, which would read as a verdict
+    // on the wallet. A deployment without a membership block keeps the old page.
+    const membership = standing && standing.membership && standing.membership.configured === true ? standing.membership : null;
+    const isMember = !!membership && (membership.member === true || !!knownBurn(addr));
+    const showCredit = !membership || isMember;
+
+    if (showCredit && panel.classList.contains('dashboard-panel')) {
       body.appendChild(h('div', { class: 'credit-summary' },
         h('div', {}, h('span', { class: 'credit-summary-label' }, 'REMAINING WEEKLY CREDIT'),
           h('strong', {}, stale ? 'Awaiting allocation' : (Number.isFinite(remainingUsd) ? fmtMoney(remainingUsd) : 'Unavailable')),
-          h('p', {}, stale ? 'Last published allowance: ' + (Number.isFinite(allowanceUsd) ? fmtMoney(allowanceUsd) : 'unavailable') + '. This is not spendable current-week credit.' : 'For eSIM packages only. It cannot be withdrawn or carried over.')),
+          h('p', {}, stale ? 'Last published allowance: ' + (Number.isFinite(allowanceUsd) ? fmtMoney(allowanceUsd) : 'unavailable') + '. This is not spendable current-week credit.' : 'For eSIM packages only. It cannot be withdrawn or carried over.'
+            + (standing && standing.membership && standing.membership.configured === true && Number(standing.membership.capMultiple) > 0
+              ? ' Members’ weekly credit follows their holdings, and no member gets more than ' + Number(standing.membership.capMultiple) + '× the average.' : ''))),
         h('div', { class: 'credit-summary-side' }, h('span', {}, 'EXPIRES'), h('b', {}, !stale && Number.isFinite(weekEnd) ? fmtDate(weekEnd) : 'Not published'))));
     }
 
@@ -718,15 +801,24 @@
         + 'Check current availability before redeeming.', 'warn'));
     }
 
+    // Membership comes before the holding: a member who burned every token still has a welcome
+    // eSIM to claim, and a holder who has not joined is shown how to, not a weekly picker for
+    // credit they cannot have.
+    if (membership) body.appendChild(membershipSection(ctx, cfg, addr, standing, allow, panel));
+
     if (!Number.isFinite(tokens)) {
       body.appendChild(notice('Your holding and weekly credit are not available right now. Try again when the programme data is published.', 'warn'));
       if (standing) body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
       return;
     }
     if (!(tokens > 0)) {
-      body.appendChild(notice('This wallet holds no OTT, so it has no data this week.', 'plain'));
-      body.appendChild(h('div', { class: 'data-actions' },
-        h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Get OTT on whatever.fun')));
+      body.appendChild(notice(isMember ? 'This wallet held no OTT at the weekly snapshot, so it has no weekly share this week.'
+        : membership ? 'This wallet holds no OTT. Joining burns ' + fmtTokens(Number(membership.burnTokens)) + ' OTT.'
+          : 'This wallet holds no OTT, so it has no data this week.', 'plain'));
+      if (!isMember) {
+        body.appendChild(h('div', { class: 'data-actions' },
+          h('a', { class: 'btn btn-primary', href: LAUNCHPAD_URL, target: '_blank', rel: 'noopener' }, 'Get OTT on whatever.fun')));
+      }
       // A wallet that now holds nothing can still have an eSIM from a week it did — simsSection
       // shows it, and quietly shows nothing when there truly is none, the same hasAny guard always
       // gated this on.
@@ -734,10 +826,11 @@
       return;
     }
 
-    const tiles = dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd: stale ? NaN : remainingUsd, weekEnd: stale ? NaN : weekEnd });
+    const tiles = dashboardTiles(ctx, cfg, { tokens, share, allowanceUsd, redeemedUsd, remainingUsd: stale ? NaN : remainingUsd, weekEnd: stale ? NaN : weekEnd,
+      capMultiple: membership ? Number(membership.capMultiple) : NaN });
     const details = inApp() ? h('details', { class: 'data-account-details' },
       h('summary', {}, 'Credit and holdings details'), tiles) : tiles;
-    if (!inApp() || !standing) body.appendChild(details);
+    if (showCredit && (!inApp() || !standing)) body.appendChild(details);
 
     if (!standing) {
       body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
@@ -747,13 +840,385 @@
     // The SIM is the object: what this wallet already has, and what is queued on it, comes before
     // the picker that adds more — so a returning holder reads "here is your eSIM" before "buy more
     // data", not the other way around.
-    if (!((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length)) {
-      body.appendChild(notice('No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
+    // A non-member's join card already says what membership brings, so no empty-state notice here.
+    if (showCredit && !((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length + (membership && membership.welcomeOrder ? 1 : 0))) {
+      body.appendChild(notice(membership && isMember && !membership.welcomeOrder
+        ? 'No eSIMs yet. Claim your free welcome eSIM above, or pick a destination and package below.'
+        : 'No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
     }
     body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
-    if (inApp()) body.appendChild(details);
+    if (showCredit && inApp()) body.appendChild(details);
     if (stale) return;
+    // Weekly credit is for members only; a holder who has not joined has none to spend.
+    if (membership && !isMember) return;
     body.appendChild(redeemForm(ctx, cfg, addr, standing, allow, panel, freshOrder));
+  }
+
+  // ============================================================================ membership
+  /**
+   * Join once, claim a welcome eSIM, then share each week's budget. Joining burns `burnTokens` OTT:
+   * an ordinary transfer from this wallet to the burn address. A member claims one welcome eSIM
+   * that the reserve pays for, and from the next Monday snapshot shares the weekly budget by
+   * holdings, with no member above `capMultiple`× the average.
+   *
+   * Everything here comes from the API's `membership` answer rather than the page's config, so the
+   * coin, burn address and amount the wallet is asked to send are exactly what the API accepts as
+   * proof. The burn can't be undone, so it is offered only while the API says enrolment is open,
+   * only after an explicit confirmation, never while a burn from this page is still confirming,
+   * and never once an earlier burn from this wallet is visible on chain.
+   */
+  const RECEIPT_POLL_MS = 1500;
+  const RECEIPT_ATTEMPTS = 80;
+  const BURN_SCAN_SPAN = 1000000;
+  const BURN_SCAN_CHUNKS = 5;
+  // A welcome claim sent without a confirmed answer: its plan, in this page's memory only. A retry
+  // must name the same plan, which the API answers with the order it already placed.
+  const unconfirmedWelcome = new Map();
+
+  async function waitForReceipt(ctx, hash, alive) {
+    for (let i = 0; i < RECEIPT_ATTEMPTS; i++) {
+      let receipt = null;
+      try { receipt = await ctx.rpc('eth_getTransactionReceipt', [hash]); } catch (e) { receipt = null; }
+      if (!alive()) return null;
+      if (receipt && typeof receipt === 'object' && receipt.blockNumber && receipt.status !== undefined) return receipt;
+      await new Promise((resolve) => setTimeout(resolve, RECEIPT_POLL_MS));
+      if (!alive()) return null;
+    }
+    return null;
+  }
+
+  /**
+   * One transaction newer than the ledger that already burned enough from this wallet, or null.
+   * The ledger lists every member up to its own head block, so only the blocks after it need a
+   * look, and a narrow filter answers a million blocks at a time. Any failure answers null: the
+   * confirmation step still tells the holder not to burn twice.
+   */
+  async function findBurn(ctx, m, addr, allow) {
+    const from = allow && String(allow.coin || '').toLowerCase() === String(m.coin).toLowerCase() ? Number(allow.block) : NaN;
+    if (!Number.isSafeInteger(from) || from <= 0) return null;
+    let head;
+    try { head = Number(BigInt(await ctx.rpc('eth_blockNumber', []))); } catch (e) { return null; }
+    if (!Number.isSafeInteger(head) || head <= from) return null;
+    const units = BigInt(String(m.burnUnits));
+    const topic = (a) => '0x' + word32(a);
+    const totals = new Map();
+    for (let lo = Math.max(from + 1, head - BURN_SCAN_SPAN * BURN_SCAN_CHUNKS + 1); lo <= head; lo += BURN_SCAN_SPAN) {
+      const hi = Math.min(head, lo + BURN_SCAN_SPAN - 1);
+      let logs;
+      try {
+        logs = await ctx.rpc('eth_getLogs', [{ address: m.coin, topics: [TRANSFER_TOPIC, topic(addr), [topic(m.burnAddress), topic(ZERO_ADDRESS)]],
+          fromBlock: '0x' + lo.toString(16), toBlock: '0x' + hi.toString(16) }]);
+      } catch (e) { return null; }
+      for (const log of Array.isArray(logs) ? logs : []) {
+        if (!log || log.removed || String(log.address || '').toLowerCase() !== String(m.coin).toLowerCase() || !isTxHash(log.transactionHash)) continue;
+        let value;
+        try { value = BigInt(log.data); } catch (e) { continue; }
+        const tx = log.transactionHash.toLowerCase();
+        const total = (totals.get(tx) || BigInt(0)) + value;
+        totals.set(tx, total);
+        if (total >= units) return tx;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The coin, burn address and amount the wallet is asked to send come from the API. A burn can't
+   * be undone, so they must also agree with this site's own published config, and the amount with
+   * the published ledger's decimals when that ledger is about the coin. Then one compromised host
+   * cannot redirect a member's tokens. Returns why they disagree, or '' when they agree.
+   */
+  function publishedBurnMismatch(cfg, m, allow) {
+    const published = cfg && cfg.membership;
+    const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+    const refuse = 'The burn details from the server don’t match this site’s published settings, so nothing was sent. Reload and try again.';
+    if (!published || !same(cfg.coin, m.coin) || !same(published.burnAddress, m.burnAddress) || String(published.burnTokens || '') !== String(m.burnTokens || '')) return refuse;
+    const decimals = Number(allow && allow.decimals);
+    if (allow && same(allow.coin, m.coin) && Number.isSafeInteger(decimals) && decimals >= 0 && decimals <= 36) {
+      if (!/^\d{1,30}$/.test(String(published.burnTokens)) || !/^\d{1,78}$/.test(String(m.burnUnits || ''))) return refuse;
+      if (BigInt(String(published.burnTokens)) * BigInt(10) ** BigInt(decimals) !== BigInt(String(m.burnUnits))) return refuse;
+    }
+    return '';
+  }
+
+  function membershipSection(ctx, cfg, addr, standing, allow, panel) {
+    const { h, notice } = ctx;
+    const m = standing.membership;
+    const app = inApp();
+    const wrap = h('div', { class: 'data-membership' });
+    const burnTokens = Number(m.burnTokens);
+    const burnLabel = (Number.isFinite(burnTokens) ? fmtTokens(burnTokens) : String(m.burnTokens || '')) + ' OTT';
+    const welcome = m.welcome || {};
+    const welcomeText = Number(welcome.gb) + ' GB, ' + Number(welcome.days) + '-day plan up to ' + fmtPrice(Number(welcome.maxUsd));
+    const cap = Number(m.capMultiple);
+    const capText = cap > 0 ? 'no member gets more than ' + cap + '× the average share' : 'shares are capped';
+    const shortAddress = addr.slice(0, 6) + '…' + addr.slice(-4);
+    const walletRequest = (args) => (window.OTTWallet || window.ethereum).request(args);
+    const stillHere = (generation) => panel.isConnected && (!ctx.isCurrent || ctx.isCurrent())
+      && currentAccount(ctx)?.toLowerCase() === addr && generation === walletGeneration;
+    // put() appends a state's parts and skips the empty slots. DOM append() would print a null as
+    // the word "null"; h() already skips them.
+    const put = (...nodes) => wrap.append(...nodes.flat(Infinity).filter((node) => node !== null && node !== undefined && node !== false));
+    // Every state shares one frame: a kicker, a status pill and a title. `tone` colours the pill,
+    // and the state name lets the stylesheet change the card's rim.
+    const frame = (state, kicker, pill, tone, title) => {
+      wrap.className = 'data-membership data-membership--' + state;
+      put(h('div', { class: 'data-membership-head' },
+        h('span', { class: 'data-membership-kicker' }, kicker),
+        pill ? h('span', { class: 'data-membership-pill data-membership-pill--' + tone },
+          tone === 'busy' ? h('span', { class: 'data-membership-spinner', 'aria-hidden': 'true' }) : null, pill) : null),
+      h('h3', { class: 'data-membership-title' }, title));
+    };
+    const shareLine = () => h('p', { class: 'data-membership-share' }, m.sharing === true
+      ? 'You’re in this week’s split. Weekly credit follows the OTT you held at Monday’s snapshot, and ' + capText + '.'
+      : 'Your weekly share starts at the next Monday snapshot. It follows the OTT you hold then, and ' + capText + '.');
+    const say = (status, text, error) => { if (status.isConnected) { status.textContent = text; status.classList.toggle('err', !!error); } };
+
+    function paint() {
+      clear(wrap);
+      const burn = knownBurn(addr);
+      if (m.member === true || burn) {
+        if (m.welcomeOrder) paintMember(); else paintWelcome(burn);
+      } else if (pendingBurns.has(addr)) paintPending(pendingBurns.get(addr));
+      else if (m.enrolment && m.enrolment.open === true) paintJoin();
+      else paintClosed();
+    }
+
+    function paintClosed() {
+      const reason = m.enrolment && typeof m.enrolment.reason === 'string' && m.enrolment.reason.trim() ? m.enrolment.reason.trim() : 'Try again later.';
+      frame('closed', 'OT+T membership', 'Joining closed', 'muted', 'Join OT+T');
+      put(h('p', { class: 'data-membership-lede' }, 'Members burn ' + burnLabel + ' once, claim a welcome eSIM and share each week’s data budget.'),
+        h('p', { class: 'data-membership-closed', role: 'status' }, h('strong', {}, 'Joining is closed right now. '), reason));
+    }
+
+    function paintJoin(problem) {
+      const join = h('button', { class: 'btn btn-primary', onclick: () => paintConfirm() }, 'Join: burn ' + burnLabel);
+      join.disabled = !walletAvailable();
+      frame('join', 'OT+T membership', 'Joining open', 'open', 'Join OT+T');
+      put(h('p', { class: 'data-membership-lede' }, 'Burn ' + burnLabel + ' once to become a member. Membership includes:'),
+        h('ul', { class: 'data-membership-list' },
+          h('li', {}, h('strong', {}, 'A welcome eSIM: '), 'any ' + welcomeText + '. The reserve pays for it, so it doesn’t use weekly credit.'),
+          h('li', {}, h('strong', {}, 'A weekly share of trading fees '), 'as data credit, from the next Monday snapshot. Shares follow the OTT you hold, and ' + capText + '.')),
+        h('p', { class: 'data-membership-fine' }, 'The burn sends ' + burnLabel + ' from this wallet to the burn address. It can’t be undone or refunded.'),
+        problem ? notice(problem, 'error') : null,
+        h('div', { class: 'data-actions' }, join),
+        walletAvailable() ? null : notice('Joining needs a wallet that can send a transaction.', 'plain'));
+    }
+
+    function paintConfirm() {
+      clear(wrap);
+      const status = h('p', { class: 'hint', role: 'status' }, '');
+      const agree = h('input', { type: 'checkbox', id: 'f-burn-confirm' });
+      const burn = h('button', { class: 'btn btn-primary', onclick: () => doBurn(status, [burn, cancel, agree]) }, 'Burn ' + burnLabel);
+      const cancel = h('button', { class: 'btn btn-ghost', onclick: () => paint() }, 'Cancel');
+      burn.disabled = true;
+      agree.addEventListener('change', () => { burn.disabled = !agree.checked; });
+      frame('confirm', 'Confirm the burn', 'Permanent', 'warn', 'Burn ' + burnLabel + '?');
+      put(h('div', { class: 'data-burn-warning' },
+          h('p', {}, 'This sends ' + burnLabel + ' from ' + shortAddress + ' to the burn address:', h('code', { class: 'data-burn-address' }, m.burnAddress)),
+          h('p', { class: 'data-burn-final' }, h('strong', {}, 'Burned tokens are gone for good. This can’t be undone or refunded.')),
+          h('p', {}, 'If this wallet has already burned, don’t burn again. Your membership appears after the next ledger update.')),
+        h('label', { class: 'data-burn-agree', for: 'f-burn-confirm' }, agree, h('span', {}, 'I understand the burn is permanent and can’t be refunded.')),
+        h('div', { class: 'data-actions' }, burn, cancel), status);
+      agree.focus();
+    }
+
+    async function doBurn(status, controls) {
+      const generation = walletGeneration;
+      const lock = (on) => controls.forEach((control) => { if (control.isConnected) control.disabled = on; });
+      lock(true);
+      let sent = null;
+      try {
+        if (!walletAvailable()) throw new Error('No wallet found to send the burn.');
+        if (window.OTTWallet?.state().chain === 'solana') throw new Error('Joining needs your Robinhood Chain OTT wallet.');
+        if (!isAddress(m.coin)) throw new Error('The coin address is not available. Reload and try again.');
+        const mismatch = publishedBurnMismatch(cfg, m, allow);
+        if (mismatch) throw new Error(mismatch);
+        const data = burnCalldata(m.burnAddress, m.burnUnits);
+        say(status, 'Checking your wallet…');
+        await window.OTTEnsureChain?.();
+        if (generation !== walletGeneration) throw new Error('Your wallet connection changed. Review your refreshed account and try again.');
+        if (!stillHere(generation)) return;
+        const earlier = await findBurn(ctx, m, addr, allow);
+        if (!stillHere(generation)) return;
+        if (earlier) {
+          rememberBurn(addr, earlier);
+          ctx.toast?.('Membership found', 'This wallet has already burned ' + burnLabel + '. Claim your welcome eSIM.', 'success');
+          repaintFrom(ctx, cfg, addr, allow, standing, panel);
+          return;
+        }
+        const raw = await ctx.rpc('eth_call', [{ to: m.coin, data: SEL.balanceOf + word32(addr) }, 'latest']);
+        if (!stillHere(generation)) return;
+        if (!/^0x[0-9a-fA-F]{1,64}$/.test(String(raw))) throw new Error('Your OTT balance could not be read. Try again in a moment.');
+        const balance = BigInt(raw);
+        const units = BigInt(String(m.burnUnits));
+        if (balance < units) {
+          const held = Number.isFinite(burnTokens) ? Number(balance) * burnTokens / Number(units) : NaN;
+          say(status, 'This wallet holds ' + (Number.isFinite(held) ? fmtTokens(Math.floor(held * 100) / 100) + ' OTT' : 'less than ' + burnLabel) + '. Joining burns ' + burnLabel + '.', true);
+          controls.slice(1).forEach((control) => { if (control.isConnected) control.disabled = false; });
+          return;
+        }
+        say(status, 'Approve the burn in your wallet. It sends ' + burnLabel + ' to the burn address.');
+        const hash = await walletRequest({ method: 'eth_sendTransaction', params: [{ from: addr, to: m.coin, data, value: '0x0' }] });
+        if (!isTxHash(hash)) throw new Error('The wallet did not return a transaction hash. Check your wallet before trying again.');
+        sent = hash.toLowerCase();
+        // Recorded before anything else can fail, so this page never offers a second burn for it.
+        pendingBurns.set(addr, sent);
+        if (!stillHere(generation)) return;
+        await settleBurn(sent, status);
+      } catch (e) {
+        if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
+        if (sent) { paintPending(sent, 'The burn was sent, but its status could not be checked. Don’t burn again: check its status in a moment.'); return; }
+        const rejected = e && (e.code === 4001 || /reject|denied|cancel/i.test(errText(e)));
+        say(status, rejected ? 'The burn wasn’t approved. Nothing was sent.' : 'Could not burn: ' + errText(e), true);
+        lock(false);
+        const agree = controls[2];
+        const burn = controls[0];
+        if (agree && burn && burn.isConnected) burn.disabled = !agree.checked;
+      }
+    }
+
+    async function settleBurn(hash, status) {
+      const generation = walletGeneration;
+      say(status, 'Waiting for the burn to confirm on Robinhood Chain…');
+      const receipt = await waitForReceipt(ctx, hash, () => stillHere(generation));
+      if (!stillHere(generation)) return;
+      if (!receipt) { paintPending(hash, 'The burn hasn’t confirmed yet. Don’t burn again: check its status in a moment.'); return; }
+      pendingBurns.delete(addr);
+      if (String(receipt.status).toLowerCase() !== '0x1') {
+        clear(wrap);
+        paintJoin('The burn transaction failed on chain, so no OTT was burned. You can try again.');
+        return;
+      }
+      rememberBurn(addr, hash);
+      ctx.toast?.('Membership confirmed', 'Your burn is on chain. Now claim your welcome eSIM.', 'success');
+      repaintFrom(ctx, cfg, addr, allow, standing, panel);
+    }
+
+    function paintPending(hash, message) {
+      clear(wrap);
+      const status = h('p', { class: 'hint', role: 'status' }, message || 'Your burn was sent and is waiting to confirm. Don’t burn again.');
+      const check = h('button', { class: 'btn btn-primary', onclick: async () => {
+        check.disabled = true;
+        try { await settleBurn(hash, status); } finally { if (check.isConnected) check.disabled = false; }
+      } }, 'Check burn status');
+      frame('pending', 'OT+T membership', 'Confirming', 'busy', 'Your burn is confirming');
+      put(h('p', { class: 'data-burn-tx' }, 'Transaction ' + hash),
+        h('div', { class: 'data-actions' }, check), status);
+    }
+
+    function paintMember() {
+      unconfirmedWelcome.delete(addr);
+      frame('member', 'OT+T membership', m.sharing === true ? 'In this week’s split' : 'Member', 'open', 'You’re a member');
+      put(h('p', { class: 'data-membership-lede' }, m.welcomeOrder.pending ? 'Your welcome eSIM is being issued. It’s listed with your eSIMs below.' : 'Your welcome eSIM is listed with your eSIMs below.'),
+        shareLine());
+    }
+
+    function paintWelcome(burnTx) {
+      const eligible = packagesOf(cfg).filter((p) => welcomeEligible(p, m.welcome)).sort((a, b) => a.name.localeCompare(b.name));
+      frame('welcome', 'Welcome eSIM', 'Member', 'open', 'Claim your welcome eSIM');
+      put(h('p', { class: 'data-membership-lede' }, 'You’re a member. Pick any ' + welcomeText + '. The reserve pays for it, so it doesn’t use your weekly credit.'),
+        shareLine());
+      if (!eligible.length) { put(notice('No welcome plans are in the catalogue right now. Try again later.', 'warn')); return; }
+      const select = h('select', { id: 'f-welcome-plan' }, eligible.map((p) => h('option', { value: p.code }, p.name + ' · ' + fmtPrice(p.priceUsd))));
+      const pendingCode = unconfirmedWelcome.get(addr);
+      if (pendingCode && eligible.some((p) => p.code === pendingCode)) select.value = pendingCode;
+      else if (eligible.some((p) => p.code === selectedPackageCode)) select.value = selectedPackageCode;
+      const btn = h('button', { class: 'btn btn-primary btn-block', onclick: () => doClaim() }, 'Claim');
+      const hint = h('p', { class: 'hint', role: 'status' }, '');
+      const result = h('div', {});
+      // The order tracker only appears once a claim is under way; before that it would be a row of
+      // empty steps under a card that already says what to do.
+      let progress = app ? orderProgress(ctx, 0) : null;
+      if (progress) progress.hidden = true;
+      const picked = () => eligible.find((p) => p.code === select.value) || null;
+      const paintButton = () => {
+        const p = picked();
+        btn.textContent = p ? 'Claim ' + p.name + ' · ' + (Number(p.gb) || 1) + ' GB — ' + fmtPrice(p.priceUsd) : 'Claim';
+      };
+      const setProgress = (phase, order) => {
+        if (!app || !progress) return;
+        const next = orderProgress(ctx, phase, order);
+        next.hidden = phase === 0;
+        progress.replaceWith(next);
+        progress = next;
+      };
+      select.addEventListener('change', paintButton);
+      paintButton();
+      put(h('div', { class: 'field data-welcome-field' }, h('label', { for: 'f-welcome-plan' }, 'Welcome plan'), select), btn, hint, progress, result);
+      if (!walletAvailable()) put(notice('Claiming needs a wallet that can sign a message.', 'plain'));
+      if (pendingCode) paintRecovery();
+
+      function paintRecovery() {
+        clear(result);
+        setProgress(2);
+        btn.disabled = true;
+        select.disabled = true;
+        const status = h('p', { role: 'status' }, 'The claim result is unconfirmed. Your membership is safe. Check your eSIMs before trying again.');
+        const check = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => paintMine(ctx, cfg, allow, panel) }, 'Check my eSIMs');
+        const retry = h('button', { type: 'button', class: 'btn', onclick: () => doClaim() }, 'Retry same plan');
+        result.appendChild(h('div', { class: 'notice warn data-order-recovery' }, status, h('div', { class: 'data-actions data-recovery-actions' }, check, retry)));
+      }
+
+      async function doClaim() {
+        const pkg = picked();
+        if (!pkg) return;
+        if (!walletAvailable()) { hint.textContent = 'No wallet found to sign with.'; hint.classList.add('err'); return; }
+        const generation = walletGeneration;
+        btn.disabled = true;
+        select.disabled = true;
+        hint.textContent = ''; hint.classList.remove('err');
+        clear(result);
+        result.appendChild(notice('Approve the claim in your wallet — it names the plan and costs nothing to sign.', 'plain'));
+        setProgress(1);
+        let submitted = false;
+        try {
+          const { message, signature } = await signIn(addr, { action: 'welcome', packageCode: pkg.code }, ctx);
+          if (!stillHere(generation)) return;
+          clear(result);
+          setProgress(2);
+          result.appendChild(notice('Ordering your welcome eSIM… the reserve pays our network partner over Lightning; usually ten to twenty seconds.', 'plain'));
+          submitted = true;
+          unconfirmedWelcome.set(addr, pkg.code);
+          const request = { address: addr, message, signature, welcome: true, packageCode: pkg.code };
+          if (m.member !== true && burnTx) request.burnTx = burnTx;
+          const out = await api('POST', './api/redeem', request);
+          if (!out.order || ![pkg.code, pkg.packageCode].includes(out.order.packageCode)) throw new Error('The claim response could not be confirmed.');
+          unconfirmedWelcome.delete(addr);
+          if (!stillHere(generation)) return;
+          ctx.toast?.(out.order.pending ? 'Welcome eSIM ordered' : 'Welcome eSIM ready', packageLabel(pkg), 'success');
+          const fresh = Object.assign({}, standing, {
+            membership: Object.assign({}, m, { member: true, welcomeOrder: out.order }),
+            sims: out.sims || standing.sims || [],
+          });
+          repaintFrom(ctx, cfg, addr, allow, fresh, panel, Object.assign({ welcome: true }, out.order));
+        } catch (e) {
+          if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
+          const msg = errText(e);
+          if (submitted && !e.requestDeclined) { paintRecovery(); return; }
+          unconfirmedWelcome.delete(addr);
+          setProgress(0);
+          if (/already been claimed/i.test(msg)) {
+            ctx.toast?.('Welcome eSIM already claimed', msg, 'error');
+            paintMine(ctx, cfg, allow, panel);
+            return;
+          }
+          if (/burn transaction|did not burn enough|to join first/i.test(msg) && m.member !== true) {
+            forgetBurn(addr);
+            ctx.toast?.('Membership not confirmed', msg, 'error');
+            repaintFrom(ctx, cfg, addr, allow, standing, panel);
+            return;
+          }
+          clear(result);
+          result.appendChild(notice('Could not claim: ' + msg, 'error'));
+          btn.disabled = false;
+          select.disabled = false;
+        }
+      }
+    }
+
+    paint();
+    return wrap;
   }
 
   // A live countdown reads at most one at a time on this single-page app, so one module-level timer
@@ -774,7 +1239,9 @@
       h('div', { class: 'dh-tile' },
         h('div', { class: 'dh-label' }, 'Weekly allocation'),
         h('div', { class: 'dh-value' }, Number.isFinite(d.allowanceUsd) ? fmtMoney(d.allowanceUsd) : '—'),
-        h('div', { class: 'dh-sub' }, 'Data credit, not cash. ' + (inGb(cfg, d.allowanceUsd) || 'Compare packages below.'))));
+        h('div', { class: 'dh-sub' }, 'Data credit, not cash. '
+          + (d.capMultiple > 0 ? 'Follows your holdings, capped at ' + d.capMultiple + '× the average member share. ' : '')
+          + (inGb(cfg, d.allowanceUsd) || 'Compare packages below.'))));
 
     const supporting = h('div', { class: 'stat-grid data-tiles' },
       ctx.tile('Used this week', Number.isFinite(d.redeemedUsd) ? fmtMoney(d.redeemedUsd) : '—',
@@ -1065,7 +1532,8 @@
     // The reveal button — and the section itself — only appear when there is something to reveal.
     // Offering to show codes to a wallet that has redeemed nothing is an invitation to sign a
     // message for an empty answer.
-    const hasAny = ((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length) > 0;
+    const welcomeOrder = welcomeBundleOf(standing);
+    const hasAny = ((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length + (welcomeOrder ? 1 : 0)) > 0;
     if (!hasAny) return h('div', {});
 
     const label = h('div', { class: 'label' }, groups.length > 1 ? 'YOUR ESIMS' : 'YOUR ESIM');
@@ -1096,7 +1564,7 @@
 
     const actions = h('div', { class: 'data-actions' }, hint);
     if (stillHidden(groups)) actions.insertBefore(btn, hint);
-    if (inApp() && ([...standing.orders || [], ...standing.history || []].some((order) => order.pending) || groups.some((group) => group.sim?.codes === true && !hasInstallDetails(group.sim)))) {
+    if (inApp() && ([...standing.orders || [], ...standing.history || [], ...(welcomeOrder ? [welcomeOrder] : [])].some((order) => order.pending) || groups.some((group) => group.sim?.codes === true && !hasInstallDetails(group.sim)))) {
       const refresh = h('button', { class: 'btn btn-sm', onclick: async () => {
         if (!panel?.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx)?.toLowerCase() !== addr) return;
         refresh.disabled = true;
@@ -1128,8 +1596,10 @@
       if (sim.iccid) byIccid.set(sim.iccid, g);
       return g;
     });
+    const welcome = welcomeBundleOf(standing);
     const bundles = (standing.orders || []).map((o) => Object.assign({ fromHistory: false }, o))
-      .concat((standing.history || []).map((o) => Object.assign({ fromHistory: true }, o)));
+      .concat((standing.history || []).map((o) => Object.assign({ fromHistory: true }, o)))
+      .concat(welcome ? [welcome] : []);
     for (const o of bundles) {
       const key = o.iccid || o.topupOf || '';
       let g = key && byIccid.get(key);
@@ -1142,6 +1612,13 @@
     groups.sort((a, b) => (Date.parse((b.sim && b.sim.createdAt) || (b.bundles[0] && b.bundles[0].createdAt) || '') || 0)
       - (Date.parse((a.sim && a.sim.createdAt) || (a.bundles[0] && a.bundles[0].createdAt) || '') || 0));
     return groups;
+  }
+
+  // The welcome order files under its eSIM like any bundle. It belongs to no week, so it is marked
+  // rather than given one, and it is never history.
+  function welcomeBundleOf(standing) {
+    const order = standing && standing.membership && standing.membership.configured === true ? standing.membership.welcomeOrder : null;
+    return order && typeof order === 'object' ? Object.assign({ fromHistory: false }, order, { welcome: true, week: null }) : null;
   }
 
   // A SIM built from the order that minted it, for a provider (or a fixture) that never sent
@@ -1281,6 +1758,7 @@
     return h('div', { class: 'data-bundle' },
       h('div', { class: 'data-bundle-head' },
         isFresh ? h('span', { class: 'badge badge-hold' }, 'NEW') : null,
+        o.welcome ? h('span', { class: 'badge data-welcome-badge' }, 'WELCOME') : null,
         h('span', { class: 'cc-sym' }, pkg ? packageLabel(pkg) : (o.packageCode || 'eSIM')),
         Number.isFinite(Number(o.priceUsd)) ? h('span', { class: 'small' }, fmtPrice(Number(o.priceUsd))) : null,
         h('span', { class: 'small' },
@@ -1308,6 +1786,8 @@
 
   window.WhateverData = {
     render, renderMyData, SEL, signInMessage, hexOfUtf8, loadAccount,
+    // Pure membership helpers, shared with tests that hold them to the API's own rules.
+    burnCalldata, welcomeEligible, publishedBurnMismatch,
     resetWallet: () => { walletGeneration++; lastAccount = null; lastRead = null; },
     selectPackage: (code) => { selectedPackageCode = String(code || ''); },
     // Shared with site/status.js, the same way SEL already is, so the two files cannot silently

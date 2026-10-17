@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v13';
+const CACHE_NAME = CACHE_PREFIX + 'v14';
 const SHELL = [
-  'index.html', 'fonts.css', 'style.css?v=20261006-design', 'ui.css', 'home.css?v=20261007-membership', 'membership-story.css?v=20261007-membership', 'account-preview.css',
-  'mobile-app.css?v=20261006-holders', 'ui.js', 'qr.js', 'esim.js?v=20261006-holders', 'clay-type.js', 'account-preview.js?v=20261007-membership',
-  'membership-story.js?v=20261007-membership', 'home.js?v=20261007-membership', 'status.js', 'holders.js', 'mobile-app.js?v=20261007-membership', 'app.js?v=20261007-membership', 'pwa.js',
+  'index.html', 'fonts.css', 'style.css?v=20261017-burn', 'ui.css', 'home.css?v=20261007-membership', 'membership-story.css?v=20261007-membership', 'account-preview.css',
+  'mobile-app.css?v=20261017-burn', 'ui.js', 'qr.js', 'esim.js?v=20261017-burn', 'clay-type.js', 'account-preview.js?v=20261017-burn',
+  'membership-story.js?v=20261017-burn', 'home.js?v=20261017-burn', 'status.js', 'holders.js', 'mobile-app.js?v=20261017-burn', 'app.js?v=20261017-burn', 'pwa.js',
   'client-config.js?v=20261006-holders', 'wallet.js?v=20261006-holders', 'solana-login.js?v=20261006-holders',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',

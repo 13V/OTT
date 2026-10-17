@@ -35,8 +35,20 @@
     return login?.account.address === account ? login.linkedWallet?.address || null : null;
   }
   function confirmedBudget(state) {
+    if (state?.membership?.configured && !state.membership.member) return null;
     return state && !state.stale && Number.isFinite(state.remainingUsd) && state.remainingUsd >= 0
       && Number.isFinite(state.weekEnd) && state.weekEnd * 1000 > Date.now() ? state.remainingUsd : null;
+  }
+  // A member's free welcome eSIM is the first thing worth doing, so it sits right under the credit
+  // pass rather than below the fold. A non-member's invitation is the pass itself. Only the API's
+  // own answer drives either.
+  function welcomeBanner(h, membership) {
+    const welcome = membership.welcome ? 'Any ' + membership.welcome.gb + ' GB, ' + membership.welcome.days + '-day plan up to ' + money(membership.welcome.maxUsd) + '. ' : '';
+    return h('section', { class: 'om-welcome-banner', 'aria-label': 'Your welcome eSIM' },
+      h('span', { class: 'om-kicker' }, 'WELCOME eSIM'),
+      h('h2', {}, 'Your welcome eSIM is ready to claim.'),
+      h('p', { class: 'om-muted' }, welcome + 'It doesn’t use your weekly credit.'),
+      action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims')));
   }
   function linkWalletDialog(h, ctx, source) {
     let sheet;
@@ -376,17 +388,25 @@
         if (!ctx.isCurrent() || !credit.isConnected || holderAddress(ctx) !== holder) return;
         paintShortcuts(state);
         credit.setAttribute('aria-busy', 'false');
+        if (state?.membership?.configured && state.membership.member && !state.membership.welcomeClaimed) credit.after(welcomeBanner(h, state.membership));
         const title = content.querySelector('.om-pass-title, .om-balance');
         const note = content.querySelector('.om-pass-note');
         if (!state || (!state.stale && state.remainingUsd === null)) {
           title.className = 'om-pass-title'; title.textContent = 'Credit unavailable';
           note.textContent = 'We couldn’t load your current balance. Go online and try again.';
+        } else if (state.membership?.configured && !state.membership.member) {
+          // Weekly credit is for members. A holder who hasn't joined has none, and a $0.00
+          // balance would read as a verdict on the wallet rather than an invitation.
+          title.className = 'om-pass-title'; title.textContent = 'Not a member yet';
+          note.textContent = state.membership.enrolmentOpen ? 'Members get a welcome eSIM and a weekly share of trading fees.' : 'Joining is closed right now.';
+          primary.replaceWith(action(h, [state.membership.enrolmentOpen ? 'Join OT+T' : 'View membership', icon('arrow')], () => go('esims')));
         } else if (state.stale || confirmedBudget(state) === null) {
           title.className = 'om-pass-title'; title.textContent = 'Awaiting allocation';
           note.textContent = 'This week’s credit hasn’t been published yet. Check back after the weekly update.';
         } else {
           title.className = 'om-balance'; title.textContent = money(state.remainingUsd);
-          note.textContent = 'Available for eSIM packages. At home or abroad.';
+          note.textContent = state.membership?.configured && !state.membership.sharing
+            ? 'Your weekly share starts at the next Monday snapshot.' : 'Available for eSIM packages. At home or abroad.';
           const details = h('dl', { class: 'om-credit-details' },
             h('div', {}, h('dt', {}, 'Allocated'), h('dd', {}, state.allocatedUsd === null ? 'Unavailable' : money(state.allocatedUsd))),
             h('div', {}, h('dt', {}, 'Used'), h('dd', {}, state.usedUsd === null ? 'Unavailable' : money(state.usedUsd))));

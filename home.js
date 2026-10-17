@@ -11,6 +11,19 @@
     h('span', { class: 'ott-eyebrow' }, label), h('h2', {}, title), body ? h('p', {}, body) : null);
   const image = (h, name, alt, attrs = {}) => h('img', { src: asset(name), alt, decoding: 'async', ...attrs });
   const clayLabel = (h, value, attrs = {}) => window.WhateverClayType?.label(h, value, attrs) || h('span', attrs, value);
+  // The published membership terms from config/esim.json, as phrases. A missing figure leaves
+  // its phrase out rather than guessing one.
+  function terms(cfg) {
+    const m = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
+    const w = m.welcome && typeof m.welcome === 'object' ? m.welcome : null;
+    const bps = Number(cfg.budgetBps);
+    return {
+      burn: /^\d{1,30}$/.test(String(m.burnTokens || '')) ? Number(m.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT',
+      welcome: w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0) ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan up to ' + money(w.maxUsd) : 'a welcome eSIM',
+      cap: Number(m.capMultiple) > 0 ? Number(m.capMultiple) : null,
+      share: bps > 0 && bps <= 10000 ? bps / 100 + '%' : 'a published share',
+    };
+  }
   function hero(h, launched, cfg, network) {
     const ticker = String(cfg.brand?.ticker || 'OTT');
     const knownNetwork = Number(network?.chainId) === 4663;
@@ -22,8 +35,9 @@
         h('div', { class: 'ott-hero-actions' },
           h('a', { class: 'ott-primary-action', href: launched ? '#/data' : '#/app' }, launched ? 'Check my credit' : 'Explore the app'),
           h('a', { class: 'ott-text-action', href: '#how-it-works' }, 'How it works ↗')),
-        h('p', { class: 'ott-hero-note' }, 'Planned membership. Enrolment is not open. Explore plans and sample eSIM setup without a wallet.'),
-        h('a', { class: 'ott-hero-trust', href: '#trust' }, 'What needs to be ready before you burn ↗')),
+        h('p', { class: 'ott-hero-note' }, launched ? 'Burn ' + terms(cfg).burn + ' once to join. Members claim a welcome eSIM and share each week’s data budget.'
+          : 'Enrolment is not open until launch. Then, burn ' + terms(cfg).burn + ' once for your first eSIM. Explore plans and sample eSIM setup without a wallet.'),
+        h('a', { class: 'ott-hero-trust', href: '#trust' }, 'What happens when you burn ↗')),
       h('div', { class: 'ott-hero-art hero-visual' },
         h('figure', { class: 'ott-hero-scene' },
           h('figcaption', { class: 'ott-hero-caption' }, image(h, 'hero-touch-grass-lettering', 'Touch Grass, Stay Online.', { width: '1536', height: '768', fetchpriority: 'high' })),
@@ -134,14 +148,14 @@
       h('figure', { class: 'ott-airport-scene' },
         h('div', { class: 'ott-airport-world' },
           h('div', { class: 'ott-airport-backdrop' }, image(h, 'coverage-airport-world', 'Hand-moulded clay airport scene. The same OTT holder stands with his back to us, looking up at a coverage board suspended from the ceiling.', { width: '1536', height: '1024', loading: 'lazy' })), board),
-        h('figcaption', {}, launched ? 'Choose a country or region above to see available plans.' : 'Catalogue preview. Membership enrolment and redemption are not available yet.')));
+        h('figcaption', {}, launched ? 'Choose a country or region above to see available plans.' : 'Catalogue preview. Membership enrolment and redemption open at launch.')));
     const planDetails = h('details', { class: 'ott-plan-details' },
       h('summary', {}, 'View available plans'),
       h('div', { class: 'ott-plan-details-inner' },
         h('label', { for: 'plan-place' }, 'Available plans for'), placeSelect,
         empty, grid,
-        h('p', { class: 'ott-credit-explain' }, 'Prices show the data credit required for a package. Membership is planned; its allowance will depend on the funded pool and published rules.'),
-        h('p', { class: 'ott-prelaunch-explain' }, launched ? 'Check your available prototype credit in My data.' : 'Catalogue preview. Membership enrolment and redemption are not available yet.')));
+        h('p', { class: 'ott-credit-explain' }, 'Prices show the data credit required for a package. Members’ weekly credit follows their OTT holdings' + (terms(cfg).cap ? ', and no member gets more than ' + terms(cfg).cap + '× the average' : '') + '.'),
+        h('p', { class: 'ott-prelaunch-explain' }, launched ? 'Check your membership and weekly credit in My data.' : 'Catalogue preview. Membership enrolment and redemption open at launch.')));
 
     const root = h('section', { class: 'section ott-catalogue', id: 'plans' }, h('div', { class: 'wrap' },
       h('div', { class: 'ott-coverage-layout', id: 'plan-options' },
@@ -174,18 +188,19 @@
           h('div', { class: 'ott-benefit' }, h('span', {}, '03'), h('p', {}, 'Pick somewhere for dinner.'))))));
   }
 
-  function faq(h, launched) {
+  function faq(h, launched, cfg) {
+    const t = terms(cfg);
     const entries = [
       ['Can I use it at home?', 'Yes. Choose a package for your home country, such as United States for use in the US. You’ll need an unlocked phone that supports eSIMs. These packages include mobile data. Calls and SMS are not included.'],
-      ['How do I get my first eSIM?', 'The planned model is one OTT burn to enrol for membership and receive your first eSIM. Enrolment is not open. The exact burn amount, initial package and membership duration will be published before you commit tokens.'],
-      ['Do I burn again for more data?', 'No repeat burn is planned for each top-up. Collected trading fees will fund ongoing member data. A top-up still needs available credit, pool funding and a compatible supplier profile.'],
-      ['How much data will I receive?', 'It depends on fees actually collected, the allocation to data, eligible membership numbers and package costs. The calculator is an equal-share example, not a promised balance. The final formula and credit expiry rules are still being finalised.'],
-      ['What if the first eSIM cannot be delivered?', 'We plan to hold enrolment tokens in refundable escrow while the first eSIM is awaiting delivery, then finalise the burn after the required issuance check. Escrow, timeout and recovery rules need to be built and reviewed before public enrolment. This protection is not live yet.'],
-      ['How can I check where the fees go?', 'We plan to publish fees received, the data allocation, spending, reserves and member count with timestamps. On-chain transactions can link to an explorer. External payment-provider balances and service delivery need clearly labelled reports and verification.'],
-      ['Does a burn guarantee data forever?', 'No. The burn is a planned one-time entry cost, not a promise of unlimited or lifetime data. Allowances depend on funding. Membership duration and what happens when fees stop must be stated before enrolment opens.'],
+      ['How do I get my first eSIM?', 'Burn ' + t.burn + ' once to become a member, then claim a welcome eSIM: ' + t.welcome + '. The reserve pays for it, so it doesn’t use weekly credit.' + (launched ? '' : ' Enrolment opens when OTT launches.')],
+      ['Do I burn again for more data?', 'No. One burn is your membership. Each week, members share ' + t.share + ' of the previous week’s trading fees as data credit. A top-up still needs available credit, a funded pool and a compatible supplier profile.'],
+      ['How much data will I receive?', 'Your weekly credit follows the OTT you hold at the Monday snapshot' + (t.cap ? ', and no member gets more than ' + t.cap + '× the average share' : '') + '. The total depends on fees actually collected, the number of members and package prices. Unused weekly credit expires at the end of the week.'],
+      ['What if the first eSIM cannot be delivered?', 'The app offers the burn only while the reserve can pay for a welcome eSIM. If issuing it is delayed, for example when many members join at once, your membership stays on-chain and you can claim the eSIM later without burning again. The burn itself can’t be undone or refunded.'],
+      ['How can I check where the fees go?', 'The status page shows fees received, the data budget, spending and the pool balance. Every burn is a public transaction you can check on the explorer. Supplier and payment-provider balances are reported figures and are labelled that way.'],
+      ['Does a burn guarantee data forever?', 'No. Membership doesn’t expire, but weekly credit depends on fees actually collected. If trading fees stop, new weekly credit stops too. A burn is an entry cost, not a promise of unlimited data.'],
       ['Will an eSIM work on my phone?', 'Your phone must be unlocked and support eSIMs. Check your device and carrier settings before redeeming. Once a package is issued, you still need to install and activate it.'],
       ['When does a redeemed package expire?', 'Each package has its own validity and activation rules. Check those details before redeeming. We are still confirming how long an unused package can wait before activation.'],
-      ['What if I don’t have enough credit?', 'Under the planned model, you could choose a smaller package if your allowance covers it and the pool has enough funding. Otherwise, wait for available funding. The app currently offers a sample journey while enrolment stays closed.'],
+      ['What if I don’t have enough credit?', 'Choose a smaller package your weekly credit covers, or wait for next week’s credit. The pool also needs enough funding when you order.' + (launched ? '' : ' Before launch, the app offers a sample journey.')],
     ];
     return h('section', { class: 'section ott-faq' }, h('div', { class: 'wrap' },
       sectionHead(h, 'GOOD TO KNOW', 'Before you connect.'),
@@ -216,8 +231,8 @@
     const travelSection = travel(h);
     const catalogueSection = catalogue(h, cfg, launched);
     const membership = window.WhateverMembershipStory;
-    const story = [membership.journey(h), membership.allocation(h), catalogueSection, travelSection,
-      window.WhateverAccountPreview.render(h, launched), membership.trust(h), faq(h, launched)];
+    const story = [membership.journey(h, cfg, launched), membership.allocation(h, cfg), catalogueSection, travelSection,
+      window.WhateverAccountPreview.render(h, launched), membership.trust(h, cfg, launched), faq(h, launched, cfg)];
     story.forEach((section) => view.appendChild(section));
     view.querySelectorAll('.ott-destination-shortcut').forEach((link) => link.addEventListener('click', (event) => {
       event.preventDefault();

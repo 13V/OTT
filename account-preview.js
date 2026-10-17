@@ -13,7 +13,7 @@
           h('span', {}, 'Used ', h('strong', {}, '$5.00')))),
       h('div', { class: 'ott-ap-reset' },
         h('span', { class: 'ott-ap-reset-symbol', 'aria-hidden': 'true' }, '↻'),
-        h('div', {}, h('strong', {}, 'Fees fund the data pool'), h('p', {}, 'Future allowances will depend on collected fees and eligible members. These figures are examples.'))));
+        h('div', {}, h('strong', {}, 'Fees fund the data pool'), h('p', {}, 'Members’ weekly credit follows their holdings and depends on collected fees. These figures are examples.'))));
 
     const sim = h('div', { class: 'ott-ap-view ott-ap-sims', id: 'account-esim-example', hidden: true },
       h('div', { class: 'ott-ap-esim-card' },
@@ -49,14 +49,14 @@
       h('p', { class: 'ott-ap-example-label' }, 'SAMPLE MEMBER ACCOUNT. EXAMPLE ONLY.'),
       tabs,
       h('div', { class: 'ott-ap-content', 'aria-live': 'polite', 'aria-atomic': 'true' }, credit, sim),
-      h('p', { class: 'ott-ap-footnote' }, 'Example figures and eSIM only. Membership enrolment is not open.'));
+      h('p', { class: 'ott-ap-footnote' }, configured ? 'Example figures and eSIM only.' : 'Example figures and eSIM only. Membership enrolment is not open until launch.'));
 
     return h('section', { class: 'section ott-account-preview', 'aria-labelledby': 'account-preview-title' },
       h('div', { class: 'wrap ott-ap-wrap' },
         h('div', { class: 'ott-ap-header' },
           h('div', {}, h('span', { class: 'ott-eyebrow' }, 'MY DATA'), h('h2', { id: 'account-preview-title' }, 'Your wallet.', h('br'), 'Your data.')),
           h('div', { class: 'ott-ap-intro' },
-            h('p', {}, configured ? 'See your current test account and the eSIMs linked to your wallet. Burn membership is still planned.' : 'Take the planned member experience for a spin: sample data, destination choices and eSIM setup. No wallet needed. No real orders.'),
+            h('p', {}, configured ? 'See your membership, weekly credit and the eSIMs linked to your wallet.' : 'Take the member experience for a spin: sample data, destination choices and eSIM setup. No wallet needed. No real orders.'),
             h('a', { class: 'ott-primary-action', href: configured ? '#/data' : '#/app' }, configured ? 'Open My data' : 'Explore the app', h('span', { 'aria-hidden': 'true' }, ' ↗')))),
         h('div', { class: 'ott-ap-product' },
           h('figure', { class: 'ott-ap-world' },
