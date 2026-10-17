@@ -766,7 +766,14 @@
         + (fmtDate(publishedWeekEnd) || 'last week') + '. A fresh file is written every half hour.', 'plain'));
     }
 
-    if (panel.classList.contains('dashboard-panel')) {
+    // Membership is settled first. A holder who has not joined has no weekly credit, so they see
+    // how to join rather than a $0.00 card and a row of zero tiles, which would read as a verdict
+    // on the wallet. A deployment without a membership block keeps the old page.
+    const membership = standing && standing.membership && standing.membership.configured === true ? standing.membership : null;
+    const isMember = !!membership && (membership.member === true || !!knownBurn(addr));
+    const showCredit = !membership || isMember;
+
+    if (showCredit && panel.classList.contains('dashboard-panel')) {
       body.appendChild(h('div', { class: 'credit-summary' },
         h('div', {}, h('span', { class: 'credit-summary-label' }, 'REMAINING WEEKLY CREDIT'),
           h('strong', {}, stale ? 'Awaiting allocation' : (Number.isFinite(remainingUsd) ? fmtMoney(remainingUsd) : 'Unavailable')),
@@ -796,9 +803,7 @@
 
     // Membership comes before the holding: a member who burned every token still has a welcome
     // eSIM to claim, and a holder who has not joined is shown how to, not a weekly picker for
-    // credit they cannot have. A deployment without a membership block keeps the old page.
-    const membership = standing && standing.membership && standing.membership.configured === true ? standing.membership : null;
-    const isMember = !!membership && (membership.member === true || !!knownBurn(addr));
+    // credit they cannot have.
     if (membership) body.appendChild(membershipSection(ctx, cfg, addr, standing, allow, panel));
 
     if (!Number.isFinite(tokens)) {
@@ -825,7 +830,7 @@
       capMultiple: membership ? Number(membership.capMultiple) : NaN });
     const details = inApp() ? h('details', { class: 'data-account-details' },
       h('summary', {}, 'Credit and holdings details'), tiles) : tiles;
-    if (!inApp() || !standing) body.appendChild(details);
+    if (showCredit && (!inApp() || !standing)) body.appendChild(details);
 
     if (!standing) {
       body.appendChild(notice('Redeeming, and this week’s past orders, need the redeem API, which could not be reached.', 'warn'));
@@ -835,12 +840,14 @@
     // The SIM is the object: what this wallet already has, and what is queued on it, comes before
     // the picker that adds more — so a returning holder reads "here is your eSIM" before "buy more
     // data", not the other way around.
-    if (!((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length + (membership && membership.welcomeOrder ? 1 : 0))) {
-      body.appendChild(notice(membership && !isMember ? 'No eSIMs yet. Members claim a welcome eSIM after joining.'
+    // A non-member's join card already says what membership brings, so no empty-state notice here.
+    if (showCredit && !((standing.orders || []).length + (standing.history || []).length + (standing.sims || []).length + (membership && membership.welcomeOrder ? 1 : 0))) {
+      body.appendChild(notice(membership && isMember && !membership.welcomeOrder
+        ? 'No eSIMs yet. Claim your free welcome eSIM above, or pick a destination and package below.'
         : 'No eSIMs yet. Pick a destination and package below when you have enough weekly credit.', 'plain'));
     }
     body.appendChild(simsSection(ctx, cfg, addr, standing, freshOrder, allow, panel));
-    if (inApp()) body.appendChild(details);
+    if (showCredit && inApp()) body.appendChild(details);
     if (stale) return;
     // Weekly credit is for members only; a holder who has not joined has none to spend.
     if (membership && !isMember) return;
@@ -949,8 +956,20 @@
     const walletRequest = (args) => (window.OTTWallet || window.ethereum).request(args);
     const stillHere = (generation) => panel.isConnected && (!ctx.isCurrent || ctx.isCurrent())
       && currentAccount(ctx)?.toLowerCase() === addr && generation === walletGeneration;
-    const head = (label, title) => [h('div', { class: 'divider' }), h('div', { class: 'label' }, label), h('h3', { class: 'data-membership-title' }, title)];
-    const shareLine = () => h('p', { class: 'small' }, m.sharing === true
+    // put() appends a state's parts and skips the empty slots. DOM append() would print a null as
+    // the word "null"; h() already skips them.
+    const put = (...nodes) => wrap.append(...nodes.flat(Infinity).filter((node) => node !== null && node !== undefined && node !== false));
+    // Every state shares one frame: a kicker, a status pill and a title. `tone` colours the pill,
+    // and the state name lets the stylesheet change the card's rim.
+    const frame = (state, kicker, pill, tone, title) => {
+      wrap.className = 'data-membership data-membership--' + state;
+      put(h('div', { class: 'data-membership-head' },
+        h('span', { class: 'data-membership-kicker' }, kicker),
+        pill ? h('span', { class: 'data-membership-pill data-membership-pill--' + tone },
+          tone === 'busy' ? h('span', { class: 'data-membership-spinner', 'aria-hidden': 'true' }) : null, pill) : null),
+      h('h3', { class: 'data-membership-title' }, title));
+    };
+    const shareLine = () => h('p', { class: 'data-membership-share' }, m.sharing === true
       ? 'You’re in this week’s split. Weekly credit follows the OTT you held at Monday’s snapshot, and ' + capText + '.'
       : 'Your weekly share starts at the next Monday snapshot. It follows the OTT you hold then, and ' + capText + '.');
     const say = (status, text, error) => { if (status.isConnected) { status.textContent = text; status.classList.toggle('err', !!error); } };
@@ -967,20 +986,20 @@
 
     function paintClosed() {
       const reason = m.enrolment && typeof m.enrolment.reason === 'string' && m.enrolment.reason.trim() ? m.enrolment.reason.trim() : 'Try again later.';
-      wrap.append(...head('MEMBERSHIP', 'Join OT+T'),
-        h('p', {}, 'Members burn ' + burnLabel + ' once, claim a welcome eSIM and share each week’s data budget.'),
-        h('p', { class: 'notice plain data-membership-closed', role: 'status' }, h('strong', {}, 'Joining is closed right now. '), reason));
+      frame('closed', 'OT+T membership', 'Joining closed', 'muted', 'Join OT+T');
+      put(h('p', { class: 'data-membership-lede' }, 'Members burn ' + burnLabel + ' once, claim a welcome eSIM and share each week’s data budget.'),
+        h('p', { class: 'data-membership-closed', role: 'status' }, h('strong', {}, 'Joining is closed right now. '), reason));
     }
 
     function paintJoin(problem) {
       const join = h('button', { class: 'btn btn-primary', onclick: () => paintConfirm() }, 'Join: burn ' + burnLabel);
       join.disabled = !walletAvailable();
-      wrap.append(...head('MEMBERSHIP', 'Join OT+T'),
-        h('p', {}, 'Burn ' + burnLabel + ' once to become a member. Membership includes:'),
+      frame('join', 'OT+T membership', 'Joining open', 'open', 'Join OT+T');
+      put(h('p', { class: 'data-membership-lede' }, 'Burn ' + burnLabel + ' once to become a member. Membership includes:'),
         h('ul', { class: 'data-membership-list' },
-          h('li', {}, 'A welcome eSIM: any ' + welcomeText + '. The reserve pays for it, so it doesn’t use weekly credit.'),
-          h('li', {}, 'A weekly share of trading fees as data credit, from the next Monday snapshot. Shares follow the OTT you hold, and ' + capText + '.')),
-        h('p', { class: 'small' }, 'The burn sends ' + burnLabel + ' from this wallet to the burn address. It can’t be undone or refunded.'),
+          h('li', {}, h('strong', {}, 'A welcome eSIM: '), 'any ' + welcomeText + '. The reserve pays for it, so it doesn’t use weekly credit.'),
+          h('li', {}, h('strong', {}, 'A weekly share of trading fees '), 'as data credit, from the next Monday snapshot. Shares follow the OTT you hold, and ' + capText + '.')),
+        h('p', { class: 'data-membership-fine' }, 'The burn sends ' + burnLabel + ' from this wallet to the burn address. It can’t be undone or refunded.'),
         problem ? notice(problem, 'error') : null,
         h('div', { class: 'data-actions' }, join),
         walletAvailable() ? null : notice('Joining needs a wallet that can send a transaction.', 'plain'));
@@ -994,12 +1013,12 @@
       const cancel = h('button', { class: 'btn btn-ghost', onclick: () => paint() }, 'Cancel');
       burn.disabled = true;
       agree.addEventListener('change', () => { burn.disabled = !agree.checked; });
-      wrap.append(...head('CONFIRM THE BURN', 'Burn ' + burnLabel + '?'),
-        h('div', { class: 'notice warn data-burn-warning' },
-          h('p', {}, 'This sends ' + burnLabel + ' from ' + shortAddress + ' to the burn address ', h('span', { class: 'mono' }, m.burnAddress), '.'),
-          h('p', {}, h('strong', {}, 'Burned tokens are gone for good. This can’t be undone or refunded.')),
+      frame('confirm', 'Confirm the burn', 'Permanent', 'warn', 'Burn ' + burnLabel + '?');
+      put(h('div', { class: 'data-burn-warning' },
+          h('p', {}, 'This sends ' + burnLabel + ' from ' + shortAddress + ' to the burn address:', h('code', { class: 'data-burn-address' }, m.burnAddress)),
+          h('p', { class: 'data-burn-final' }, h('strong', {}, 'Burned tokens are gone for good. This can’t be undone or refunded.')),
           h('p', {}, 'If this wallet has already burned, don’t burn again. Your membership appears after the next ledger update.')),
-        h('label', { class: 'data-burn-agree', for: 'f-burn-confirm' }, agree, ' I understand the burn is permanent and can’t be refunded.'),
+        h('label', { class: 'data-burn-agree', for: 'f-burn-confirm' }, agree, h('span', {}, 'I understand the burn is permanent and can’t be refunded.')),
         h('div', { class: 'data-actions' }, burn, cancel), status);
       agree.focus();
     }
@@ -1083,24 +1102,24 @@
         check.disabled = true;
         try { await settleBurn(hash, status); } finally { if (check.isConnected) check.disabled = false; }
       } }, 'Check burn status');
-      wrap.append(...head('MEMBERSHIP', 'Your burn is confirming'),
-        h('p', { class: 'small mono data-burn-tx' }, 'Transaction ' + hash),
+      frame('pending', 'OT+T membership', 'Confirming', 'busy', 'Your burn is confirming');
+      put(h('p', { class: 'data-burn-tx' }, 'Transaction ' + hash),
         h('div', { class: 'data-actions' }, check), status);
     }
 
     function paintMember() {
       unconfirmedWelcome.delete(addr);
-      wrap.append(...head('MEMBERSHIP', 'You’re a member'),
-        h('p', {}, m.welcomeOrder.pending ? 'Your welcome eSIM is being issued. It’s listed with your eSIMs below.' : 'Your welcome eSIM is listed with your eSIMs below.'),
+      frame('member', 'OT+T membership', m.sharing === true ? 'In this week’s split' : 'Member', 'open', 'You’re a member');
+      put(h('p', { class: 'data-membership-lede' }, m.welcomeOrder.pending ? 'Your welcome eSIM is being issued. It’s listed with your eSIMs below.' : 'Your welcome eSIM is listed with your eSIMs below.'),
         shareLine());
     }
 
     function paintWelcome(burnTx) {
       const eligible = packagesOf(cfg).filter((p) => welcomeEligible(p, m.welcome)).sort((a, b) => a.name.localeCompare(b.name));
-      wrap.append(...head('WELCOME eSIM', 'Claim your welcome eSIM'),
-        h('p', {}, 'You’re a member. Pick any ' + welcomeText + '. The reserve pays for it, so it doesn’t use your weekly credit.'),
+      frame('welcome', 'Welcome eSIM', 'Member', 'open', 'Claim your welcome eSIM');
+      put(h('p', { class: 'data-membership-lede' }, 'You’re a member. Pick any ' + welcomeText + '. The reserve pays for it, so it doesn’t use your weekly credit.'),
         shareLine());
-      if (!eligible.length) { wrap.appendChild(notice('No welcome plans are in the catalogue right now. Try again later.', 'warn')); return; }
+      if (!eligible.length) { put(notice('No welcome plans are in the catalogue right now. Try again later.', 'warn')); return; }
       const select = h('select', { id: 'f-welcome-plan' }, eligible.map((p) => h('option', { value: p.code }, p.name + ' · ' + fmtPrice(p.priceUsd))));
       const pendingCode = unconfirmedWelcome.get(addr);
       if (pendingCode && eligible.some((p) => p.code === pendingCode)) select.value = pendingCode;
@@ -1108,7 +1127,10 @@
       const btn = h('button', { class: 'btn btn-primary btn-block', onclick: () => doClaim() }, 'Claim');
       const hint = h('p', { class: 'hint', role: 'status' }, '');
       const result = h('div', {});
+      // The order tracker only appears once a claim is under way; before that it would be a row of
+      // empty steps under a card that already says what to do.
       let progress = app ? orderProgress(ctx, 0) : null;
+      if (progress) progress.hidden = true;
       const picked = () => eligible.find((p) => p.code === select.value) || null;
       const paintButton = () => {
         const p = picked();
@@ -1117,13 +1139,14 @@
       const setProgress = (phase, order) => {
         if (!app || !progress) return;
         const next = orderProgress(ctx, phase, order);
+        next.hidden = phase === 0;
         progress.replaceWith(next);
         progress = next;
       };
       select.addEventListener('change', paintButton);
       paintButton();
-      wrap.append(h('div', { class: 'field' }, h('label', { for: 'f-welcome-plan' }, 'Welcome plan'), select), btn, hint, progress, result);
-      if (!walletAvailable()) wrap.appendChild(notice('Claiming needs a wallet that can sign a message.', 'plain'));
+      put(h('div', { class: 'field data-welcome-field' }, h('label', { for: 'f-welcome-plan' }, 'Welcome plan'), select), btn, hint, progress, result);
+      if (!walletAvailable()) put(notice('Claiming needs a wallet that can sign a message.', 'plain'));
       if (pendingCode) paintRecovery();
 
       function paintRecovery() {

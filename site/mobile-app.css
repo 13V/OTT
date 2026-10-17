@@ -54,7 +54,12 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-shortcut-button > span { flex: 1; min-width: 0; font-weight: 600; }
 .om-shortcut-button small { display: block; color: var(--om-muted); font-size: 13px; font-weight: 400; margin-top: 4px; }
 .om-shortcut-button svg { width: 20px; height: 20px; flex: none; }
-.om-membership-prompt .om-shortcut-button { margin-top: 16px; max-width: 420px; }
+/* A member's welcome eSIM, right under the credit pass: the pass's rim and paper, lighter weight. */
+.om-welcome-banner { margin-top: 18px; padding: 18px 20px 20px; border: 2px solid var(--om-rim); border-radius: 22px; background: linear-gradient(180deg, #fffaf1 0%, #fbefd9 100%); box-shadow: 0 4px 0 #a9472126, 0 10px 18px #71452b14; }
+.om-welcome-banner .om-kicker { color: var(--om-orange); font-family: var(--font-mono, ui-monospace, monospace); letter-spacing: .14em; }
+.om-welcome-banner h2 { margin: 8px 0 6px; font: 700 23px/1.15 var(--font-display); letter-spacing: -.015em; color: var(--om-ink); }
+.om-welcome-banner p { margin: 0 0 16px; }
+.om-welcome-banner .om-button { width: 100%; justify-content: space-between; }
 .om-live-account .data-membership .btn { min-height: 48px; }
 .om-plan-budget { margin: 0 0 8px; font-size: 14px; color: var(--om-muted); }
 .om-package-budget { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; color: var(--om-muted); font-size: 14px; }

@@ -9,7 +9,7 @@
     },
     "api/redeem.js": {
       "maxDuration": 60,
-      "includeFiles": "config/{esim,addresses}.json"
+      "includeFiles": "config/*.json"
     },
     "api/status.js": {
       "maxDuration": 30,

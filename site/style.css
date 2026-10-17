@@ -436,21 +436,63 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .data-sizes { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
 .data-sizes .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .data-sims .label { margin-top: 2px; }
-/* Membership: join, the burn confirmation and the welcome claim. The warning is a plain bordered
-   notice like every other one here; what makes it serious is the sentence, not decoration. */
-.data-membership { margin-bottom: 8px; }
-.data-membership-title { margin: 4px 0 8px; font: 700 20px/1.25 var(--font-sans); letter-spacing: -.01em; color: var(--text); }
-.data-membership > p { line-height: 1.6; }
-.data-membership-list { margin: 8px 0 12px; padding-left: 1.2em; line-height: 1.6; }
-.data-membership-list li + li { margin-top: 6px; }
-.data-membership-closed { margin-top: 12px; color: var(--text); }
-.data-burn-warning p + p { margin-top: 8px; }
-.data-burn-warning .mono { overflow-wrap: anywhere; }
-.data-burn-agree { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; line-height: 1.5; cursor: pointer; }
-.data-burn-agree input { width: 18px; height: 18px; margin-top: 2px; flex: none; }
-.data-burn-tx { overflow-wrap: anywhere; }
-.data-membership .field { margin-top: 12px; }
+/* Membership: the account panel's pass, in the homepage pass's language — a cream card with the
+   orange rim, a mono kicker and a status pill. The burn confirmation turns the rim amber; what
+   makes it serious is still the sentence, set apart and in bold. */
+.data-membership {
+  margin: 20px 0 14px; padding: 22px 24px 24px;
+  border: 2px solid #ee823a; border-radius: 18px;
+  background: linear-gradient(180deg, #fdf9f1 0%, #f8f1e3 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), 0 14px 34px rgba(22, 38, 43, .08);
+}
+.data-membership--confirm, .data-membership--pending { border-color: var(--warning); }
+.data-membership--closed { border-color: var(--border); background: var(--surface); box-shadow: none; }
+.data-membership-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; }
+.data-membership-kicker { font: 700 11px/1.3 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+.data-membership-pill {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: rgba(255, 255, 255, .6); color: var(--text-secondary);
+  font: 700 11px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
+}
+.data-membership-pill--open { border-color: rgba(30, 142, 62, .35); background: var(--positive-tint); color: var(--positive); }
+.data-membership-pill--open::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.data-membership-pill--warn, .data-membership-pill--busy { border-color: rgba(178, 94, 0, .4); background: var(--warning-tint); color: var(--warning); }
+.data-membership-spinner { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: data-membership-spin .8s linear infinite; }
+@keyframes data-membership-spin { to { transform: rotate(360deg); } }
+.data-membership-title { margin: 12px 0 10px; font: 700 clamp(24px, 2.6vw, 30px)/1.12 var(--font-display); letter-spacing: -.02em; color: var(--text); }
+.data-membership-lede { margin: 0; font-size: 16px; line-height: 1.6; color: var(--text); }
+.data-membership-share { margin: 8px 0 0; font-size: 14px; line-height: 1.55; color: var(--text-secondary); }
+.data-membership-list { list-style: none; margin: 16px 0 18px; padding: 0; display: grid; gap: 12px; }
+.data-membership-list li { position: relative; padding-left: 36px; line-height: 1.55; color: var(--text); }
+.data-membership-list li::before {
+  content: '✓'; position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--accent); color: #fff; font: 800 13px/1 var(--font-sans);
+}
+.data-membership-fine { margin: 0 0 18px; padding-top: 14px; border-top: 1px dashed rgba(182, 60, 28, .35); font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.data-membership .data-actions { margin-top: 4px; }
+.data-membership .btn-primary { min-height: 46px; padding-inline: 22px; font-weight: 700; }
+.data-membership-closed { margin: 16px 0 0; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, .55); border: 1px solid var(--border); line-height: 1.55; color: var(--text); }
+.data-burn-warning { margin: 4px 0 0; padding: 16px 18px; border-radius: 12px; border: 1px solid rgba(178, 94, 0, .4); background: rgba(178, 94, 0, .07); line-height: 1.55; }
+.data-burn-warning p { margin: 0; }
+.data-burn-warning p + p { margin-top: 10px; }
+.data-burn-final { color: var(--negative); }
+.data-burn-address {
+  display: block; margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px; border: 1px dashed rgba(178, 94, 0, .5);
+  background: rgba(255, 255, 255, .7); font: 13px/1.45 var(--font-mono); color: var(--text); overflow-wrap: anywhere;
+}
+.data-burn-agree {
+  display: flex; align-items: flex-start; gap: 12px; margin: 16px 0 16px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--border); background: rgba(255, 255, 255, .6); line-height: 1.5; cursor: pointer;
+}
+.data-burn-agree:has(input:checked) { border-color: var(--accent); background: var(--accent-tint); }
+.data-burn-agree input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
+.data-burn-tx { margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, .65); border: 1px solid var(--border); font: 12px/1.45 var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; }
+.data-membership .field { margin-top: 16px; }
 .data-welcome-badge { background: var(--accent); color: #fff; border-color: var(--accent); }
+@media (max-width: 560px) {
+  .data-membership { padding: 18px 16px 20px; border-radius: 16px; }
+  .data-membership .data-actions .btn { flex: 1 1 100%; }
+}
 /* One eSIM: a card, the way an order used to be one — it is the thing that lifts off the page now,
    because item 1 of the brief made the SIM the object and an order only ever a line underneath it. */
 .data-sim { padding: 16px; margin-top: 12px; }

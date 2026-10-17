@@ -39,24 +39,16 @@
     return state && !state.stale && Number.isFinite(state.remainingUsd) && state.remainingUsd >= 0
       && Number.isFinite(state.weekEnd) && state.weekEnd * 1000 > Date.now() ? state.remainingUsd : null;
   }
-  // The live account's membership, in a sentence and one action that opens the eSIMs screen,
-  // where joining and the welcome claim happen. Only the API's own answer drives it.
-  function membershipPrompt(h, membership) {
-    if (!membership?.configured) return null;
-    const tokens = /^\d+$/.test(membership.burnTokens) ? Number(membership.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT';
-    const welcome = membership.welcome ? 'any ' + membership.welcome.gb + ' GB, ' + membership.welcome.days + '-day plan up to ' + money(membership.welcome.maxUsd) : 'a welcome eSIM';
-    if (!membership.member) {
-      return h('div', { class: 'om-membership-prompt' }, h('h2', {}, 'Join OT+T'),
-        h('p', { class: 'om-muted' }, membership.enrolmentOpen ? 'Burn ' + tokens + ' once to join. Members claim ' + welcome + ' and share each week’s data budget.'
-          : 'Joining is closed right now. ' + (membership.reason || 'Try again later.')),
-        membership.enrolmentOpen ? action(h, [h('span', {}, 'Join on the eSIMs screen'), icon('arrow')], () => go('esims'), 'om-shortcut-button') : null);
-    }
-    if (!membership.welcomeClaimed) {
-      return h('div', { class: 'om-membership-prompt' }, h('h2', {}, 'Your welcome eSIM'),
-        h('p', { class: 'om-muted' }, 'You’re a member. Claim ' + welcome + '. It doesn’t use your weekly credit.'),
-        action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims'), 'om-shortcut-button'));
-    }
-    return null;
+  // A member's free welcome eSIM is the first thing worth doing, so it sits right under the credit
+  // pass rather than below the fold. A non-member's invitation is the pass itself. Only the API's
+  // own answer drives either.
+  function welcomeBanner(h, membership) {
+    const welcome = membership.welcome ? 'Any ' + membership.welcome.gb + ' GB, ' + membership.welcome.days + '-day plan up to ' + money(membership.welcome.maxUsd) + '. ' : '';
+    return h('section', { class: 'om-welcome-banner', 'aria-label': 'Your welcome eSIM' },
+      h('span', { class: 'om-kicker' }, 'WELCOME eSIM'),
+      h('h2', {}, 'Your welcome eSIM is ready to claim.'),
+      h('p', { class: 'om-muted' }, welcome + 'It doesn’t use your weekly credit.'),
+      action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims')));
   }
   function linkWalletDialog(h, ctx, source) {
     let sheet;
@@ -370,7 +362,6 @@
       }).slice(0, 3);
       const sims = window.OTTHolderTools.publicSims(state?.sims, cfg);
       shortcuts.replaceChildren(...[
-        preview ? null : membershipPrompt(h, state?.membership),
         budget !== null ? h('div', {}, h('h2', {}, preview ? 'Plans for your sample credit' : 'Plans within your credit'),
           h('p', { class: 'om-muted' }, choices.length ? 'Start with a plan your ' + (preview ? 'sample' : 'confirmed') + ' balance can cover.' : 'No packages fit this balance. You can still browse all plans.'),
           h('div', { class: 'om-shortcut-list' }, choices.map(pkg => action(h,
@@ -397,6 +388,7 @@
         if (!ctx.isCurrent() || !credit.isConnected || holderAddress(ctx) !== holder) return;
         paintShortcuts(state);
         credit.setAttribute('aria-busy', 'false');
+        if (state?.membership?.configured && state.membership.member && !state.membership.welcomeClaimed) credit.after(welcomeBanner(h, state.membership));
         const title = content.querySelector('.om-pass-title, .om-balance');
         const note = content.querySelector('.om-pass-note');
         if (!state || (!state.stale && state.remainingUsd === null)) {

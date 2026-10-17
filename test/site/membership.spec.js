@@ -415,9 +415,27 @@ test('the app home invites a non-member to join instead of showing a $0.00 balan
   await page.goto('/index.html#/app');
   await expect(page.locator('.om-pass-title')).toHaveText('Not a member yet');
   await expect(page.locator('.om-credit-card')).not.toContainText('$0.00');
-  const prompt = page.locator('.om-membership-prompt');
-  await expect(prompt).toContainText('Burn 100,000 OTT once to join.');
-  await prompt.getByRole('button', { name: 'Join on the eSIMs screen' }).click();
+  // The pass is the invitation; there is no second join prompt further down.
+  await expect(page.locator('.om-welcome-banner')).toHaveCount(0);
+  await page.locator('.om-credit-card').getByRole('button', { name: 'Join OT+T' }).click();
   await expect(page).toHaveURL(/#\/app\/esims$/);
   await expect(page.locator('.data-membership h3')).toHaveText('Join OT+T');
+  // A non-member's panel leads with joining, not a $0.00 credit card or zero tiles.
+  await expect(page.locator('.credit-summary')).toHaveCount(0);
+  await expect(page.locator('.data-membership')).not.toContainText('null');
+});
+
+test('the app home puts a member\'s unclaimed welcome eSIM right under the credit pass', async ({ page }) => {
+  await stubWallet(page);
+  stubChain(page);
+  await stubApi(page, [standing({ allowanceUsd: 12, remainingUsd: 12, membership: membership({ member: true, memberSinceBlock: 64000000, sharing: true }) })]);
+  await page.route('**/config/esim.json', (r) => r.fulfill(json(CONFIG)));
+  await page.route('**/data/allowances.json', (r) => r.fulfill(json(LEDGER)));
+  await page.goto('/index.html#/app');
+  const banner = page.locator('.om-credit-card + .om-welcome-banner');
+  await expect(banner).toContainText('Your welcome eSIM is ready to claim.');
+  await expect(banner).toContainText('Any 1 GB, 7-day plan up to $4.00.');
+  await banner.getByRole('button', { name: 'Claim your welcome eSIM' }).click();
+  await expect(page).toHaveURL(/#\/app\/esims$/);
+  await expect(page.locator('.data-membership h3')).toHaveText('Claim your welcome eSIM');
 });
