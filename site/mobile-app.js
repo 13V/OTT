@@ -35,8 +35,28 @@
     return login?.account.address === account ? login.linkedWallet?.address || null : null;
   }
   function confirmedBudget(state) {
+    if (state?.membership?.configured && !state.membership.member) return null;
     return state && !state.stale && Number.isFinite(state.remainingUsd) && state.remainingUsd >= 0
       && Number.isFinite(state.weekEnd) && state.weekEnd * 1000 > Date.now() ? state.remainingUsd : null;
+  }
+  // The live account's membership, in a sentence and one action that opens the eSIMs screen,
+  // where joining and the welcome claim happen. Only the API's own answer drives it.
+  function membershipPrompt(h, membership) {
+    if (!membership?.configured) return null;
+    const tokens = /^\d+$/.test(membership.burnTokens) ? Number(membership.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT';
+    const welcome = membership.welcome ? 'any ' + membership.welcome.gb + ' GB, ' + membership.welcome.days + '-day plan up to ' + money(membership.welcome.maxUsd) : 'a welcome eSIM';
+    if (!membership.member) {
+      return h('div', { class: 'om-membership-prompt' }, h('h2', {}, 'Join OT+T'),
+        h('p', { class: 'om-muted' }, membership.enrolmentOpen ? 'Burn ' + tokens + ' once to join. Members claim ' + welcome + ' and share each week’s data budget.'
+          : 'Joining is closed right now. ' + (membership.reason || 'Try again later.')),
+        membership.enrolmentOpen ? action(h, [h('span', {}, 'Join on the eSIMs screen'), icon('arrow')], () => go('esims'), 'om-shortcut-button') : null);
+    }
+    if (!membership.welcomeClaimed) {
+      return h('div', { class: 'om-membership-prompt' }, h('h2', {}, 'Your welcome eSIM'),
+        h('p', { class: 'om-muted' }, 'You’re a member. Claim ' + welcome + '. It doesn’t use your weekly credit.'),
+        action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims'), 'om-shortcut-button'));
+    }
+    return null;
   }
   function linkWalletDialog(h, ctx, source) {
     let sheet;
@@ -350,6 +370,7 @@
       }).slice(0, 3);
       const sims = window.OTTHolderTools.publicSims(state?.sims, cfg);
       shortcuts.replaceChildren(...[
+        preview ? null : membershipPrompt(h, state?.membership),
         budget !== null ? h('div', {}, h('h2', {}, preview ? 'Plans for your sample credit' : 'Plans within your credit'),
           h('p', { class: 'om-muted' }, choices.length ? 'Start with a plan your ' + (preview ? 'sample' : 'confirmed') + ' balance can cover.' : 'No packages fit this balance. You can still browse all plans.'),
           h('div', { class: 'om-shortcut-list' }, choices.map(pkg => action(h,
@@ -381,12 +402,19 @@
         if (!state || (!state.stale && state.remainingUsd === null)) {
           title.className = 'om-pass-title'; title.textContent = 'Credit unavailable';
           note.textContent = 'We couldn’t load your current balance. Go online and try again.';
+        } else if (state.membership?.configured && !state.membership.member) {
+          // Weekly credit is for members. A holder who hasn't joined has none, and a $0.00
+          // balance would read as a verdict on the wallet rather than an invitation.
+          title.className = 'om-pass-title'; title.textContent = 'Not a member yet';
+          note.textContent = state.membership.enrolmentOpen ? 'Members get a welcome eSIM and a weekly share of trading fees.' : 'Joining is closed right now.';
+          primary.replaceWith(action(h, [state.membership.enrolmentOpen ? 'Join OT+T' : 'View membership', icon('arrow')], () => go('esims')));
         } else if (state.stale || confirmedBudget(state) === null) {
           title.className = 'om-pass-title'; title.textContent = 'Awaiting allocation';
           note.textContent = 'This week’s credit hasn’t been published yet. Check back after the weekly update.';
         } else {
           title.className = 'om-balance'; title.textContent = money(state.remainingUsd);
-          note.textContent = 'Available for eSIM packages. At home or abroad.';
+          note.textContent = state.membership?.configured && !state.membership.sharing
+            ? 'Your weekly share starts at the next Monday snapshot.' : 'Available for eSIM packages. At home or abroad.';
           const details = h('dl', { class: 'om-credit-details' },
             h('div', {}, h('dt', {}, 'Allocated'), h('dd', {}, state.allocatedUsd === null ? 'Unavailable' : money(state.allocatedUsd))),
             h('div', {}, h('dt', {}, 'Used'), h('dd', {}, state.usedUsd === null ? 'Unavailable' : money(state.usedUsd))));

@@ -39,6 +39,10 @@ function stubNetwork(page, opts = {}) {
     try { body = JSON.parse(route.request().postData() || '{}'); } catch (_) { /* not JSON: fall through */ }
     const answer = (req) => {
       const m = req.method;
+      // `methods` answers any RPC method a test cares about, as a value or a function of the
+      // request — a transaction receipt, a log query — ahead of the defaults below.
+      const custom = (opts.methods || {})[m];
+      if (custom !== undefined) return typeof custom === 'function' ? custom(req) : custom;
       if (m === 'eth_blockNumber') return '0x' + (opts.block || 0x1234567).toString(16);
       if (m === 'eth_chainId') return '0x1237';                 // 4663
       if (m === 'eth_call') {

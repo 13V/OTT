@@ -31,7 +31,7 @@ test('My data example switches between credit and eSIMs without issuing a packag
   await page.keyboard.press('Space');
   await expect(preview.locator('#account-credit-example')).toBeVisible();
   await expect(preview.locator('#account-credit-example')).toContainText('Fees fund the data pool');
-  await expect(preview.locator('.ott-ap-footnote')).toContainText('Membership enrolment is not open.');
+  await expect(preview.locator('.ott-ap-footnote')).toContainText('Membership enrolment is not open until launch.');
   await expect(preview.locator('.ott-ap-intro')).toContainText('No wallet needed. No real orders.');
   const exploreApp = preview.getByRole('link', { name: 'Explore the app' });
   await expect(exploreApp).toHaveAttribute('href', '#/app');

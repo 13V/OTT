@@ -54,6 +54,8 @@ body.ott-app-mode #view > .om-shell { max-width: none; margin: 0; padding: 0; }
 .om-shortcut-button > span { flex: 1; min-width: 0; font-weight: 600; }
 .om-shortcut-button small { display: block; color: var(--om-muted); font-size: 13px; font-weight: 400; margin-top: 4px; }
 .om-shortcut-button svg { width: 20px; height: 20px; flex: none; }
+.om-membership-prompt .om-shortcut-button { margin-top: 16px; max-width: 420px; }
+.om-live-account .data-membership .btn { min-height: 48px; }
 .om-plan-budget { margin: 0 0 8px; font-size: 14px; color: var(--om-muted); }
 .om-package-budget { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; color: var(--om-muted); font-size: 14px; }
 .om-package-budget strong { color: var(--om-ink); font-weight: 600; }

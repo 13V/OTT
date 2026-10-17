@@ -17,7 +17,7 @@ window.OTTWalletConnectSDK = {
       projectId: options.projectId,
       metadata: options.metadata,
       optionalChains: [options.chainId],
-      optionalMethods: ['personal_sign', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
+      optionalMethods: ['personal_sign', 'eth_sendTransaction', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
       optionalEvents: ['accountsChanged', 'chainChanged'],
       rpcMap: { [options.chainId]: options.rpc },
       showQrModal: false,

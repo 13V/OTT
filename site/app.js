@@ -277,7 +277,7 @@
     view.appendChild(h('div', { class: 'page-head' },
       h('div', { class: 'label' }, 'HOW THIS WORKS'),
       h('h1', {}, 'Burn once. Get connected.'),
-      h('p', { class: 'page-lede' }, 'The planned membership: burn OTT to enrol and receive your first eSIM. Collected trading fees then fund members’ ongoing data.')));
+      h('p', { class: 'page-lede' }, 'Burn OTT once to become a member and claim your first eSIM. Collected trading fees then fund members’ weekly data.')));
     const body = h('div', {}, notice('Loading the programme details…', 'plain'));
     view.appendChild(body);
 
@@ -312,24 +312,37 @@
     // is not that. A hairline between entries and a measure the eye can actually track do the work.
     const entry = (title, ...text) => h('section', { class: 'prose-entry' }, h('h2', { class: 'prose-title' }, title), h('p', { class: 'prose-body' }, ...text));
 
+    // The membership terms, from the same config. A missing figure drops its phrase rather than
+    // inventing one, so a fork without a membership block still reads as plain rules.
+    const member = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
+    const burn = /^\d{1,30}$/.test(String(member.burnTokens || '')) ? Number(member.burnTokens).toLocaleString('en-US') + ' OTT' : 'OTT';
+    const w = member.welcome && typeof member.welcome === 'object' ? member.welcome : null;
+    const welcomeText = w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0)
+      ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan costing up to $' + Number(w.maxUsd).toFixed(2) : 'a welcome eSIM';
+    const cap = Number(member.capMultiple) > 0 ? Number(member.capMultiple) : null;
+    const memberShare = pct(cfg.budgetBps);
+    const reserveShare = Number(cfg.budgetBps) > 0 && Number(cfg.budgetBps) < 10000 ? (10000 - Number(cfg.budgetBps)) / 100 + '%' : null;
+
     clear(body);
     body.appendChild(h('div', { class: 'prose' },
       entry('One burn starts your membership',
-        'OT+T stands for Onchain Telephone + Telegraph. The planned entry is simple: choose your first eSIM, review the membership terms, then approve a one-time OTT burn to enrol. Holding OTT or connecting a wallet alone will not enrol you. There is no additional burn for each data top-up. Membership enrolment is not open yet.'),
+        'OT+T stands for Onchain Telephone + Telegraph. Burn ' + burn + ' once to become a member: the app sends the tokens from your wallet to the standard burn address, after you confirm. Holding OTT or connecting a wallet alone won’t enrol you. There’s no further burn for top-ups, and membership doesn’t expire. One membership per wallet.' + (programmeLaunched ? '' : ' Enrolment opens when OTT launches.')),
+      entry('Your first eSIM',
+        'Each member can claim one welcome eSIM: ' + welcomeText + '. The reserve pays for it, so it doesn’t use your weekly credit, and the claim doesn’t expire.'),
       entry('Trading fees keep the data pool going',
-        'Collected trading fees will fund a shared data pool for enrolled members. The burn removes tokens; it does not pay the mobile supplier. Actual collected fees pay for the data. The portion reserved for data and the operating reserve must be published before enrolment opens. Unspent money stays in the pool, including funds reserved to back any outstanding member balances.'),
+        (memberShare ? memberShare + ' of each week’s collected trading fees becomes the next week’s member data budget. ' : 'A published share of each week’s collected trading fees becomes the next week’s member data budget. ')
+        + (reserveShare ? 'The other ' + reserveShare + ' stays in the pool as a reserve that pays for welcome eSIMs and payment costs. ' : '')
+        + 'The burn removes tokens; it doesn’t pay the mobile supplier. Actual collected fees pay for the data, and unspent money stays in the pool.'),
       entry('A fair share of a funded pool',
-        'An equal-member split is the proposed starting point: funded data budget divided by eligible memberships. That formula is an illustration, not a final allocation rule. The membership rules will define who is eligible, how multiple memberships are treated and whether unused balances accumulate or expire. The available allowance changes with collected fees, supplier prices and membership numbers. If there is no funded budget, there is no new data allocation.'),
-      entry('Before you approve anything',
-        'The exact burn amount, initial eSIM package, membership duration, fee allocation percentage and balance rules are still to be decided. They will appear together before approval. Burn once does not mean unlimited data or a guaranteed allowance forever. Each data package will show its own coverage, size, activation rules and expiry.'),
+        'Members share the weekly budget by the OTT they hold at the Monday snapshot' + (cap ? ', but no member gets more than ' + cap + '× the average share' : '') + '. What a capped member would have received above that goes to the other members. Non-members get no weekly credit, however much they hold. A new member’s weekly share starts at the next snapshot, and unused credit expires at the end of the week. If no fees were collected, there is no new data allocation.'),
+      entry('A burn is final',
+        'Tokens sent to the burn address can’t be returned or refunded. The app offers the burn only while the pool’s reserve can pay for a welcome eSIM, and asks you to confirm first. If the eSIM is delayed, for example when many members join at once, your membership stays on-chain and you can claim it later without burning again. Membership doesn’t mean unlimited data: weekly credit depends on fees actually collected.'),
       entry('Make the money trail visible',
-        'The planned public dashboard will show fees received, money allocated to data, supplier spending, reserves and eligible memberships, with timestamps and transaction links. On-chain records can verify burns and transfers. Off-chain supplier and payment-provider balances must be labelled as reported figures. Public burn enrolment will wait for contract review and a real funded eSIM test.'),
-      entry('Protect the first connection',
-        'The proposed protection is refundable enrolment escrow until the first eSIM is issued, followed by a finalised burn. A timeout would provide a refund route. This escrow, its issuance verification and recovery rules are not implemented yet. They need to be built and reviewed before users can enrol. Any later failed top-up needs a clear retry or recovery path without another burn.'),
+        'The status page shows fees received, the data budget, supplier spending and the pool balance. Burns and transfers are on-chain transactions anyone can check on the explorer. Off-chain supplier and payment-provider balances are labelled as reported figures.'),
       entry('An eSIM still needs a mobile network',
         'An external supplier provides the eSIM and mobile service. You will need a compatible, unlocked phone and coverage at your destination. OTT can make the funding and membership records verifiable; it cannot put the mobile network itself on-chain. The app preview demonstrates plan selection and setup using sample data, without an active eSIM.'),
       entry('What is available today',
-        'You can explore the catalogue and sample app, sign in with a supported wallet and review programme status. Burn membership and its protections are planned. The existing test system still uses a weekly holding-based allocation; it is not the proposed membership rule. ' + (programmeLaunched ? 'The current test configuration uses' : 'The token contracts are not configured for launch. The test design uses') + ' Robinhood Chain bonding-curve fees with ' + taxPhrase + '. Purchases remain paused while the funded supplier and phone test is completed.')));
+        'You can explore the catalogue and sample app, sign in with a supported wallet and review programme status. ' + (programmeLaunched ? 'Membership and weekly credit follow the rules above while purchases are switched on.' : 'The token has not launched, so enrolment, weekly credit and purchases stay closed until launch.') + ' The programme uses Robinhood Chain bonding-curve fees with ' + taxPhrase + '.')));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 

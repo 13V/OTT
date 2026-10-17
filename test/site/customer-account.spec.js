@@ -27,9 +27,12 @@ const CFG = { ...require('../../site/config/esim.json'),
   // fixture one explicit package with that identifier; wholesale checkout and
   // its supplier SKU contract have separate provider tests.
   packages: [{ ...fixturePackage, code: fixturePackage.slug }] };
+// The holder is a member (docs/membership.md): only members have weekly credit once the
+// membership block is configured, and the ledger lists them in `members`.
 const ALLOWANCES = { week: WEEK, weekEnd: week.weekEnd(WEEK), decimals: 18,
   coin: CFG.coin, curve: CFG.curve, holders: 1, budgetUsd: 20,
-  wallets: { [HOLDER]: { tokens: '1000000000000000000000', share: 1, allowanceUsd: 20 } } };
+  members: { [HOLDER]: { burned: '100000000000000000000000', sinceBlock: 1, tx: '0x' + '1'.repeat(64) } },
+  wallets: { [HOLDER]: { tokens: '1000000000000000000000', share: 1, allowanceUsd: 20, member: true } } };
 let ledger, backend, apiOrigin, frontendOrigin;
 const json = value => ({ contentType: 'application/json', body: JSON.stringify(value) });
 
@@ -173,7 +176,9 @@ test('a new wallet has no holder credit and another key cannot unlock an existin
   await customer(page, VISITOR, visitorKey);
   await page.goto('/#/app');
   await page.locator('.om-home-actions').getByRole('button', { name: 'Connect wallet', exact: true }).click();
-  await expect(page.locator('.om-balance')).toHaveText('$0.00');
+  // A wallet that has not joined has no weekly credit, so it is shown how to join, not a $0.00 balance.
+  await expect(page.locator('.om-pass-title')).toHaveText('Not a member yet');
+  await expect(page.locator('.om-balance')).toHaveCount(0);
   await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'eSIMs', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Redeem / })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Show my eSIM codes', exact: true })).toHaveCount(0);

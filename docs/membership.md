@@ -177,4 +177,19 @@ The account panel decides what to show from `membership`:
 
 The burn is an ordinary ERC-20 `transfer(burnAddress, burnUnits)` on the coin, sent from the
 member's wallet with `eth_sendTransaction`. The app waits for the receipt, then claims the
-welcome eSIM with that transaction hash.
+welcome eSIM with that transaction hash. Because a burn can't be undone, the app checks four
+things before asking the wallet to send:
+
+- **The burn matches the published config.** The coin, burn address and burn amount in the
+  API's answer must match the site's own `config/esim.json`. When the published ledger is about
+  the coin, `burnUnits` must also match its decimals. A compromised API host alone therefore
+  can't redirect a member's tokens.
+- **There's no earlier burn.** The app scans the blocks after the ledger's head for a burn this
+  wallet already made. If it finds one, it uses that burn instead of sending another.
+- **The wallet holds enough.** It checks the live balance first.
+- **The holder has confirmed.** A checkbox says the burn is permanent.
+
+Once a burn is sent, the page offers only a status check, never a second burn. A confirmed burn's
+transaction hash is kept in the browser (`localStorage`, key `ott-membership-burn:<address>`, which
+is public chain data), so reloading the page can't invite a second burn. The hash is forgotten if
+the API rejects it.

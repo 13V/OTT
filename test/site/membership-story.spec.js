@@ -37,7 +37,7 @@ function noApprovalCalls(methods) {
   expect(methods).not.toContain('eth_signTypedData_v4');
 }
 
-test('the proposed one-time burn enrols for a first eSIM while collected trading fees fund future data', async ({ page }) => {
+test('the one-time burn enrols for a first eSIM while collected trading fees fund future data', async ({ page }) => {
   const f = await story(page);
   await expect(page.locator('.ott-hero-sub')).toContainText('Burn once to get your eSIM.');
   await expect(page.locator('.ott-hero-sub')).toContainText('Trading fees fund your data.');
@@ -45,7 +45,13 @@ test('the proposed one-time burn enrols for a first eSIM while collected trading
   await expect(journey).toContainText(/burn once/i);
   await expect(journey).toContainText(/first eSIM/i);
   await expect(journey).toContainText(/trading fees/i);
-  await expect(journey).toContainText(/(?:planned|proposed)/i);
+  // The published terms come from config/esim.json, and enrolment stays closed before launch.
+  await expect(journey).toContainText('Burn 100,000 OTT once to join');
+  await expect(journey).toContainText('any 1 GB, 7-day plan up to $4.00');
+  await expect(journey).toContainText('80% of the fees actually collected');
+  await expect(journey).toContainText('no member gets more than 3× the average');
+  await expect(journey).toContainText('Enrolment opens when OTT launches.');
+  await expect(journey).toContainText('can’t be refunded');
   const illustration = journey.locator('.ott-member-enrol-art img');
   await expect(illustration).toHaveAttribute('src', './assets/ott/membership-burn-world.png');
   await illustration.scrollIntoViewIfNeeded();
@@ -58,28 +64,28 @@ test('the proposed one-time burn enrols for a first eSIM while collected trading
   expect(f.errors).toEqual([]);
 });
 
-test('Trust opens the pending-protection section from Status and on a direct reload without wallet approval or writes', async ({ page }) => {
+test('Trust opens the protection section from Status and on a direct reload without wallet approval or writes', async ({ page }) => {
   const f = await story(page);
   await page.goto('/index.html#/status');
   await expect(page.locator('#view h1')).toBeVisible();
   await page.getByRole('navigation', { name: 'Primary', exact: true }).getByRole('link', { name: 'Trust', exact: true }).click();
   await expect(page).toHaveURL(/#trust$/);
   const trust = page.locator('#trust');
-  await expect(trust.getByText('Escrow planned', { exact: true })).toBeVisible();
+  await expect(trust.getByText('Reserve check built', { exact: true })).toBeVisible();
   await expect.poll(() => trust.evaluate(section => Math.round(section.getBoundingClientRect().top))).toBeLessThan(130);
   await page.reload();
-  await expect(trust.getByText('Contract review pending', { exact: true })).toBeVisible();
+  await expect(trust.getByText('Launch pending', { exact: true })).toBeVisible();
   await expect.poll(() => trust.evaluate(section => Math.round(section.getBoundingClientRect().top))).toBeLessThan(130);
   noApprovalCalls(await page.evaluate(() => window.membershipWalletCalls));
   expect(f.writes).toEqual([]);
   expect(f.errors).toEqual([]);
 });
 
-test('trust marks planned protections and outstanding review and phone testing without presenting completion', async ({ page }) => {
+test('trust shows the published rules and outstanding launch and automated testing without presenting completion', async ({ page }) => {
   const f = await story(page);
   const trust = page.locator('#trust');
   await expect(trust).toBeVisible();
-  for (const label of ['Escrow planned', 'Contract review pending', 'Funded phone test pending']) {
+  for (const label of ['Rules published', 'Reserve check built', 'Launch pending', 'Automated test pending']) {
     await expect(trust.getByText(label, { exact: true })).toBeVisible();
   }
   await expect(trust.getByText(/^(?:Audited|Escrow active|Phone test passed|Fully insured|Guaranteed data)$/i)).toHaveCount(0);
