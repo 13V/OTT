@@ -76,6 +76,33 @@ async function signaturesAfter(rpc, address, { until = null, maxPages = 50, page
   throw new Error(`more than ${maxPages * pageSize} new transactions on ${address}; raise maxPages`);
 }
 
+/**
+ * The oldest `limit` signatures on `address` newer than `until`, oldest first, with `more` true
+ * when newer ones remain after them: what a scan reads that must get through a long backlog a
+ * piece at a time instead of never. The RPC only pages backwards, so this still pages from the
+ * newest back to `until`, a call per thousand, keeping just the oldest `limit` in memory. Throws
+ * when `until` isn't reached within `maxPages` pages or before `deadline` (by `clock`).
+ */
+async function oldestSignaturesAfter(rpc, address, { until = null, limit = 5000, maxPages = 5000, pageSize = 1000, deadline = Infinity, clock = Date.now } = {}) {
+  let window = [];   // newest first; the oldest `limit` seen so far
+  let total = 0;
+  let before;
+  for (let page = 0; page < maxPages; page++) {
+    if (clock() > deadline) throw new Error(`out of time paging back to the cursor on ${address}, ${total} new transactions in`);
+    const opts = { limit: pageSize, commitment: 'confirmed' };
+    if (until) opts.until = until;
+    if (before) opts.before = before;
+    const list = await rpc('getSignaturesForAddress', [address, opts]);
+    if (!Array.isArray(list)) throw new Error('getSignaturesForAddress returned no list for ' + address);
+    total += list.length;
+    window = window.concat(list);
+    if (window.length > limit) window = window.slice(window.length - limit);
+    if (list.length < pageSize) return { signatures: window.reverse(), more: total > window.length, total };
+    before = list[list.length - 1].signature;
+  }
+  throw new Error(`more than ${maxPages * pageSize} new transactions on ${address}; raise maxPages`);
+}
+
 /** One transaction, jsonParsed, any version. null when no endpoint has it. */
 async function getTransaction(rpc, signature) {
   return rpc('getTransaction', [signature, TX_OPTIONS]);
@@ -93,9 +120,10 @@ function balanceInTransaction(tx, tokenAccount) {
 /**
  * What `tokenAccount` held at unix time `at`: its balance after the last transaction that landed
  * at or before `at`, found by walking its history back from now. 0 when it has no history that
- * old (it did not exist yet). Throws when the history is too long to walk in `maxPages`.
+ * old (it did not exist yet). Throws when the history is too long to walk in `maxPages`, with
+ * `code` 'HISTORY_TOO_LONG' so a caller can tell that apart from a read that failed.
  */
-async function balanceAt(rpc, tokenAccount, at, { maxPages = 10, pageSize = 1000 } = {}) {
+async function balanceAt(rpc, tokenAccount, at, { maxPages = 100, pageSize = 1000 } = {}) {
   let before;
   for (let page = 0; page < maxPages; page++) {
     const opts = { limit: pageSize, commitment: 'confirmed' };
@@ -111,7 +139,9 @@ async function balanceAt(rpc, tokenAccount, at, { maxPages = 10, pageSize = 1000
     if (list.length < pageSize) return 0n;
     before = list[list.length - 1].signature;
   }
-  throw new Error(`${tokenAccount} has more than ${maxPages * pageSize} transactions since the snapshot`);
+  const tooLong = new Error(`${tokenAccount} has more than ${maxPages * pageSize} transactions since the snapshot`);
+  tooLong.code = 'HISTORY_TOO_LONG';
+  throw tooLong;
 }
 
 /**
@@ -391,7 +421,7 @@ async function confirmTransaction(rpc, signature, { wire = null, lastValidBlockH
 
 module.exports = {
   TX_OPTIONS, endpoints, makeRpc,
-  signaturesAfter, getTransaction, balanceInTransaction, balanceAt, tokenAccountsOf, holdingAt,
+  signaturesAfter, oldestSignaturesAfter, getTransaction, balanceInTransaction, balanceAt, tokenAccountsOf, holdingAt,
   DISC, IX, decodeBondingCurve, decodePool, bondingCurveAddress, poolAuthorityAddress, poolAddress,
   creatorVaultAddress, ammCreatorVaultAuthority, ammCreatorVaultAccount, eventAuthority, coinState,
   solUsdNow, solUsdAt,

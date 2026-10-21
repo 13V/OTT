@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { stubNetwork } = require('./support/network.js');
 const { installWallet, walletAddress } = require('./support/wallet.js');
-const { COIN, TREASURY, TOKEN_2022, BURN_ACCOUNT, INCINERATOR, signatureFrom, joinTransactionResult } = require('./support/solana.js');
+const { COIN, TREASURY, TOKEN_2022, BURN_ACCOUNT, INCINERATOR, ata, signatureFrom, joinTransactionResult } = require('./support/solana.js');
 const catalogue = require('../../site/config/esim.json');
 
 test.use({ serviceWorkers: 'block' });
@@ -84,7 +84,8 @@ test('a join reads the chain only through the configured browser endpoints', asy
   await expect(card.locator('h3')).toHaveText('Claim your welcome eSIM', { timeout: 15000 });
   expect(wallet.calls('signAndSendTransaction')).toHaveLength(1);
   expect([...new Set(calls.map((c) => c.origin))]).toEqual(ADDRESSES.browserRpcs.map((url) => new URL(url).origin));
-  expect(calls.map((c) => c.method)).toEqual(['getTokenSupply', 'getSignaturesForAddress', 'getTokenAccountBalance', 'getLatestBlockhash', 'getSignatureStatuses']);
+  // The earlier-join check reads the wallet's own OTT account, then the incinerator's.
+  expect(calls.map((c) => c.method)).toEqual(['getTokenSupply', 'getSignaturesForAddress', 'getSignaturesForAddress', 'getTokenAccountBalance', 'getLatestBlockhash', 'getSignatureStatuses']);
 });
 
 const refuse = (origin) => (page) => page.route(origin + '/**', (route) => route.abort('connectionrefused'));
@@ -124,7 +125,8 @@ test('an endpoint that is behind and has no record of a transaction is not belie
   const { calls, wallet, card, send } = await joinPage(page, {
     browserRpcs: [PUBLICNODE, SECOND],
     network: {
-      signatures: { [BURN_ACCOUNT]: [{ signature: earlier, slot: 400000100, blockTime: Math.floor(Date.now() / 1000) - 600, err: null, confirmationStatus: 'confirmed' }] },
+      // A join is in the history of both the wallet's own OTT account and the incinerator's.
+      signatures: Object.fromEntries([BURN_ACCOUNT, ata(ADDRESS, COIN)].map((account) => [account, [{ signature: earlier, slot: 400000100, blockTime: Math.floor(Date.now() / 1000) - 600, err: null, confirmationStatus: 'confirmed' }]])),
       transactions: { [earlier]: joinTransactionResult({ signature: earlier, wallet: ADDRESS, amount: REQUIREMENT.burnUnits }) },
     },
     // PublicNode has not seen the transaction yet; the second endpoint has.

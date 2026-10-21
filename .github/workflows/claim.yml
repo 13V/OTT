@@ -16,8 +16,8 @@ on:
   schedule:
     - cron: '17 6 * * *'
     # Monday's ledger (data.yml, 00:05) publishes the new week's budget, and until the pool is
-    # topped up to cover it the API keeps joining closed. Funding again right after it closes that
-    # gap in minutes instead of waiting for 06:17.
+    # topped up to cover it the API keeps joining closed. data.yml starts this workflow itself as
+    # soon as it publishes a new week; this schedule is the backstop for when that start fails.
     - cron: '35 0 * * 1'
   workflow_dispatch:
 
@@ -25,9 +25,11 @@ permissions:
   contents: write
   issues: write
 
+# The same group as data.yml, queued the same way (`queue: max`: every waiting run is kept, so a
+# claim waiting behind a long refresh is never cancelled to make room for the next one).
 concurrency:
   group: data-refresh
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   claim:
@@ -65,9 +67,17 @@ jobs:
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
         run: node scripts/claim.js
 
+      # Before launch a missing key is expected. After it, the creator fees wait uncollected and
+      # nothing tops the pool up, so the step fails and the keeper alert below opens an issue: a
+      # step skipped by its `if` reports "skipped", which no alert would ever notice.
       - name: No key, no claim
+        id: claim_key
         if: env.HAS_KEY != 'true'
-        run: echo "TREASURY_PRIVATE_KEY is not set; nothing claimed"
+        continue-on-error: true
+        run: |
+          echo "TREASURY_PRIVATE_KEY is not set; nothing claimed"
+          treasury=$(node -e "try{console.log(require('./site/config/esim.json').treasury||'')}catch(e){console.log('')}")
+          if [ -n "$treasury" ]; then echo "the coin is launched (treasury $treasury), so a missing key is a failure"; exit 1; fi
 
       - name: Fund the pool
         id: fund
@@ -79,11 +89,19 @@ jobs:
           BLINK_API_KEY: ${{ secrets.BLINK_API_KEY }}
           FIXEDFLOAT_API_KEY: ${{ secrets.FIXEDFLOAT_API_KEY }}
           FIXEDFLOAT_API_SECRET: ${{ secrets.FIXEDFLOAT_API_SECRET }}
+          # scripts/fund.js sends nothing while its last top-up is unsettled. Once a person has
+          # checked that order with FixedFloat, its id here (a repository variable) lets it go on.
+          FUND_RESOLVED_ORDER: ${{ vars.FUND_RESOLVED_ORDER }}
         run: node scripts/fund.js
 
       - name: No keys, no funding
+        id: fund_keys
         if: env.HAS_FUND != 'true'
-        run: echo "TREASURY_PRIVATE_KEY, BLINK_API_KEY or FIXEDFLOAT_API_KEY is not set; nothing funded"
+        continue-on-error: true
+        run: |
+          echo "TREASURY_PRIVATE_KEY, BLINK_API_KEY, FIXEDFLOAT_API_KEY or FIXEDFLOAT_API_SECRET is not set; nothing funded"
+          treasury=$(node -e "try{console.log(require('./site/config/esim.json').treasury||'')}catch(e){console.log('')}")
+          if [ -n "$treasury" ]; then echo "the coin is launched (treasury $treasury), so missing keys are a failure"; exit 1; fi
 
       - name: Refresh treasury
         id: treasury
@@ -117,13 +135,17 @@ jobs:
           OUTCOME_CLAIM: ${{ steps.claim.outcome }}
           OUTCOME_FUND: ${{ steps.fund.outcome }}
           OUTCOME_TREASURY: ${{ steps.treasury.outcome }}
+          OUTCOME_CLAIM_KEY: ${{ steps.claim_key.outcome }}
+          OUTCOME_FUND_KEYS: ${{ steps.fund_keys.outcome }}
         run: |
-          names=("Claim" "Fund the pool" "Refresh treasury")
-          outcomes=("$OUTCOME_CLAIM" "$OUTCOME_FUND" "$OUTCOME_TREASURY")
+          names=("Claim" "Fund the pool" "Refresh treasury" "Claim key" "Funding keys")
+          outcomes=("$OUTCOME_CLAIM" "$OUTCOME_FUND" "$OUTCOME_TREASURY" "$OUTCOME_CLAIM_KEY" "$OUTCOME_FUND_KEYS")
           frozen=(
             "no creator fees were collected from pump.fun's creator vaults into the treasury today — they keep waiting there (only the treasury can ever be paid them), and may now hold more than a day's worth until the next successful claim."
             "the Lightning pool was not topped up from the treasury today — site/data/funding.json still reflects the last successful top-up, and the pool is that much closer to running dry."
             "site/data/treasury.json was not refreshed after today's claim/fund — the pool card can show a stale balance, runway and status."
+            "the TREASURY_PRIVATE_KEY repository secret is not set, and the coin is launched: no creator fees are being collected."
+            "one of the TREASURY_PRIVATE_KEY, BLINK_API_KEY, FIXEDFLOAT_API_KEY or FIXEDFLOAT_API_SECRET repository secrets is not set, and the coin is launched: the pool is not being topped up."
           )
           failed=()
           detail=""

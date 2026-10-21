@@ -71,6 +71,14 @@ const newKey = () => {
     check('paged with before, stopping at the cursor', calls.map((o) => [o.until || null, o.before || null]), [['s2', null], ['s2', 's4']]);
     check('no cursor reads the whole history', (await C.signaturesAfter(rpc, 'x', { pageSize: 10 })).map((s) => s.signature), ['s1', 's2', 's3', 's4', 's5']);
     await rejects('too long a history is refused rather than cut short', C.signaturesAfter(rpc, 'x', { pageSize: 1, maxPages: 2 }), /raise maxPages/);
+    // A backlog is read a piece at a time, oldest first.
+    const oldest = (opts) => C.oldestSignaturesAfter(rpc, 'x', opts).then((r) => [r.signatures.map((s) => s.signature), r.more, r.total]);
+    check('the oldest few after the cursor, and that more remain', await oldest({ until: 's1', limit: 2, pageSize: 2 }), [['s2', 's3'], true, 4]);
+    check('all of them when they fit', await oldest({ until: 's2', limit: 5, pageSize: 2 }), [['s3', 's4', 's5'], false, 3]);
+    check('from the start of the history without a cursor', await oldest({ limit: 3, pageSize: 10 }), [['s1', 's2', 's3'], true, 5]);
+    check('nothing new is an empty answer', await oldest({ until: 's5', limit: 3, pageSize: 2 }), [[], false, 0]);
+    await rejects('a backlog too deep to page back through is refused', C.oldestSignaturesAfter(rpc, 'x', { limit: 2, pageSize: 1, maxPages: 3 }), /raise maxPages/);
+    await rejects('and so is running out of time on the way', C.oldestSignaturesAfter(rpc, 'x', { limit: 2, pageSize: 1, deadline: 10, clock: () => 11 }), /out of time/);
   }
   {
     const ACCOUNT = newKey().address, OTHER = newKey().address, MINT = newKey().address;

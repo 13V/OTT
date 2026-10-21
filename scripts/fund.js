@@ -53,6 +53,7 @@ const FF_TO = 'BTCLN';
 // keepLamports never leaves the treasury, so it can always pay for the next claim and its rent.
 const DEFAULTS = { targetUsd: 100, minUsd: 20, maxUsd: 500, maxPoolUsd: 1000, keepLamports: 50000000n, waitMs: 10 * 60 * 1000, pollMs: 15000 };
 const QUOTE_TOLERANCE = 0.05;   // FixedFloat's rate vs Blink's BTC price and SOL's market price
+const INVOICE_EXPIRY_MINUTES = 120;   // how long FixedFloat has to pay the Lightning invoice
 const ASK_TOLERANCE = 0.03;     // SOL FixedFloat asks for vs the amount quoted
 const PRIORITY_MICRO_LAMPORTS = 50000;
 
@@ -111,8 +112,12 @@ function plan({ walletUsd, poolUsd, owedUsd = null, reserveUsd = 0, targetUsd = 
   };
 }
 
-/** Welcome eSIMs the pool keeps room for beyond what the week owes: five at the dearest welcome price. */
-const WELCOME_RESERVE_COUNT = 5;
+/**
+ * Welcome eSIMs the pool keeps room for beyond what the week owes, at the dearest welcome price:
+ * about a day of joins, since the pool is topped up once a day. The API offers the join only while
+ * the pool less what is owed covers one more, so this is what keeps joining open between top-ups.
+ */
+const WELCOME_RESERVE_COUNT = 25;
 function welcomeReserveFor(config) {
   const membership = membershipConfig(config);
   return membership ? round2(WELCOME_RESERVE_COUNT * membership.welcome.maxUsd) : 0;
@@ -129,6 +134,28 @@ function owedFrom(treasuryFile) {
 
 function appendLog(existing, entry) {
   return (Array.isArray(existing) ? existing : []).concat([entry]).slice(-KEEP);
+}
+
+// A journal entry in one of these states may still have SOL with FixedFloat that hasn't come back
+// as sats: sent (or maybe sent) and not seen paid.
+const UNSETTLED = new Set(['sending', 'unconfirmed', 'sent', 'expired', 'emergency', 'done-unconfirmed']);
+
+/**
+ * The newest top-up, when it isn't settled: { entry } for one that must stop this run, { entry,
+ * paid: true } for one Blink now shows paid (the caller marks it done), or null. Without this, two
+ * "Run workflow" clicks, or one slow exchange, would send a second order's worth of SOL while the
+ * first is still on its way, and a failing exchange would take another deposit every day. Only
+ * Blink's own record of the invoice can settle one here: the order's FixedFloat token is never
+ * stored (funding.json is public, and the token controls the order), so anything else needs a
+ * person, who checks the order and names it in FUND_RESOLVED_ORDER to let the next run go ahead.
+ */
+async function unsettledTopUp({ journal, payer, resolvedOrder = '' }) {
+  const last = Array.isArray(journal) && journal.length ? journal[journal.length - 1] : null;
+  if (!last || last.dryRun || !UNSETTLED.has(last.status)) return null;
+  if (resolvedOrder && String(last.fixedFloatOrder) === String(resolvedOrder).trim()) return null;
+  let paid = 'UNKNOWN';
+  try { paid = String(((await payer.received(last.invoiceHash)) || {}).status || 'UNKNOWN'); } catch (e) { paid = 'UNKNOWN'; }
+  return paid === 'PAID' ? { entry: last, paid: true } : { entry: last, paid: false };
 }
 
 /** SOL to quote for `amountUsd` at `solUsd`, to the microSOL. */
@@ -216,11 +243,37 @@ async function checkCurrencies(ff, { from = FF_FROM, to = FF_TO } = {}) {
 // ---------------------------------------------------------------------------
 async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minUsd, maxUsd, maxPoolUsd, reserveUsd, keepLamports = DEFAULTS.keepLamports,
   dryRun = false, waitMs = DEFAULTS.waitMs, pollMs = DEFAULTS.pollMs, out = OUT_PATH, treasuryPath = TREASURY_PATH,
-  confirmOptions = {}, now = () => Date.now(), log = () => {} }) {
+  resolvedOrder = '', confirmOptions = {}, now = () => Date.now(), log = () => {} }) {
   const C = chain || require(path.join(__dirname, 'solana-chain.js'));
   const treasury = config.treasury;
   if (!S.isAddress(treasury)) throw new Error('no treasury in site/config/esim.json');
   if (!key || key.address !== treasury) throw new Error(`wrong wallet: the key is for ${key && key.address}, the treasury is ${treasury}`);
+
+  // 0. The last top-up must have landed before another one starts.
+  const pending = await unsettledTopUp({ journal: readJson(out, []), payer, resolvedOrder });
+  if (pending && pending.paid && !dryRun) {
+    const journal = readJson(out, []);
+    const entry = journal[journal.length - 1];
+    entry.status = 'done';
+    entry.settledAt = Math.floor(now() / 1000);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(journal, null, 1) + '\n');
+    log(`  the last top-up (order ${entry.fixedFloatOrder}) has landed since: Blink shows its invoice paid`);
+  } else if (pending && !pending.paid) {
+    const e = pending.entry;
+    // An order whose SOL is confirmed sent can still finish while its invoice is good: that is a
+    // slow exchange, not a fault, so this run just waits. Past the invoice's life, or in a state
+    // that already needs a hand, it is an error, and the keeper alert opens an issue.
+    const ageS = now() / 1000 - Number(e.at);
+    if (['sent', 'done-unconfirmed'].includes(e.status) && ageS >= 0 && ageS < INVOICE_EXPIRY_MINUTES * 60) {
+      const reason = `the last top-up (FixedFloat order ${e.fixedFloatOrder}, transfer ${e.depositTx}) is still on its way; nothing more is sent until Blink shows it paid`;
+      log('  ' + reason);
+      return { action: 'none', reason };
+    }
+    throw new Error(`the last top-up is not settled: FixedFloat order ${e.fixedFloatOrder}, transfer ${e.depositTx}, ${e.lamports} lamports, status ${e.status}, and Blink doesn't show its invoice paid. `
+      + 'Nothing more is sent until it is: check the transfer on chain and the order with FixedFloat, then set the repository variable FUND_RESOLVED_ORDER to '
+      + e.fixedFloatOrder + ' to let the next run go ahead');
+  }
 
   // 1. Where things stand.
   const pool = await payer.balance();
@@ -235,8 +288,11 @@ async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minU
   // worst — the keepers run in the order claim, fund, treasury — which is close enough to aim by.
   const owedUsd = owedFrom(readJson(treasuryPath, null));
   const reserve = reserveUsd === undefined ? welcomeReserveFor(config) : reserveUsd;
-  const p = plan({ walletUsd, poolUsd: Number(pool.usd), owedUsd, reserveUsd: reserve, targetUsd, minUsd, maxUsd, maxPoolUsd });
-  log(`  pool $${Number(pool.usd).toFixed(2)} (${pool.sats} sats), treasury ${(Number(lamports) / 1e9).toFixed(4)} SOL at $${price.toFixed(2)}, $${walletUsd.toFixed(2)} spendable`);
+  // The pool is what the BTC wallet holds: payments come from it alone, and Blink's balance report
+  // also adds any USD wallet on the account.
+  const poolUsd = Number.isFinite(Number(pool.sats)) && Number.isFinite(Number(pool.usdPerSat)) ? round2(Number(pool.sats) * Number(pool.usdPerSat)) : Number(pool.usd);
+  const p = plan({ walletUsd, poolUsd, owedUsd, reserveUsd: reserve, targetUsd, minUsd, maxUsd, maxPoolUsd });
+  log(`  pool $${poolUsd.toFixed(2)} (${pool.sats} sats), treasury ${(Number(lamports) / 1e9).toFixed(4)} SOL at $${price.toFixed(2)}, $${walletUsd.toFixed(2)} spendable`);
   if (!p.amountUsd) { log(`  nothing to move: ${p.reason}`); return { action: 'none', reason: p.reason }; }
   const amountUsd = p.amountUsd;
   const quotedSol = solFor(amountUsd, price);
@@ -255,7 +311,7 @@ async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minU
   if (dryRun) return { action: 'plan', amountUsd, sats, sol: quotedSol, reason: p.reason };
 
   // 3. The invoice, the order, the transfer — in that order, each checked before the next.
-  const invoice = await payer.invoice({ sats, memo: 'OT+T data pool top-up', expiresInMinutes: 120 });
+  const invoice = await payer.invoice({ sats, memo: 'OT+T data pool top-up', expiresInMinutes: INVOICE_EXPIRY_MINUTES });
   const order = await ff.create({ type: 'fixed', fromCcy: FF_FROM, toCcy: FF_TO, direction: 'to', amount: (sats / 1e8).toFixed(8), toAddress: invoice.paymentRequest });
   const { to, lamports: sendLamports, ask } = checkOrder(order, { quotedSol, treasury });
   if (sendLamports > spendable) throw new Error(`FixedFloat asks ${ask} SOL and the treasury can spare ${(Number(spendable) / 1e9).toFixed(6)}; order ${order.id} left to expire`);
@@ -281,6 +337,9 @@ async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minU
   const entry = journal[journal.length - 1];
   const write = () => { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(journal, null, 1) + '\n'); };
   write();
+  // And in the run's log, before the send: the journal only reaches the repository when the job
+  // commits at its end, and a run that dies first must still say where the SOL went.
+  log(`  sending ${ask} SOL to FixedFloat order ${order.id} (deposit ${to}) in transfer ${signature}`);
 
   const sent = await C.sendTransaction(rpc, wire);
   if (sent !== signature) log(`  the node answered ${sent} for ${signature}`);
@@ -334,7 +393,7 @@ async function run({ rpc, chain, config, key, payer, ff, solUsd, targetUsd, minU
   }
 }
 
-module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, checkOrder, checkCurrencies, solFor, run, fixedFloat, DEFAULTS, OUT_PATH, TREASURY_PATH, FF_FROM, FF_TO };
+module.exports = { plan, appendLog, owedFrom, welcomeReserveFor, checkOrder, checkCurrencies, solFor, unsettledTopUp, UNSETTLED, run, fixedFloat, DEFAULTS, OUT_PATH, TREASURY_PATH, FF_FROM, FF_TO };
 
 if (require.main === module) {
   const C = require(path.join(__dirname, 'solana-chain.js'));
@@ -379,6 +438,7 @@ if (require.main === module) {
     reserveUsd: flag('reserve', undefined),
     keepLamports: keepSol === undefined ? DEFAULTS.keepLamports : BigInt(Math.round(keepSol * 1e9)),
     dryRun: argv.includes('--dry-run'),
+    resolvedOrder: process.env.FUND_RESOLVED_ORDER || '',
     log,
   })
     .then((r) => console.log(r.action === 'none' ? `fund: nothing to move (${r.reason})` : r.action === 'plan' ? `fund: would move $${r.amountUsd.toFixed(2)} (${r.sol} SOL for ${r.sats} sats) — dry run` : `fund: $${r.amountUsd.toFixed(2)} → ${r.sats} sats, ${r.status}`))

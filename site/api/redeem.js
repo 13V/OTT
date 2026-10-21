@@ -195,15 +195,71 @@ async function readAllowances() {
 }
 
 /**
- * The pool, as scripts/treasury.js last measured it. Advisory, never a gate: it is up to half an
- * hour old, and a wallet that can in fact be paid must never be refused because a file was stale.
- * What it buys is honesty — a holder whose allowance the pool plainly cannot cover is told before
- * they press the button, rather than after, by a provider that could not pay.
+ * The pool, as scripts/treasury.js last measured it, hours old at worst. For a weekly redemption it
+ * is advisory, never a gate: a wallet that can in fact be paid must never be refused because a
+ * file was stale. What it buys there is honesty — a holder whose allowance the pool plainly cannot
+ * cover is told before they press the button, rather than after, by a provider that could not pay.
+ * Welcome eSIMs are the exception (poolSurplus): what this week owes members comes from here.
  */
 async function readTreasury() {
-  // Defensive to the point of swallowing everything, selfUrl() included: this figure only ever
-  // makes an answer more honest, and nothing about it is worth failing a redemption over.
+  // Defensive to the point of swallowing everything, selfUrl() included: a missing file is a null,
+  // and each caller decides what a null means for it.
   try { return await fetchJson(process.env.TREASURY_URL || selfUrl('/data/treasury.json')); } catch (e) { return null; }
+}
+
+// Providers whose balanceUsd() reads money that is really there: the Lightning wallet wholesale
+// pays from, or the eSIM Access account. The mock's answer is a placeholder, so the file is used.
+const LIVE_POOL_PROVIDERS = new Set(['wholesale', 'esimaccess']);
+const POOL_TTL_MS = 60 * 1000;
+const POOL_FAILED_TTL_MS = 15 * 1000;
+const POOL_TIMEOUT_MS = 4000;
+let poolReading = { at: 0, usd: null, ttl: 0, pending: null };
+
+/**
+ * The pool's balance read from the provider now, in dollars, or null when it can't be. Shared for
+ * a minute by every request on this instance (a failed read for fifteen seconds), unless `fresh`.
+ */
+async function livePoolUsd(prov, { fresh = false } = {}) {
+  if (!prov || !LIVE_POOL_PROVIDERS.has(prov.name) || typeof prov.balanceUsd !== 'function') return null;
+  const now = Date.now();
+  if (!fresh && poolReading.at && now - poolReading.at < poolReading.ttl) return poolReading.usd;
+  if (!fresh && poolReading.pending) return poolReading.pending;
+  let timer = null;
+  const read = Promise.race([
+    Promise.resolve().then(() => prov.balanceUsd()),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(null), POOL_TIMEOUT_MS); }),
+  ]).then((value) => (value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value)), () => null)
+    .then((usd) => {
+      clearTimeout(timer);
+      poolReading = { at: Date.now(), usd, ttl: usd === null ? POOL_FAILED_TTL_MS : POOL_TTL_MS, pending: null };
+      return usd;
+    });
+  if (!fresh) poolReading.pending = read;
+  return read;
+}
+
+/**
+ * What the pool holds beyond what this week still owes members, in dollars, or null when that
+ * can't be told. Welcome eSIMs are paid from this surplus and nothing else (docs/membership.md):
+ * a welcome stays claimable forever under its fixed id, while weekly credit expires on Monday, so
+ * when both can't be paid the welcome is the one that waits for the next top-up.
+ *
+ * What is owed comes from the treasury file; with no figure there is no surplus to spend. The
+ * balance is the provider's own reading when it gives one, and the file's otherwise. The file's
+ * figure for what is owed only falls as members redeem, so between two treasury runs it reads
+ * high next to a live balance, and the surplus errs low: a welcome waits rather than spending
+ * what members are owed.
+ */
+async function poolSurplus(prov, treasury, { fresh = false } = {}) {
+  if (!treasury || treasury.owedUsd === null || treasury.owedUsd === undefined) return null;
+  const owed = Number(treasury.owedUsd);
+  if (!Number.isFinite(owed)) return null;
+  let balance = await livePoolUsd(prov, { fresh });
+  if (balance === null) {
+    const fromFile = treasury.reseller ? treasury.reseller.balanceUsd : null;
+    balance = fromFile === null || fromFile === undefined ? NaN : Number(fromFile);
+  }
+  return Number.isFinite(balance) ? balance - owed : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -587,24 +643,19 @@ function currentRequirement(config, allowances, week) {
 /**
  * Whether the app may offer the join right now. A join can't be undone, so it is offered only when
  * this week's amount is known and a welcome eSIM can actually be bought: purchases are on, the
- * ledger is about the coin and is this week's, it carries this week's amount, the treasury reports
- * the pool funded, and the pool less what this week still owes members covers the dearest welcome
- * plan. The treasury file is up to half an hour old; this is a gate on the offer, and the order
- * itself still fails safely if the pool turns out short.
+ * ledger is about the coin and is this week's, it carries this week's amount, and the pool less
+ * what this week still owes members (poolSurplus, `surplus` here) covers the dearest welcome plan.
+ * Not the treasury's status word: "low" is about runway, an alert for the operator, and every
+ * welcome paid would count towards it, so joining would close itself. The claim checks the
+ * surplus again, live, before it orders.
  */
-function enrolmentOf(m, { config, allowances, week, requirement }, treasury) {
+function enrolmentOf(m, { config, allowances, week, requirement }, surplus) {
   if (!redemptionsEnabled()) return { open: false, reason: 'Joining opens when eSIM purchases are switched on.' };
   if (ledgerDecimals(config, allowances) === null) return { open: false, reason: 'Joining opens once the weekly ledger includes the coin.' };
   if (Number(allowances.week) !== week) return { open: false, reason: 'Joining reopens once this week’s ledger is published.' };
   if (!requirement) return { open: false, reason: 'This week’s join amount isn’t set yet. Try again shortly.' };
-  const balance = Number(treasury && treasury.reseller && treasury.reseller.balanceUsd);
-  const owed = Number(treasury && treasury.owedUsd);
-  if (!treasury || treasury.reseller?.balanceUsd == null || treasury.owedUsd == null || !Number.isFinite(balance) || !Number.isFinite(owed)) {
-    return { open: false, reason: 'The reserve that pays for welcome eSIMs cannot be confirmed right now.' };
-  }
-  if (treasury.status !== 'funded' || balance - owed < m.welcome.maxUsd) {
-    return { open: false, reason: 'The reserve is too low to pay for a welcome eSIM right now. Try again after the next top-up.' };
-  }
+  if (surplus === null || !Number.isFinite(surplus)) return { open: false, reason: 'The reserve that pays for welcome eSIMs cannot be confirmed right now.' };
+  if (surplus < m.welcome.maxUsd) return { open: false, reason: 'The reserve is too low to pay for a welcome eSIM right now. Try again after the next top-up.' };
   return { open: true, reason: '' };
 }
 
@@ -621,6 +672,7 @@ async function membershipOf(prov, config, allowances, address, week, treasury, {
   const row = ledgerMember(config, allowances, address);
   const fileRow = ledgerAbout(config, allowances) ? rowOf(allowances.wallets, address) : null;
   const found = await prov.find(welcomeIdFor(address));
+  const surplus = await poolSurplus(prov, treasury);
   return {
     configured: true,
     coin: config.coin, tokenProgram: config.tokenProgram, decimals: ledgerDecimals(config, allowances),
@@ -632,36 +684,55 @@ async function membershipOf(prov, config, allowances, address, week, treasury, {
     memberSince: row ? sinceOf(row) : null,
     sharing: Number(allowances && allowances.week) === week && !!fileRow && fileRow.member === true,
     welcomeOrder: found ? welcomeOrderOut(found, config, codes) : null,
-    enrolment: enrolmentOf(m, { config, allowances, week, requirement }, treasury),
+    enrolment: enrolmentOf(m, { config, allowances, week, requirement }, surplus),
   };
 }
 
 /**
- * Whether `joinTx` makes `address` a member now, by the rule the ledger keeper applies
- * (docs/membership.md): a successful transaction the ledger has not read yet (newer than its
- * cursor), in which this wallet alone sent OTT to the incinerator's account, enough, with what the
- * ledger already counted from it, to reach the amount for that transaction's week. A transaction
- * the ledger has read was counted there already, so it adds nothing here.
+ * What `joinTx` says about `address`, by the rule the ledger keeper applies (docs/membership.md):
+ * 'member' for a successful transaction the ledger has not read yet (newer than its cursor), in
+ * which this wallet alone sent OTT to the incinerator's account, enough, with what the ledger
+ * already counted from it, to reach the amount for that transaction's week. A transaction the
+ * ledger has read was counted there already, so it adds nothing here.
+ *
+ * Two answers mean "not yet" rather than "no", and the app keeps the burn for them: 'unseen' (no
+ * endpoint returns the transaction, or not with its block time, yet) and 'unpriced' (it landed in
+ * a week the keeper hasn't priced). Anything else is 'refused'.
  */
-async function joinProvesMembership(config, m, allowances, address, joinTx) {
+async function joinVerdict(config, m, allowances, address, joinTx) {
   const lm = ledgerMembership(config, allowances);
-  if (!lm) return false;
+  if (!lm) return 'refused';
   const tx = await chainRpc.getTransaction(joinTx);
-  if (!tx || !S.succeeded(tx)) return false;
+  if (!tx || !(Number(tx.blockTime) > 0)) return 'unseen';
+  if (!S.succeeded(tx)) return 'refused';
   const signature = tx.transaction && Array.isArray(tx.transaction.signatures) ? tx.transaction.signatures[0] : null;
-  if (signature !== joinTx) return false;
+  if (signature !== joinTx) return 'refused';
   const cursorSlot = Number(lm.cursor && lm.cursor.slot);
-  if (Number.isFinite(cursorSlot) && !(Number(tx.slot) > cursorSlot)) return false;
+  if (Number.isFinite(cursorSlot) && !(Number(tx.slot) > cursorSlot)) return 'refused';
   const join = rules.joinFromTransaction(tx, { coin: config.coin, burnAccount: m.burnAccount, exclude: [config.treasury] });
-  if (!join || join.skip || join.wallet !== address) return false;
+  if (!join || join.skip || join.wallet !== address) return 'refused';
   const need = rules.requirementFor(lm.requirements, join.at);
-  return need !== null && ledgerBurned(config, allowances, address) + join.amount >= need;
+  if (need === null) return 'unpriced';
+  return ledgerBurned(config, allowances, address) + join.amount >= need ? 'member' : 'refused';
 }
+
+// The answers to a join that may still count. site/esim.js lists them as refused before dispatch
+// and keeps the burn it remembers, so keep the wording in step.
+const JOIN_REFUSED = 'the join transaction did not make this wallet a member: it failed, sent too little OTT, or came from another wallet';
+const JOIN_UNSEEN = 'your burn isn’t visible to the server yet; it’s safe, so try again in a moment';
+const JOIN_UNPRICED = 'your burn landed in a week whose join amount isn’t set yet; it’s safe, so try again after the next ledger update';
+
+// A welcome claim the pool can't pay for yet is refused before anything is ordered, and the
+// membership stands: the same claim succeeds after a top-up. site/esim.js lists both answers as
+// refused before dispatch, so keep the wording in step.
+const WELCOME_POOL_SHORT = 'the reserve can’t pay for a welcome eSIM right now; your membership is kept, so try again after the next top-up';
+const WELCOME_POOL_UNKNOWN = 'the reserve that pays for welcome eSIMs can’t be confirmed right now; your membership is kept, so try again in a moment';
 
 /**
  * A signed welcome claim, already checked for shape and signature. The existing order comes back
  * for a repeat of the same plan; otherwise the wallet must be a member, by the ledger or by the
- * join transaction it names, and then the order is placed under the wallet's fixed welcome id.
+ * join transaction it names, the pool must cover the plan beyond what this week owes members
+ * (poolSurplus, read live), and then the order is placed under the wallet's fixed welcome id.
  */
 async function claimWelcome(res, { prov, config, m, allowances, address, pkg, joinTx }) {
   const transactionId = welcomeIdFor(address);
@@ -677,8 +748,14 @@ async function claimWelcome(res, { prov, config, m, allowances, address, pkg, jo
   }
   if (!ledgerMember(config, allowances, address)) {
     if (!joinTx) return fail(res, 409, 'join OT+T first');
-    if (!(await joinProvesMembership(config, m, allowances, address, joinTx))) return fail(res, 409, 'the join transaction was not found or did not send enough OTT');
+    const verdict = await joinVerdict(config, m, allowances, address, joinTx);
+    if (verdict === 'unseen') return fail(res, 503, JOIN_UNSEEN);
+    if (verdict === 'unpriced') return fail(res, 503, JOIN_UNPRICED);
+    if (verdict !== 'member') return fail(res, 409, JOIN_REFUSED);
   }
+  const surplus = await poolSurplus(prov, await readTreasury(), { fresh: true });
+  if (surplus === null) return fail(res, 503, WELCOME_POOL_UNKNOWN);
+  if (surplus < Number(pkg.priceUsd)) return fail(res, 503, WELCOME_POOL_SHORT);
   const order = await prov.order({ transactionId, packageCode: supplierPackage, slug: place, code: pkg.code, priceUsd: Number(pkg.priceUsd), address });
   // Another claim for a different plan can win the id while this one waits.
   if (!matchesOrder(order)) return fail(res, 409, 'your welcome eSIM has already been claimed');
@@ -885,6 +962,13 @@ module.exports.checkMessage = checkMessage;
 module.exports._resetCaches = () => {
   cache.clear(); standingCache.clear(); burst = { minute: 0, count: 0 };
   signedBurst = { minute: 0, count: 0, wallets: new Map() };
+  poolReading = { at: 0, usd: null, ttl: 0, pending: null };
   chainRpc._reset();
 };
+module.exports.poolSurplus = poolSurplus;
+module.exports.WELCOME_POOL_SHORT = WELCOME_POOL_SHORT;
+module.exports.WELCOME_POOL_UNKNOWN = WELCOME_POOL_UNKNOWN;
+module.exports.JOIN_REFUSED = JOIN_REFUSED;
+module.exports.JOIN_UNSEEN = JOIN_UNSEEN;
+module.exports.JOIN_UNPRICED = JOIN_UNPRICED;
 module.exports.SIGNED_PER_WALLET = SIGNED_PER_WALLET;

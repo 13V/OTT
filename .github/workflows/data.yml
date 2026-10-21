@@ -28,18 +28,24 @@ on:
 permissions:
   contents: write
   issues: write
+  # Only to start the claim workflow when this run publishes a new week (the last step).
+  actions: write
 
 # Two refreshes racing would each try to push a commit on top of the same parent and one would
-# lose; queue them instead. Not cancelling the running one — a half-finished scan is wasted RPC
-# budget on endpoints that already rate-limit.
+# lose; queue them instead. Never cancelling the running one (a half-finished scan is wasted RPC
+# budget on endpoints that already rate-limit), and `queue: max` keeps every waiting run: by
+# default GitHub keeps only the newest pending run in a group and cancels the one before it,
+# which could silently drop a claim waiting behind a long refresh.
 concurrency:
   group: data-refresh
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The ledger step has its own, shorter limit (below), so the job's is only a backstop and the
+    # steps after it, the alerts included, always get their turn.
+    timeout-minutes: 40
     steps:
       # persist-credentials defaults to true, which is what leaves GITHUB_TOKEN in the local git
       # config for the push at the end; the contents: write permission above is what makes that
@@ -57,12 +63,21 @@ jobs:
       - name: Lint
         run: node scripts/lint.js
 
+      # Which week the ledger is on before this run, so the last step can tell a new one.
+      - name: Note the ledger's week
+        id: before
+        run: echo "week=$(node -e "try{console.log(require('./site/data/allowances.json').week)}catch(e){console.log('')}")" >> "$GITHUB_OUTPUT"
+
       # Read-only against Solana; failing here (every RPC busy) must not withhold the treasury
       # refresh below. The script writes its file only on success, so a failed step leaves the
-      # previous ledger in place rather than a broken one.
+      # previous ledger in place rather than a broken one. Its scans stop and save their place
+      # after 18 minutes (ALLOWANCES_BUDGET_MS in the script), so a flooded history is worked
+      # through over several runs; this step limit only catches a run that hangs past that, and
+      # because it fails the step rather than the job, the keeper alert below still opens an issue.
       - name: Refresh allowances
         id: allowances
         continue-on-error: true
+        timeout-minutes: 24
         env:
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
         run: node scripts/allowances.js
@@ -100,11 +115,13 @@ jobs:
           # exactly the scenario the alarm exists for is the one failure the pool cannot survive,
           # so a pool that cannot be read is treated as a pool in trouble.
           unreadable=$(node -e "try{const t=require('./site/data/treasury.json');const r=t.reseller||{};console.log(t.status==='unknown'&&r.error?'yes':'no')}catch(e){console.log('no')}")
-          if [ "$status" != "low" ] && [ "$status" != "empty" ] && [ "$unreadable" != "yes" ]; then exit 0; fi
+          # "behind" is a pool well short of what this week has promised members: their orders can
+          # fail at the button, and no welcome eSIM can be paid for, however full it looks.
+          if [ "$status" != "low" ] && [ "$status" != "empty" ] && [ "$status" != "behind" ] && [ "$unreadable" != "yes" ]; then exit 0; fi
 
-          # A crude severity so a reopened conversation can tell better from worse: low < empty,
-          # and "cannot be read at all" outranks both — the comment above already treats it as the
-          # one failure the pool cannot survive quietly, so it is never scored milder than "empty".
+          # A crude severity so a reopened conversation can tell better from worse: low and behind
+          # < empty, and "cannot be read at all" outranks both — the comment above already treats it
+          # as the one failure the pool cannot survive quietly, so it is never scored milder than "empty".
           if [ "$unreadable" = "yes" ]; then severity=3
           elif [ "$status" = "empty" ]; then severity=2
           else severity=1
@@ -118,6 +135,7 @@ jobs:
               'The pool behind the programme page is **' + t.status + '**.',
               '',
               '- Reseller balance: ' + (r.balanceUsd == null ? 'unknown' : '$' + r.balanceUsd.toFixed(2)),
+              '- Still owed to members this week: ' + (t.owedUsd == null ? 'unknown' : '$' + Number(t.owedUsd).toFixed(2)),
               '- Last 30 days: ' + t.redemptions30d + ' redemption(s), $' + (t.spend30dUsd || 0).toFixed(2),
               '- Runway at that rate: ' + (t.runwayDays == null ? 'n/a' : t.runwayDays + ' days'),
               '- Creator fees waiting in pump.fun\'s vaults: ' + (t.claimableSol == null ? 'unknown' : t.claimableSol.toFixed(4) + ' SOL' + (t.claimableUsd == null ? '' : ' ($' + t.claimableUsd.toFixed(2) + ')')),
@@ -161,9 +179,10 @@ jobs:
       # continue-on-error rewrote its conclusion to "success"; that is what this reads, never
       # .conclusion, which is exactly the field continue-on-error overwrites to hide the failure.
       #
-      # This still cannot see everything: a job killed by timeout-minutes is a hard cancellation
-      # that skips every later step, this one included, so that failure mode still only shows up
-      # as a red run rather than an issue — there is no step-level hook that runs after a timeout.
+      # This still cannot see everything: a job killed by its own timeout-minutes is a hard
+      # cancellation that skips every later step, this one included, so that failure mode still
+      # only shows up as a red run rather than an issue. That is why the ledger step carries a
+      # shorter limit of its own: a step that times out is a failed step, which this one reports.
       # The keepers above can all succeed while the thing holders actually touch is broken: wholesale
       # refusing orders, the store unreachable, the Lightning wallet's key revoked. /api/status
       # already notices every one of those — it probes the store, the payer, the provider and the
@@ -307,3 +326,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           node scripts/publish-pages.js
+
+      # A new week's ledger is what the funding keeper aims at: until the pool covers what the week
+      # now owes plus the welcome reserve, members' orders can fail and joining stays closed. The
+      # claim workflow's own Monday schedule is often hours late, and runs out of step with this
+      # one, so a run that publishes a new week starts it straight away. It queues behind this run
+      # in the shared concurrency group, and a second claim run the same morning finds nothing to do.
+      - name: Fund the new week now
+        id: fund_week
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEEK_BEFORE: ${{ steps.before.outputs.week }}
+        run: |
+          coin=$(node -e "try{console.log(require('./site/config/esim.json').coin||'')}catch(e){console.log('')}")
+          week=$(node -e "try{console.log(require('./site/data/allowances.json').week)}catch(e){console.log('')}")
+          if [ -z "$coin" ]; then echo "not launched yet; nothing to fund"; exit 0; fi
+          if [ -z "$week" ] || [ "$week" = "$WEEK_BEFORE" ]; then echo "no new week published (week $week)"; exit 0; fi
+          echo "week $week is new (it was $WEEK_BEFORE): starting the claim workflow to collect and fund for it"
+          gh workflow run claim.yml --ref "${GITHUB_REF_NAME:-main}"

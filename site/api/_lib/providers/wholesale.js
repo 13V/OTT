@@ -729,7 +729,10 @@ module.exports = {
   async listOrders({ sinceIso } = {}) {
     const store = storeFor();
     const since = sinceIso ? Date.parse(sinceIso) : 0;
-    const ids = await store.zrange(RECENT, Number.isFinite(since) ? since : 0, Date.now() + 86400 * 1000, { limit: 500 });
+    // Read newest first, so past the cap it is the oldest orders that go uncounted, never this
+    // week's, which scripts/treasury.js measures what the week still owes against. Listed oldest
+    // first, as before.
+    const ids = (await store.zrange(RECENT, Number.isFinite(since) ? since : 0, Date.now() + 86400 * 1000, { limit: 1000, newest: true })).reverse();
     const out = [];
     for (const id of ids) {
       const rec = await store.get(keyOf(id));
@@ -738,8 +741,16 @@ module.exports = {
     return out;
   },
 
-  /** What the pool holds, in dollars: the Lightning wallet's balance at its own price. */
-  async balanceUsd() { return (await choosePayer().balance()).usd; },
+  /**
+   * What the pool can spend, in dollars: the Lightning wallet's BTC balance at its own price.
+   * Payments come from the BTC wallet only, so a USD wallet on the same Blink account (which the
+   * payer's balance() report includes) is not counted here.
+   */
+  async balanceUsd() {
+    const b = await choosePayer().balance();
+    const sats = Number(b && b.sats), rate = Number(b && b.usdPerSat);
+    return Number.isFinite(sats) && Number.isFinite(rate) ? Math.round(sats * rate * 100) / 100 : b.usd;
+  },
   async balance() { return choosePayer().balance(); },
 
   /**

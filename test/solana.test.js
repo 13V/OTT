@@ -251,6 +251,18 @@ const randomBytes = (n) => Uint8Array.from({ length: n }, () => rand() & 0xff);
   let rpcError = null;
   try { await rpc('getSlot', []); } catch (e) { rpcError = e.message; }
   check('when every attempt fails the call says so', rpcError, 'getSlot failed on every Solana endpoint: invalid');
+  {
+    // The keepers' logs are public. A keyed endpoint can carry its key in the path, the query or
+    // the user part of the URL; a failure is logged with the host alone.
+    const keyed = ['https://name.solana-mainnet.quiknode.pro/PATHSECRET/', 'https://USERSECRET:PW@rpc.example.test/x?api-key=QUERYSECRET'];
+    const lines = [];
+    rpc = S.createRpc(keyed, { pauseMs: 0, log: (line) => lines.push(line), fetchImpl: fake({ [keyed[0]]: [new Error('socket hang up')], [keyed[1]]: [{ body: { result: 7 } }] }) });
+    await rpc('getSlot', []);
+    check('a failure is logged with the endpoint\'s host only', lines, ['  rpc getSlot on https://name.solana-mainnet.quiknode.pro: socket hang up']);
+    rpc = S.createRpc([keyed[1]], { pauseMs: 0, log: (line) => lines.push(line), fetchImpl: fake({ [keyed[1]]: [new Error('socket hang up')] }) });
+    await rpc('getSlot', []).catch(() => null);
+    check('with no key from the user part or the query either', [lines[1], /SECRET/.test(lines.join('\n'))], ['  rpc getSlot on https://rpc.example.test: socket hang up', false]);
+  }
 
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
   process.exit(failures ? 1 : 0);

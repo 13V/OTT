@@ -471,6 +471,78 @@ function prices(now = 100, hours = {}) {
     await rejects('and a rate limit that never lifts fails in the end', down('getSlot', []), /HTTP 503/);
   }
 
+  console.log('\na flood of junk transactions is worked through over several runs, never forever');
+  {
+    const w13 = await world();
+    const IVY = wallet(), JACK = wallet();
+    await w13.buy(IVY, OTT(5000000), at(W - 1, 1000));
+    await w13.join(IVY, OTT(1800000), at(W - 1, 2000));
+    // 25 successful transactions that only list the incinerator's account and the treasury. Anyone
+    // can send these, for a fraction of a cent each.
+    for (let i = 0; i < 25; i++) w13.chain.add({ at: at(W - 1, 3000 + i), signer: wallet(), keys: [w13.burnAccount, w13.treasury] });
+    await w13.buy(JACK, OTT(5000000), at(W - 1, 4000));
+    await w13.join(JACK, OTT(1800000), at(W - 1, 4500));
+    await w13.collect(SOL(1), at(W - 1, 5000));
+    const out = outPath('flood');
+    const runs = [];
+    for (let i = 0; i < 4; i++) {
+      const before = w13.chain.count('getTransaction');
+      const r = await A.run({ config: w13.config, rpc: w13.chain.rpc, out, now: clock(W - 1, 9000 + i), prices: prices(100), budget: { maxTransactions: 10 } });
+      runs.push([w13.chain.count('getTransaction') - before, r.written, Object.keys(r.data.members).length, r.data.fees.collections.length,
+        r.warnings.filter((w) => /more new transactions than one run reads/.test(w)).length]);
+    }
+    // [transactions read, file written, members, collections, scans that stopped short]
+    check('ten transactions a scan a run, each saved where it stopped, until both reach the head',
+      runs, [[20, true, 1, 0, 2], [20, true, 1, 0, 2], [13, true, 2, 1, 0], [0, false, 2, 1, 0]]);
+    check('every transaction was read exactly once across the runs: 27 on the incinerator account, 26 on the treasury', runs.reduce((n, r) => n + r[0], 0), 53);
+    const f = readOut(out);
+    check('and the ledger ends where an unflooded one would', [Object.keys(f.members).sort(), f.fees.weekUsd, f.membership.cursor.signature, f.fees.cursor.signature],
+      [[IVY, JACK].sort(), { [W - 1]: 100 }, w13.chain.history.get(w13.burnAccount)[0].signature, w13.chain.history.get(w13.treasury)[0].signature]);
+  }
+  {
+    // Past the run's deadline nothing more is read, and the cursors stay where they were.
+    const w15 = await world();
+    const MAX = wallet();
+    await w15.buy(MAX, OTT(5000000), at(W - 1, 1000));
+    await w15.join(MAX, OTT(1800000), at(W - 1, 2000));
+    const out = outPath('deadline');
+    const late = await A.run({ config: w15.config, rpc: w15.chain.rpc, out, now: clock(W - 1, 9000), prices: prices(100), budget: { deadline: 1000, clock: () => 2000 } });
+    check('a run already out of time reads no history, and still prices the week', [Object.keys(late.data.members).length, late.data.membership.cursor, late.data.membership.requirement.burnTokens], [0, null, '1800000']);
+    checkThat('and says it stopped for time', late.warnings.some((w) => /out of time/.test(w)), late.warnings.join('; '));
+    const next = await A.run({ config: w15.config, rpc: w15.chain.rpc, out, now: clock(W - 1, 9100), prices: prices(100) });
+    check('the next run picks the join up', Object.keys(next.data.members), [MAX]);
+  }
+  {
+    // One member's token account flooded past what can be walked since the snapshot: that member
+    // has no share this week, and the ledger is still written for everyone else.
+    const w14 = await world();
+    const KIM = wallet(), LEE = wallet();
+    await w14.buy(KIM, OTT(5000000), at(W - 1, 1000));
+    await w14.join(KIM, OTT(1800000), at(W - 1, 2000));
+    await w14.buy(LEE, OTT(5000000), at(W - 1, 3000));
+    await w14.join(LEE, OTT(1800000), at(W - 1, 4000));
+    await w14.collect(SOL(1), at(W - 1, 5000));
+    const kimAta = await w14.ata(KIM);
+    let walks = 0;
+    const flooded = async (method, params) => {
+      if (method === 'getSignaturesForAddress' && params[0] === kimAta) {
+        walks++;
+        return Array.from({ length: (params[1] && params[1].limit) || 1000 }, () => ({ signature: randomSignature(), slot: 9e8, blockTime: at(W, 999999), err: null, confirmationStatus: 'finalized' }));
+      }
+      return w14.chain.rpc(method, params);
+    };
+    const out = outPath('flooded-member');
+    await A.run({ config: w14.config, rpc: w14.chain.rpc, historyRpc: flooded, out, now: clock(W - 1, 9000), prices: prices(100) });
+    const r = await A.run({ config: w14.config, rpc: w14.chain.rpc, historyRpc: flooded, out, now: clock(W, 3600), prices: prices(100) });
+    check('the flooded member is listed with nothing, and marked as unread', r.data.wallets[KIM], { tokens: '0', share: 0, allowanceUsd: 0, member: true, holdingUnread: true });
+    check('the other member shares the whole $80 budget', [r.data.wallets[LEE].tokens, r.data.wallets[LEE].allowanceUsd], ['3200000000000', 80]);
+    checkThat('the run says which member and why', r.warnings.some((w) => w.includes(KIM) && /no share this week/.test(w)), r.warnings.join('; '));
+    checkThat('and wrote the week', r.written && readOut(out).week === W);
+    const walked = walks;
+    await A.run({ config: w14.config, rpc: w14.chain.rpc, historyRpc: flooded, out, now: clock(W, 7200), prices: prices(100) });
+    check('later runs in the week keep that answer instead of walking the flood again', [walks - walked, readOut(out).wallets[KIM].holdingUnread], [0, true]);
+  }
+
   console.log('\nwrites, comparisons and the rehearsal guard');
   {
     const base = { asOf: 1, slot: 2, week: 3, fees: { cursor: { signature: 'x', slot: 1 }, weekUsd: {} }, membership: { cursor: { signature: 'y', slot: 1 }, members: 0 } };

@@ -41,10 +41,17 @@
  * What fails the run (nothing is written, the previous ledger stays): an RPC that cannot read the
  * coin, no endpoint with full history, a coin that is not the configured one (wrong token program,
  * a pump.fun creator that is not the treasury, an incinerator account that does not derive, a
- * holder rewards coin), and a member's snapshot holding that cannot be read — a split published
- * with someone missing would be wrong for everyone. What only warns: a join amount that cannot be
- * priced (joins of this week wait for it), and a history or a price that cannot be read just now
- * (the cursor stays put and the next run carries on).
+ * holder rewards coin), and a member's snapshot holding that cannot be read just now — a split
+ * published with someone missing would be wrong for everyone. What only warns: a join amount that
+ * cannot be priced (joins of this week wait for it), a history or a price that cannot be read just
+ * now (the cursor stays put and the next run carries on), and one member's account whose history
+ * since the snapshot is too long to walk (that member has no share that week: anyone can flood an
+ * account's history, and one flooded account must not stop the ledger for everyone).
+ *
+ * Anyone can also flood the incinerator account's or the treasury's history, for a fraction of a
+ * cent a transaction. So each scan reads oldest first, at most SCAN_LIMIT transactions and only
+ * until the run's deadline (ALLOWANCES_BUDGET_MS), and a scan that stops short saves the cursor it
+ * reached: a backlog is worked through over several runs instead of timing out every one of them.
  */
 const fs = require('fs');
 const path = require('path');
@@ -119,8 +126,13 @@ function sameButForTheClock(a, b) {
   return strip(a) === strip(b);
 }
 
-function writeAllowances(out, data) {
-  if (sameButForTheClock(readJson(out, null), data)) return false;
+/**
+ * Writes `data` to `out` unless it differs from what is there only in bookkeeping. `force` writes
+ * anyway: a scan that stopped short of the chain head (scanJoins, scanFees) must save the cursor it
+ * reached, or the next run starts the same backlog over.
+ */
+function writeAllowances(out, data, { force = false } = {}) {
+  if (!force && sameButForTheClock(readJson(out, null), data)) return false;
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify(data, null, 1) + '\n');
   return true;
@@ -200,6 +212,10 @@ function fillPastWeeks(requirements, weeks, currentWeek) {
 // keeps, it answers with an empty list rather than an error.
 const DEEP_HISTORY_SLOTS = 400 * 216000;
 
+// An endpoint as a log line may show it: its host. A keyed endpoint can carry its key in the path
+// as well as the query, and the keepers' logs are public.
+const hostOf = (url) => String(url).replace(/^(\w+:\/\/)(?:[^@/?#]*@)?([^/?#]*).*$/, '$1$2');
+
 /**
  * The endpoints that keep the chain's full history, out of `urls`. Each is asked for its first
  * available block (getFirstAvailableBlock) and its head; it qualifies when the first is 0 or at
@@ -216,15 +232,21 @@ async function deepHistoryEndpoints(urls, { makeCall = (url) => S.createRpc([url
       const first = Number(await call('getFirstAvailableBlock', []));
       const head = Number(await call('getSlot', [{ commitment: 'confirmed' }]));
       if (Number.isFinite(first) && Number.isFinite(head) && (first === 0 || head - first >= DEEP_HISTORY_SLOTS)) deep.push(url);
-      else log(`  ${url.replace(/[?#].*$/, '')} keeps history only from slot ${first}; not used for history`);
-    } catch (e) { log(`  ${url.replace(/[?#].*$/, '')} could not say how much history it keeps (${e.message}); not used for history`); }
+      else log(`  ${hostOf(url)} keeps history only from slot ${first}; not used for history`);
+    } catch (e) { log(`  ${hostOf(url)} could not say how much history it keeps (${e.message}); not used for history`); }
   }
   return deep;
 }
 
 // The public mainnet endpoint allows about 40 calls of one method per 10 seconds, and a history
-// read is mostly getTransaction, so history calls are spaced a little wider than that.
+// read is mostly getTransaction, so history calls are spaced a little wider than that. A keyed
+// endpoint (SOLANA_RPC_URL) is paced at ten a second, which entry-level paid plans allow;
+// SOLANA_HISTORY_INTERVAL_MS overrides both.
 const HISTORY_INTERVAL_MS = 260;
+const KEYED_HISTORY_INTERVAL_MS = 100;
+// How long one run may spend reading history before the scans save their place (data.yml gives the
+// step 24 minutes). ALLOWANCES_BUDGET_MS overrides it.
+const DEFAULT_BUDGET_MS = 18 * 60 * 1000;
 const TRANSIENT = /HTTP (429|5\d\d)|too many requests|rate.?limit|timed? ?out|aborted|ECONNRESET|socket hang up|fetch failed/i;
 
 /**
@@ -247,8 +269,16 @@ function patient(call, { tries = 6, baseMs = 2000, maxMs = 30000, sleep = (ms) =
   };
 }
 
-/** The complete history after `until`, oldest first: what production reads. */
-const completeHistory = (rpc) => (address, until) => C.signaturesAfter(rpc, address, { until });
+// How much of a backlog one run judges. Anyone can add a transaction to any account's history for
+// a fraction of a cent (listing the account is enough), so a backlog has to be worked through a
+// piece at a time, oldest first, with the place saved after each piece: a run that tried to read
+// it all would time out, save nothing, and face the same backlog plus more on the next run, for
+// ever. Each scan reads at most this many transactions, and stops early at the run's deadline.
+const SCAN_LIMIT = 5000;
+
+/** What production reads: the oldest `limit` transactions after `until`, and whether more remain. */
+const completeHistory = (rpc, { limit = SCAN_LIMIT, deadline = Infinity, clock = Date.now } = {}) =>
+  (address, until) => C.oldestSignaturesAfter(rpc, address, { until, limit, deadline, clock });
 
 /** Only the newest `limit` transactions after `until`, oldest first: what a rehearsal reads. */
 const newestHistory = (rpc, limit) => async (address, until) => {
@@ -256,31 +286,44 @@ const newestHistory = (rpc, limit) => async (address, until) => {
   if (until) opts.until = until;
   const list = await rpc('getSignaturesForAddress', [address, opts]);
   if (!Array.isArray(list)) throw new Error('getSignaturesForAddress returned no list for ' + address);
-  return list.slice().reverse();
+  return { signatures: list.slice().reverse(), more: false };
 };
 
 const cursorOf = (sig) => ({ signature: sig.signature, slot: Number(sig.slot) });
 
 /**
- * New sends to the incinerator account, folded into members and joins. Reads every transaction
- * after the cursor in chain order, stops at the first one it cannot read, and folds what it read
- * with membership.foldJoins, which in turn stops at the first send whose week has no amount yet.
- * The cursor moves through exactly what was judged, so nothing is ever skipped past.
+ * The run's time budget, shared by the scans: `deadline` (ms, by `clock`) after which a scan stops
+ * reading and keeps its place, and `maxTransactions`, the most one scan reads in a run. Production
+ * sets the deadline (main, below); tests set the cap.
  */
-async function scanJoins({ rpc, list, coin, burnAccount, treasury, cursor, requirements, members, joins, currentWeek, log = () => {} }) {
+const unbounded = { deadline: Infinity, clock: Date.now, maxTransactions: Infinity };
+const outOfBudget = (budget, read) => read >= budget.maxTransactions || budget.clock() > budget.deadline;
+
+/**
+ * New sends to the incinerator account, folded into members and joins. Reads the transactions
+ * after the cursor in chain order, oldest first, stops at the first one it cannot read and when the
+ * budget runs out, and folds what it read with membership.foldJoins, which in turn stops at the
+ * first send whose week has no amount yet. The cursor moves through exactly what was judged, so
+ * nothing is ever skipped past; `truncated` says newer transactions are still waiting.
+ */
+async function scanJoins({ rpc, list, coin, burnAccount, treasury, cursor, requirements, members, joins, currentWeek, budget = unbounded, log = () => {} }) {
   const warnings = [];
-  let sigs;
-  try { sigs = await list(burnAccount, cursor && cursor.signature); }
+  let sigs, more;
+  try { ({ signatures: sigs, more } = await list(burnAccount, cursor && cursor.signature)); }
   catch (e) {
     warnings.push('the incinerator account\'s history could not be read (' + e.message + '); joins wait for the next run');
-    return { members, joins, requirements, cursor, read: 0, warnings };
+    return { members, joins, requirements, cursor, read: 0, truncated: false, warnings };
   }
   const items = [];
+  let truncated = !!more, reads = 0;
   for (const sig of sigs) {
+    if (outOfBudget(budget, reads)) { truncated = true; break; }
     if (sig.err) { items.push({ sig, event: null }); continue; }
     let tx = null;
+    reads++;
     try { tx = await C.getTransaction(rpc, sig.signature); } catch (e) { tx = null; }
-    if (!tx) { warnings.push('transaction ' + sig.signature + ' on the incinerator account could not be read; joins resume from it next run'); break; }
+    // A transaction without its block time can't be placed in a week: unreadable, for now.
+    if (!tx || !(Number(tx.blockTime) > 0)) { warnings.push('transaction ' + sig.signature + ' on the incinerator account could not be read; joins resume from it next run'); break; }
     const join = M.joinFromTransaction(tx, { coin, burnAccount, exclude: [treasury] });
     if (join && join.skip) log(`  join skipped in ${sig.signature}: ${join.skip}${join.wallet ? ' (' + join.wallet + ')' : ''}`);
     items.push({ sig, event: join && !join.skip ? join : null });
@@ -295,7 +338,8 @@ async function scanJoins({ rpc, list, coin, burnAccount, treasury, cursor, requi
     warnings.push(`a send in ${first.tx} waits for week ${weekOf(first.at)}'s join amount`);
   }
   const last = judged > 0 ? items[judged - 1].sig : null;
-  return { members: folded.members, joins: folded.joins, requirements: filled, cursor: last ? cursorOf(last) : cursor, read: judged, warnings };
+  if (truncated) warnings.push(`the incinerator account has more new transactions than one run reads; joins carry on from ${last ? last.signature : 'the same place'} next run`);
+  return { members: folded.members, joins: folded.joins, requirements: filled, cursor: last ? cursorOf(last) : cursor, read: judged, truncated, warnings };
 }
 
 /**
@@ -319,23 +363,27 @@ function collectedLamports(tx, { treasury, coin, vaults }) {
 
 /**
  * New creator-fee collections into the treasury, each valued at SOL's price in the hour it landed.
- * Stops (cursor unmoved past it) at a transaction it cannot read or a collection it cannot price.
+ * Reads oldest first and stops (cursor unmoved past it) at a transaction it cannot read, a
+ * collection it cannot price, or the end of the budget, which leaves `truncated` set.
  */
-async function scanFees({ rpc, list, coin, treasury, cursor, priceAt, log = () => {} }) {
+async function scanFees({ rpc, list, coin, treasury, cursor, priceAt, budget = unbounded, log = () => {} }) {
   const warnings = [];
   const vaults = [await C.creatorVaultAddress(treasury), await C.ammCreatorVaultAccount(treasury)];
-  let sigs;
-  try { sigs = await list(treasury, cursor && cursor.signature); }
+  let sigs, more;
+  try { ({ signatures: sigs, more } = await list(treasury, cursor && cursor.signature)); }
   catch (e) {
     warnings.push('the treasury\'s history could not be read (' + e.message + '); fees wait for the next run');
-    return { found: [], cursor, warnings };
+    return { found: [], cursor, truncated: false, warnings };
   }
   const found = [];
   const prices = new Map();
   let last = null;
+  let truncated = !!more, reads = 0;
   for (const sig of sigs) {
+    if (outOfBudget(budget, reads)) { truncated = true; break; }
     if (sig.err) { last = sig; continue; }
     let tx = null;
+    reads++;
     try { tx = await C.getTransaction(rpc, sig.signature); } catch (e) { tx = null; }
     if (!tx) { warnings.push('treasury transaction ' + sig.signature + ' could not be read; fees resume from it next run'); break; }
     const lamports = collectedLamports(tx, { treasury, coin, vaults });
@@ -352,7 +400,8 @@ async function scanFees({ rpc, list, coin, treasury, cursor, priceAt, log = () =
     }
     last = sig;
   }
-  return { found, cursor: last ? cursorOf(last) : cursor, warnings };
+  if (truncated) warnings.push(`the treasury has more new transactions than one run reads; fees carry on from ${last ? last.signature : 'the same place'} next run, and last week's budget may still grow`);
+  return { found, cursor: last ? cursorOf(last) : cursor, truncated, warnings };
 }
 
 /** Collections merged and pruned, and the weekly dollar totals recomputed from them. */
@@ -415,7 +464,13 @@ async function checkCoin(rpc, { coin, tokenProgram, treasury, burnAccount }) {
  * the treasury, members' token accounts) goes to `historyRpc`, which must reach only nodes that keep
  * full history (deepHistoryEndpoints); `historyLimit` reads only the newest few (rehearsal).
  */
-async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () => Date.now(), prices = { now: () => C.solUsdNow(), at: (t) => C.solUsdAt(t) }, historyLimit = null, log = () => {} }) {
+async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () => Date.now(), prices = { now: () => C.solUsdNow(), at: (t) => C.solUsdAt(t) }, historyLimit = null, budget = {}, log = () => {} }) {
+  // The scans share one deadline, by the real clock (`now` is the ledger's idea of the date, which
+  // tests fix). The joins get the first share of it, so the holdings and the fees that follow are
+  // never starved by a backlog on the incinerator account.
+  const limits = Object.assign({}, unbounded, budget);
+  const started = limits.clock();
+  const joinBudget = Object.assign({}, limits, { deadline: Number.isFinite(limits.deadline) ? started + (limits.deadline - started) * 0.4 : Infinity });
   const asOf = Math.floor(now() / 1000);
   const wk = weekOf(asOf);
   const rel = path.relative(process.cwd(), out);
@@ -445,7 +500,7 @@ async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () 
   const keep = carried(readJson(out, null), coin);
   const warnings = [];
   if (state.curveState.isCashbackCoin) warnings.push(`${coin} is a pump.fun cashback coin: part of its creator fee may go to traders instead of the treasury`);
-  const list = historyLimit ? newestHistory(historyRpc, historyLimit) : completeHistory(historyRpc);
+  const historyFor = (b) => (historyLimit ? newestHistory(historyRpc, historyLimit) : completeHistory(historyRpc, { limit: Math.min(SCAN_LIMIT, b.maxTransactions), deadline: b.deadline, clock: b.clock }));
 
   // 1. This week's join amount: priced once, at the first run of the week.
   let requirements = Object.assign({}, keep.requirements);
@@ -467,26 +522,42 @@ async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () 
   }
 
   // 2. New joins.
-  const joinScan = await scanJoins({ rpc: historyRpc, list, coin, burnAccount, treasury, cursor: keep.joinCursor, requirements, members: keep.members, joins: keep.joins, currentWeek: wk, log });
+  const joinScan = await scanJoins({ rpc: historyRpc, list: historyFor(joinBudget), coin, burnAccount, treasury, cursor: keep.joinCursor, requirements, members: keep.members, joins: keep.joins, currentWeek: wk, budget: joinBudget, log });
   warnings.push(...joinScan.warnings);
   requirements = joinScan.requirements;
   const members = joinScan.members, joins = joinScan.joins;
 
   // 3. Who shares this week, and what each held at the snapshot. A holding is a fact about a past
-  // moment, so one already read this week is reused; any that cannot be read fails the run.
+  // moment, so one already read this week is reused; one whose read fails fails the run, to be
+  // tried again. The exception is an account whose history since the snapshot is too long to walk:
+  // anyone can add transactions to any account, so that is an attack on one member, and it must
+  // not stop the ledger for all of them. That member shares nothing this week, and the file says so.
   const snapshot = weekStart(wk);
   const sharing = Object.keys(members).filter((w) => members[w] && members[w].since && Number(members[w].since.at) < snapshot).sort(byKey);
   const known = keep.week === wk ? keep.wallets : {};
   const holdings = new Map();
+  const unread = new Set();
   for (const wallet of sharing) {
     const prior = known[wallet];
-    if (prior && typeof prior.tokens === 'string' && /^\d+$/.test(prior.tokens)) { holdings.set(wallet, BigInt(prior.tokens)); continue; }
+    if (prior && typeof prior.tokens === 'string' && /^\d+$/.test(prior.tokens)) {
+      holdings.set(wallet, BigInt(prior.tokens));
+      if (prior.holdingUnread === true) unread.add(wallet);
+      continue;
+    }
     try { holdings.set(wallet, await C.holdingAt(historyRpc, wallet, coin, tokenProgram, snapshot)); }
-    catch (e) { throw new Error(`what ${wallet} held at the week ${wk} snapshot could not be read (${e.message}); nothing written, the previous ledger stays`); }
+    catch (e) {
+      if (e && e.code === 'HISTORY_TOO_LONG') {
+        holdings.set(wallet, 0n);
+        unread.add(wallet);
+        warnings.push(`what ${wallet} held at the week ${wk} snapshot could not be read (${e.message}); it has no share this week`);
+        continue;
+      }
+      throw new Error(`what ${wallet} held at the week ${wk} snapshot could not be read (${e.message}); nothing written, the previous ledger stays`);
+    }
   }
 
   // 4. Fees collected, and last week's budget.
-  const feeScan = await scanFees({ rpc: historyRpc, list, coin, treasury, cursor: keep.feeCursor, priceAt: prices.at, log });
+  const feeScan = await scanFees({ rpc: historyRpc, list: historyFor(limits), coin, treasury, cursor: keep.feeCursor, priceAt: prices.at, budget: limits, log });
   warnings.push(...feeScan.warnings);
   const fees = mergeFees({ collections: keep.collections, weekUsd: keep.weekUsd, found: feeScan.found, week: wk });
   const budgetUsd = round4(Number(fees.weekUsd[String(wk - 1)] || 0) * budgetBps / 10000);
@@ -499,6 +570,7 @@ async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () 
   for (const wallet of sharing) {
     const tokens = holdings.get(wallet);
     wallets[wallet] = { tokens: tokens.toString(), share: memberTokens > 0n ? Number(tokens) / Number(memberTokens) : 0, allowanceUsd: split.allocations.get(wallet), member: true };
+    if (unread.has(wallet)) wallets[wallet].holdingUnread = true;
   }
 
   const data = {
@@ -517,7 +589,11 @@ async function run({ config, rpc, historyRpc = rpc, out = DEFAULT_OUT, now = () 
     holders: sharing.length, memberTokens: memberTokens.toString(),
     wallets: sorted(wallets),
   };
-  const written = writeAllowances(out, data);
+  // A scan that stopped short of the head saves the place it reached, even when that moved only
+  // a cursor: otherwise the next run would face the same backlog again.
+  const moved = (a, b) => JSON.stringify(a || null) !== JSON.stringify(b || null);
+  const force = (joinScan.truncated && moved(joinScan.cursor, keep.joinCursor)) || (feeScan.truncated && moved(feeScan.cursor, keep.feeCursor));
+  const written = writeAllowances(out, data, { force });
   const summary = `allowances: ${coin} week ${wk}: ${Object.keys(members).length} member(s), ${sharing.length} sharing; `
     + (requirement ? `join amount ${Number(requirement.burnTokens).toLocaleString('en-US')} OTT; ` : 'join amount not set; ')
     + `$${budgetUsd.toFixed(4)} budget (${budgetSource}) -> ${rel}${written ? '' : ' (unchanged)'}`
@@ -566,7 +642,7 @@ module.exports = {
   WEEK_S, ANCHOR, weekOf, weekStart, weekEnd, round4,
   KEEP_COLLECTION_WEEKS, KEEP_FEE_WEEKS, DEFAULT_OUT,
   loadConfig, isLaunched, emptyAllowances, sameButForTheClock, writeAllowances, carried,
-  DEEP_HISTORY_SLOTS, HISTORY_INTERVAL_MS, deepHistoryEndpoints, patient, priceRequirement, fillPastWeeks, scanJoins, collectedLamports, scanFees, mergeFees, readMint, checkCoin,
+  DEEP_HISTORY_SLOTS, HISTORY_INTERVAL_MS, KEYED_HISTORY_INTERVAL_MS, DEFAULT_BUDGET_MS, SCAN_LIMIT, deepHistoryEndpoints, patient, priceRequirement, fillPastWeeks, scanJoins, collectedLamports, scanFees, mergeFees, readMint, checkCoin,
   run, rehearsalOut, rehearsalConfig, parseArgs, makeRpc,
 };
 
@@ -585,7 +661,15 @@ if (require.main === module) {
     }
     const deep = await deepHistoryEndpoints(urls, { log });
     if (!deep.length) throw new Error('none of the configured Solana endpoints keeps full history (getFirstAvailableBlock); set SOLANA_RPC_URL to one that does, such as api.mainnet-beta.solana.com or an archive provider');
-    const historyRpc = patient(C.makeRpc({ urls: deep, minIntervalMs: HISTORY_INTERVAL_MS, log }), { log });
+    // A keyed endpoint of the operator's own (SOLANA_RPC_URL, tried first) allows far more than the
+    // public one, so history is read faster when that is where it goes.
+    const keyed = C.endpoints({ SOLANA_RPC_URL: process.env.SOLANA_RPC_URL || '' }, '/nonexistent').includes(deep[0]);
+    const interval = Number(process.env.SOLANA_HISTORY_INTERVAL_MS) > 0 ? Number(process.env.SOLANA_HISTORY_INTERVAL_MS) : keyed ? KEYED_HISTORY_INTERVAL_MS : HISTORY_INTERVAL_MS;
+    const historyRpc = patient(C.makeRpc({ urls: deep, minIntervalMs: interval, log }), { log });
+    // The scans stop and save their place this long after the start, well inside the workflow
+    // step's own timeout, so a long backlog is worked through over several runs.
+    const budgetMs = Number(process.env.ALLOWANCES_BUDGET_MS) > 0 ? Number(process.env.ALLOWANCES_BUDGET_MS) : DEFAULT_BUDGET_MS;
+    const budget = { deadline: Date.now() + budgetMs, clock: Date.now };
     let out = args.out ? path.resolve(process.cwd(), args.out) : DEFAULT_OUT;
     let historyLimit = null;
     if (args.rehearse) {
@@ -594,7 +678,7 @@ if (require.main === module) {
       historyLimit = Number.isFinite(args.historyLimit) && args.historyLimit > 0 ? args.historyLimit : DEFAULT_HISTORY_LIMIT;
       log(`rehearsal: ${config.coin} (creator ${config.treasury}, ${config.tokenProgram === S.PROGRAMS.token2022 ? 'Token-2022' : 'Token'}), newest ${historyLimit} transactions of each history`);
     }
-    const { summary } = await run({ config, rpc, historyRpc, out, historyLimit, log });
+    const { summary } = await run({ config, rpc, historyRpc, out, historyLimit, budget, log });
     console.log(summary);
   })().catch((e) => { console.error(e && e.message ? e.message : e); process.exit(1); });
 }

@@ -174,10 +174,26 @@ const SOL = (n) => Math.round(n * 1e9);
   check('the floor still applies when owed plus reserve is under it', owed(40, { reserveUsd: 20 }).targetUsd, 100);
   check('the ceiling still holds with a reserve', owed(995, { reserveUsd: 20 }).targetUsd, 1000);
   checkThat('the reason names the reserve', /plus a \$20\.00 welcome reserve/.test(owed(420, { reserveUsd: 20 }).reason), owed(420, { reserveUsd: 20 }).reason);
-  check('the reserve is five welcome eSIMs at the dearest welcome price',
-    [F.welcomeReserveFor({ membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: '', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } } }), F.welcomeReserveFor({})], [20, 0]);
+  check('the reserve is a day of joins: 25 welcome eSIMs at the dearest welcome price',
+    [F.welcomeReserveFor({ membership: { burnUsd: 5, burnOwner: S.INCINERATOR, burnAccount: '', capMultiple: 3, welcome: { gb: 1, days: 7, maxUsd: 4 } } }), F.welcomeReserveFor({})], [100, 0]);
   check('the log keeps the newest hundred', F.appendLog(Array.from({ length: 120 }, (_, i) => ({ i })), { i: 'new' }).length, 100);
   check('SOL for dollars, to the microSOL, never rounded up', [F.solFor(100, 100), F.solFor(10, 104.17)], [1, 0.095996]);
+
+  console.log('\nis the last top-up settled?');
+  {
+    const payer = { async received(h) { if (h === 'h-down') throw new Error('Blink answered HTTP 503'); return { status: h === 'h-paid' ? 'PAID' : 'PENDING' }; } };
+    const entry = (status, over = {}) => Object.assign({ at: 1, fixedFloatOrder: 'FF1', invoiceHash: 'h-open', depositTx: 'sig', lamports: '1', status, dryRun: false }, over);
+    check('no journal, nothing to wait for', await F.unsettledTopUp({ journal: [], payer }), null);
+    check('a finished top-up is settled', await F.unsettledTopUp({ journal: [entry('done')], payer }), null);
+    for (const s of ['sending', 'unconfirmed', 'sent', 'expired', 'emergency', 'done-unconfirmed']) {
+      check(`"${s}" without a paid invoice holds the next run`, (await F.unsettledTopUp({ journal: [entry('done'), entry(s)], payer })).paid, false);
+    }
+    check('the list of states that hold it is exactly those', [...F.UNSETTLED].sort(), ['done-unconfirmed', 'emergency', 'expired', 'sending', 'sent', 'unconfirmed']);
+    check('one Blink shows paid has settled since', (await F.unsettledTopUp({ journal: [entry('sent', { invoiceHash: 'h-paid' })], payer })).paid, true);
+    check('a Blink that cannot answer settles nothing', (await F.unsettledTopUp({ journal: [entry('sent', { invoiceHash: 'h-down' })], payer })).paid, false);
+    check('a person releases it by naming its order', await F.unsettledTopUp({ journal: [entry('emergency')], payer, resolvedOrder: ' FF1 ' }), null);
+    check('only the newest entry counts', await F.unsettledTopUp({ journal: [entry('emergency'), entry('done')], payer }), null);
+  }
 
   console.log('\nchecking FixedFloat\'s order');
   const order = (from) => ({ id: 'FF1', from: Object.assign({ code: 'SOL', network: 'SOL', amount: '1.00000000', address: FF_DEPOSIT, tag: null }, from) });
@@ -281,17 +297,44 @@ const SOL = (n) => Math.round(n * 1e9);
   await rejects('EMERGENCY is an error naming the order and the transfer', F.run(base({ now: () => t })), /EMERGENCY.*needs a hand/);
   const after = JSON.parse(fs.readFileSync(path.join(tmp, 'funding.json'), 'utf8'));
   check('and is recorded as such', [after.length, after[1].status, F.FF_FROM], [2, 'emergency', 'SOL']);
+  const stuck = after[1].fixedFloatOrder;
+
+  console.log('\nthe next top-up waits for the last one to settle');
+  {
+    const orders = ff.orders.size, invoices = mockPayer._state.invoices.length;
+    chain = fakeRpc({ lamports: SOL(5) });
+    await rejects('a run after an unsettled order sends nothing, and says what to check and how to go on',
+      F.run(base({ rpc: chain.rpc })), new RegExp('not settled: FixedFloat order ' + stuck + ', transfer ' + after[1].depositTx + '.*FUND_RESOLVED_ORDER to ' + stuck));
+    check('no invoice, no order, not even a balance read', [mockPayer._state.invoices.length - invoices, ff.orders.size - orders, chain.log.calls.length], [0, 0, 0]);
+    await rejects('nor does a dry run go ahead', F.run(base({ dryRun: true })), /not settled/);
+    await rejects('naming another order does not release it', F.run(base({ resolvedOrder: 'FF9999' })), /not settled/);
+  }
   ff.statuses = ['PENDING'];
   let clock = t;   // a clock that moves, or the deadline never comes
-  r = await F.run(base({ now: () => (clock += 30000), waitMs: 60000, pollMs: 5 }));
-  check('a slow order is recorded as sent, not failed', [r.action, r.status, r.entry.lastSeen], ['funded', 'sent', 'PENDING']);
-  ff.statuses = ['PENDING', 'EXCHANGE', 'DONE'];
-  chain = fakeRpc({ lamports: SOL(5), confirm: 'failed' });
-  await rejects('a transfer that fails on chain is an error naming it', F.run(base({ rpc: chain.rpc })), /was not confirmed.*check it on chain/);
+  r = await F.run(base({ now: () => (clock += 30000), waitMs: 60000, pollMs: 5, resolvedOrder: stuck }));
+  check('once a person names that order as resolved the next run goes ahead; a slow order is recorded as sent, not failed',
+    [r.action, r.status, r.entry.lastSeen], ['funded', 'sent', 'PENDING']);
+  {
+    const slow = r.entry;
+    const invoices = mockPayer._state.invoices.length;
+    chain = fakeRpc({ lamports: SOL(5) });
+    r = await F.run(base({ rpc: chain.rpc, now: () => slow.at * 1000 + 60000 }));
+    check('a second run straight after a slow order waits for it, as a double click would, and sends nothing',
+      [r.action, /still on its way/.test(r.reason), r.reason.includes(slow.fixedFloatOrder), mockPayer._state.invoices.length - invoices, chain.log.calls.length], ['none', true, true, 0, 0]);
+    await rejects('past the invoice\'s two hours it is an error for a person to look at', F.run(base({ now: () => slow.at * 1000 + 121 * 60000 })), new RegExp('not settled: FixedFloat order ' + slow.fixedFloatOrder));
+    mockPayer._markPaid(slow.invoiceHash);
+    mockPayer._state.sats = 0;
+    ff.statuses = ['PENDING', 'EXCHANGE', 'DONE'];
+    chain = fakeRpc({ lamports: SOL(5), confirm: 'failed' });
+    await rejects('once Blink shows its invoice paid the run carries on, here to a transfer that fails on chain, an error naming it',
+      F.run(base({ rpc: chain.rpc, now: () => t + 5000 })), /was not confirmed.*check it on chain/);
+    const settled = JSON.parse(fs.readFileSync(path.join(tmp, 'funding.json'), 'utf8')).find((e) => e.fixedFloatOrder === slow.fixedFloatOrder);
+    check('and the slow order is marked done when it was seen paid', [settled.status, settled.settledAt], ['done', Math.floor((t + 5000) / 1000)]);
+  }
   const last = JSON.parse(fs.readFileSync(path.join(tmp, 'funding.json'), 'utf8')).pop();
-  check('and is journaled as unconfirmed, with the reason', [last.status, /failed/.test(last.error)], ['unconfirmed', true]);
+  check('the failed transfer is journaled as unconfirmed, with the reason', [last.status, /failed/.test(last.error)], ['unconfirmed', true]);
   mockPayer._state.sats = 0;
-  r = await F.run(base({ rpc: fakeRpc({ lamports: SOL(5), confirm: 'pending', landed: 'ok' }).rpc, confirmOptions: { pollMs: 1, timeoutMs: 5 } }));
+  r = await F.run(base({ rpc: fakeRpc({ lamports: SOL(5), confirm: 'pending', landed: 'ok' }).rpc, confirmOptions: { pollMs: 1, timeoutMs: 5 }, resolvedOrder: last.fixedFloatOrder }));
   check('a transfer whose confirmation times out but is on chain carries on to the sats', [r.action, r.status], ['funded', 'done']);
   mockPayer._state.sats = 0;
   await rejects('one that is not on chain is journaled unconfirmed and stops', F.run(base({ rpc: fakeRpc({ lamports: SOL(5), confirm: 'pending', landed: null }).rpc, confirmOptions: { pollMs: 1, timeoutMs: 5 } })), /was not confirmed/);

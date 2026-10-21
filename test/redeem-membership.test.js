@@ -240,7 +240,13 @@ async function main() {
   m = await enrolment({ '/data/treasury.json': Object.assign({}, funded, { owedUsd: 47 }) });
   check('not when the pool less what this week owes is under the $4 welcome price', [m.enrolment.open, /too low/.test(m.enrolment.reason)], [false, true]);
   m = await enrolment({ '/data/treasury.json': Object.assign({}, funded, { status: 'low' }) });
-  check('not when the treasury reports the pool low', m.enrolment.open, false);
+  // "low" is about runway, and every welcome paid counts towards it: gating on it would let joins
+  // close joining. The surplus beyond what is owed is the rule.
+  check('a pool the treasury calls low still offers the join while it covers a welcome beyond what is owed', m.enrolment, { open: true, reason: '' });
+  m = await enrolment({ '/data/treasury.json': Object.assign({}, funded, { status: 'low', reseller: { name: 'wholesale', balanceUsd: 13.99 } }) });
+  check('and closes it a cent short of a $4 welcome beyond the $10 owed', [m.enrolment.open, /too low/.test(m.enrolment.reason)], [false, true]);
+  m = await enrolment({ '/data/treasury.json': Object.assign({}, funded, { reseller: { name: 'wholesale', balanceUsd: null } }) });
+  check('not when the pool\'s balance is unknown', [m.enrolment.open, /cannot be confirmed/.test(m.enrolment.reason)], [false, true]);
   m = await enrolment({ '/data/treasury.json': undefined });
   check('not when the treasury cannot be read', [m.enrolment.open, /cannot be confirmed/.test(m.enrolment.reason)], [false, true]);
   m = await enrolment({ '/data/treasury.json': Object.assign({}, funded, { owedUsd: null }) });
@@ -323,9 +329,18 @@ async function main() {
   check('a malformed signature is refused', [r.status, r.body.error], [400, 'joinTx must be a transaction signature']);
   r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: '0x' + 'ab'.repeat(32) }));
   check('so is an EVM transaction hash', [r.status, r.body.error], [400, 'joinTx must be a transaction signature']);
-  const NOT_FOUND = 'the join transaction was not found or did not send enough OTT';
+  const NOT_FOUND = redeem.JOIN_REFUSED;
+  check('a refusal says what can be wrong with the join', NOT_FOUND, 'the join transaction did not make this wallet a member: it failed, sent too little OTT, or came from another wallet');
   r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: randomSignature() }));
-  check('an unknown transaction proves nothing', [r.status, r.body.error], [409, NOT_FOUND]);
+  // No endpoint has it, which is also what a node that hasn't caught up says. The app keeps the
+  // burn for this answer, so a lookup miss can never invite a second burn.
+  check('an unknown transaction proves nothing yet: a 503 to try again, never a refusal', [r.status, r.body.error], [503, redeem.JOIN_UNSEEN]);
+  {
+    const noTime = join({ from: FRESH.address, amount: UNITS });
+    TXS[noTime].blockTime = null;
+    r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: noTime }));
+    check('a join returned without its block time can\'t be judged yet either', [r.status, r.body.error], [503, redeem.JOIN_UNSEEN]);
+  }
   const freshJoin = join({ from: FRESH.address, amount: UNITS });
   r = await POST(welcome(STRANGER, 'fixed_1GB_7D_JP', { joinTx: freshJoin }));
   check('someone else\'s join does not make this wallet a member', [r.status, r.body.error], [409, NOT_FOUND]);
@@ -342,7 +357,26 @@ async function main() {
   r = await POST(welcome(TREASURY_KEY, 'fixed_1GB_7D_JP', { joinTx: join({ from: TREASURY, amount: UNITS }) }));
   check('the treasury is never a member', [r.status, r.body.error], [409, NOT_FOUND]);
   r = await POST(welcome(LATER, 'fixed_1GB_7D_JP', { joinTx: join({ from: LATER.address, amount: UNITS * 10n, at: week.weekStart(CUR + 1) + 3600 }) }));
-  check('a join in a week the ledger has not priced cannot be judged yet', [r.status, r.body.error], [409, NOT_FOUND]);
+  check('a join in a week the ledger has not priced cannot be judged yet, and says so', [r.status, r.body.error], [503, redeem.JOIN_UNPRICED]);
+  check('none of those placed an order', [await mock.find(redeem.welcomeIdFor(FRESH.address)), await mock.find(redeem.welcomeIdFor(LATER.address))], [null, null]);
+  console.log('\nthe welcome claim checks the pool before it orders');
+  // $12.98 in the pool and $10 owed to members leaves $2.98: a cent short of the $2.99 Japan plan.
+  serve(standardFiles({ '/data/treasury.json': Object.assign({}, funded, { status: 'low', reseller: { name: 'wholesale', balanceUsd: 12.98 } }) }));
+  r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: freshJoin }));
+  check('a plan the pool can\'t pay for beyond what members are owed waits for a top-up', [r.status, r.body.error], [503, redeem.WELCOME_POOL_SHORT]);
+  check('and the wording says the membership is kept', redeem.WELCOME_POOL_SHORT, 'the reserve can’t pay for a welcome eSIM right now; your membership is kept, so try again after the next top-up');
+  {
+    const CHEAPER = newWallet();
+    r = await POST(welcome(CHEAPER, 'fixed_1GB_7D_AU', { joinTx: join({ from: CHEAPER.address, amount: UNITS }) }));
+    check('the same surplus still covers a cheaper plan', [r.status, r.body.order && r.body.order.welcome], [200, true]);
+  }
+  for (const [what, treasury] of [['no treasury file', undefined], ['no figure for what is owed', Object.assign({}, funded, { owedUsd: null })], ['no balance', Object.assign({}, funded, { reseller: { name: 'wholesale', balanceUsd: null } })]]) {
+    serve(standardFiles({ '/data/treasury.json': treasury }));
+    r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: freshJoin }));
+    check('with ' + what + ', the claim is told to try again', [r.status, r.body.error], [503, redeem.WELCOME_POOL_UNKNOWN]);
+  }
+  check('none of that placed an order', await mock.find(redeem.welcomeIdFor(FRESH.address)), null);
+  serve(standardFiles());
   rpcCalls.length = 0;
   r = await POST(welcome(FRESH, 'fixed_1GB_7D_JP', { joinTx: freshJoin }));
   check('the fresh member\'s claim succeeds', [r.status, r.body.order && r.body.order.welcome], [200, true]);
@@ -361,11 +395,11 @@ async function main() {
     const missingTx = randomSignature();
     const claimant = newWallet();
     r = await raw(welcome(claimant, 'fixed_1GB_7D_JP', { joinTx: missingTx }));
-    check('a join the chain has never seen is refused', [r.status, r.body.error], [409, NOT_FOUND]);
+    check('a join the chain has never seen is not judged yet', [r.status, r.body.error], [503, redeem.JOIN_UNSEEN]);
     const asked = rpcCalls.length;
     checkThat('the chain was asked', asked > 0);
     r = await raw(welcome(claimant, 'fixed_1GB_7D_JP', { joinTx: missingTx }));
-    check('naming it again within seconds is answered without asking the chain again', [r.status, rpcCalls.length], [409, asked]);
+    check('naming it again within seconds is answered without asking the chain again', [r.status, rpcCalls.length], [503, asked]);
     redeem._resetCaches();
     const cap = require(path.join(API, '_lib', 'rpc.js')).LOOKUPS_PER_MINUTE;
     let last = null;
@@ -391,6 +425,32 @@ async function main() {
   check('"not found" from one node while the rest fail is a 503, not a refusal', [r.status, r.body.error], [503, 'the chain could not be read just now; try again in a moment']);
   publicChain = chainUrl;
   await new Promise((done) => downChain.close(done));
+
+  console.log('\nthe pool surplus a welcome eSIM is paid from');
+  {
+    const file = { status: 'funded', reseller: { name: 'wholesale', balanceUsd: 50 }, owedUsd: 10 };
+    redeem._resetCaches();
+    check('the mock provider has no real balance, so the treasury file\'s is used', await redeem.poolSurplus(mock, file), 40);
+    let reads = 0;
+    const live = { name: 'wholesale', async balanceUsd() { reads++; return 30; } };
+    check('a live balance is preferred to the file\'s', await redeem.poolSurplus(live, file), 20);
+    check('and shared for a minute', [await redeem.poolSurplus(live, file), reads], [20, 1]);
+    check('unless a fresh reading is asked for, as a claim does', [await redeem.poolSurplus(live, file, { fresh: true }), reads], [20, 2]);
+    redeem._resetCaches();
+    check('an eSIM Access account is read live too', await redeem.poolSurplus({ name: 'esimaccess', async balanceUsd() { return 14; } }, file), 4);
+    redeem._resetCaches();
+    const down = { name: 'wholesale', async balanceUsd() { throw new Error('Blink answered HTTP 503'); } };
+    check('a provider that can\'t be read falls back to the file', await redeem.poolSurplus(down, file), 40);
+    redeem._resetCaches();
+    const started = Date.now();
+    const hung = { name: 'wholesale', balanceUsd: () => new Promise(() => {}) };
+    check('so does one that never answers, after a few seconds', await redeem.poolSurplus(hung, file), 40);
+    checkThat('within the four-second limit', Date.now() - started < 6000, String(Date.now() - started));
+    redeem._resetCaches();
+    check('without a figure for what is owed there is no surplus', [await redeem.poolSurplus(live, null), await redeem.poolSurplus(live, { reseller: file.reseller, owedUsd: null })], [null, null]);
+    check('nor without any balance', await redeem.poolSurplus(mock, { owedUsd: 0, reseller: { balanceUsd: null } }), null);
+    redeem._resetCaches();
+  }
 
   console.log('\nthe switches still apply');
   process.env.REDEMPTIONS_ENABLED = '0';

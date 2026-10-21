@@ -162,6 +162,41 @@ const wallet = () => S.encodeBase58(new Uint8Array(crypto.generateKeyPairSync('e
     check('no amount this week, no join', await variant({ requirement: null }), refuse);
   }
 
+  console.log('\nthe page refuses a burn that could never count, before the wallet is asked');
+  {
+    const week = require(path.join(ROOT, 'site', 'api', '_lib', 'week.js'));
+    const W = 2970;
+    const start = week.weekStart(W);
+    const me = wallet();
+    const cfg = { treasury: wallet() };
+    const req = (w) => ({ week: w, burnTokens: '1800000', burnUnits: '1800000000000' });
+    check('this week\'s amount, mid-week, from an ordinary wallet, is fine', page.joinRefusal(cfg, req(W), me, start + 3 * 86400), '');
+    check('the page sends with a few minutes\' margin inside the API\'s grace for last week\'s amount', page.JOIN_GRACE_SAFE_S > 0 && page.JOIN_GRACE_SAFE_S <= rules.GRACE_S - 60, true);
+    check('last week\'s amount just after Monday 00:00 is still fine: inside the grace it is always enough', page.joinRefusal(cfg, req(W - 1), me, start + 60), '');
+    check('rule check: in the grace, last week\'s lower amount is what a send must reach', rules.requirementFor({ [W - 1]: '1000', [W]: '2000' }, start + 60), 1000n);
+    check('and when last week\'s was higher, it is more than enough', rules.requirementFor({ [W - 1]: '3000', [W]: '2000' }, start + 60) <= 3000n, true);
+    check('past the margin, a page still showing last week\'s amount asks for a reload', /week that has ended\. Reload/.test(page.joinRefusal(cfg, req(W - 1), me, start + page.JOIN_GRACE_SAFE_S + 1)), true);
+    check('as it does for an amount from any other week', /Reload/.test(page.joinRefusal(cfg, req(W - 2), me, start + 3600)) && /Reload/.test(page.joinRefusal(cfg, req(W + 1), me, start + 3600)), true);
+    // A program-derived address: off the curve, as a multisig vault or smart wallet is.
+    const vault = (await S.programAddress([Buffer.from('vault'), S.decodeBase58(me)], S.PROGRAMS.token)).address;
+    check('the address used here is off the curve, like a multisig vault', rules.isWallet(vault), false);
+    check('a program account is refused: the ledger never counts it', /program account/.test(page.joinRefusal(cfg, req(W), vault, start + 3600)), true);
+    check('so is the treasury, which is never a member', /treasury can’t join/.test(page.joinRefusal(cfg, req(W), cfg.treasury, start + 3600)), true);
+  }
+
+  console.log('\nthe page knows which welcome answers ordered nothing and keep the burn');
+  {
+    // site/esim.js lists these as refused before dispatch (and the two "not yet" answers as keeping
+    // the remembered burn) by their exact text, so a reworded API answer must fail here, not
+    // turn a safe retry into "the claim result is unconfirmed" or a forgotten burn.
+    const source = require('fs').readFileSync(path.join(ROOT, 'site', 'esim.js'), 'utf8');
+    for (const name of ['WELCOME_POOL_SHORT', 'WELCOME_POOL_UNKNOWN', 'JOIN_UNSEEN', 'JOIN_UNPRICED']) {
+      check('esim.js carries the API\'s ' + name + ' word for word', typeof redeem[name] === 'string' && source.includes("'" + redeem[name] + "'"), true);
+    }
+    check('and forgets a burn only on the API\'s refusal, which none of the "not yet" answers resemble',
+      /did not make this wallet a member/.test(redeem.JOIN_REFUSED) && ![redeem.JOIN_UNSEEN, redeem.JOIN_UNPRICED].some((t) => /did not make this wallet a member|join OT\+T first/i.test(t)), true);
+  }
+
   console.log(failures ? `\n${failures} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

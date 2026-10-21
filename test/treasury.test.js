@@ -133,6 +133,12 @@ function fakeRpc({ accounts = {}, lamports = 0, down = [] }) {
   process.env.LN_PAYER = 'blink';
   r = await run({ provider: lightning, out: path.join(tmp, 't1b.json') });
   check('a Lightning-paid provider also writes the sats and the wallet', r.data.reseller, { name: 'wholesale', balanceUsd: 412, asOf: Math.floor(now / 1000), sats: 515000, wallet: 'blink' });
+  {
+    // Blink's balance report adds a USD wallet on the same account, which no payment draws on.
+    const withUsd = Object.assign({}, lightning, { async balance() { return { sats: 515000, usd: 512, usdPerSat: 0.0008 }; } });
+    r = await run({ provider: withUsd, out: path.join(tmp, 't1c.json') });
+    check('the pool is the BTC wallet alone, not a USD wallet beside it', [r.data.reseller.balanceUsd, r.data.reseller.sats], [412, 515000]);
+  }
 
   {
     const ammVault = await C.ammCreatorVaultAccount(TREASURY);

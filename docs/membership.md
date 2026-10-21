@@ -31,10 +31,15 @@ creator tax). Nothing here is live until the coin launches and purchases are swi
   routing fees and the swap into sats.
 - **When the app offers the join.** Only when all of these hold: membership is configured, the
   coin is launched, purchases are on, this week's ledger is published with this week's join
-  amount, the treasury reports the pool as `funded`, and the pool's balance minus what this week
-  still owes members covers one welcome eSIM at the maximum price. If many people join at once,
-  a claim can still fail for lack of funds. The membership remains, and the eSIM can be claimed
-  after the next top-up.
+  amount, and the pool's balance minus what this week still owes members covers one welcome eSIM
+  at the maximum price. The balance is read live from the provider when it can be (shared for a
+  minute), from the treasury report otherwise; what is owed comes from the treasury report. The
+  report's status word (`low`, say) doesn't close joining: it is about runway, and every welcome
+  paid would count towards it.
+- **Welcome eSIMs never spend weekly credit.** A welcome claim checks the same surplus again,
+  live, for the plan it names. Weekly credit expires on Monday and a welcome claim never does, so
+  when the pool can't cover both, the welcome waits: the claim is refused with nothing ordered,
+  the membership remains, and the same claim goes through after the next top-up.
 
 ### The join amount
 
@@ -269,8 +274,17 @@ a different plan gets a 409.
 | 200 | `{ ok, order, sims, replayed? }`, with codes for that order's profile only |
 | 400 | `unknown package`, `this plan is not included with membership`, or `joinTx must be a transaction signature` |
 | 401 | a signature or message problem, as for other signed requests |
-| 409 | `join OT+T first`, `the join transaction was not found or did not send enough OTT`, `your welcome eSIM has already been claimed`, or `coin not launched yet` |
-| 503 | `data redemption is not enabled yet`, `membership is not configured`, or a provider or payment failure, which can be retried |
+| 409 | `join OT+T first`, `the join transaction did not make this wallet a member: it failed, sent too little OTT, or came from another wallet`, `your welcome eSIM has already been claimed`, or `coin not launched yet` |
+| 503 | `data redemption is not enabled yet`, `membership is not configured`, a provider or payment failure, or one of the answers below; all can be retried |
+
+Four 503 answers mean nothing was ordered and the membership (or the burn) still counts, so the
+app keeps the burn it remembers and offers the same claim again:
+- `your burn isn’t visible to the server yet; it’s safe, so try again in a moment`: no endpoint
+  returns `joinTx` yet (or not with its block time). A 409 is only ever an answer about a
+  transaction the API has read.
+- `your burn landed in a week whose join amount isn’t set yet; it’s safe, so try again after the next ledger update`
+- `the reserve can’t pay for a welcome eSIM right now; your membership is kept, so try again after the next top-up`
+- `the reserve that pays for welcome eSIMs can’t be confirmed right now; your membership is kept, so try again in a moment`
 
 ## In the app
 

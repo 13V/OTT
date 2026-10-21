@@ -27,6 +27,7 @@ const catalogue = require('../../site/config/esim.json');
 // The development mock records an order under its place, so each fixture package's code is its
 // place; wholesale checkout and its supplier SKUs have their own provider tests.
 const asMockPackage = (code) => { const pkg = catalogue.packages.find((p) => p.code === code); return { ...pkg, code: pkg.slug }; };
+const TREASURY_REPORT = { status: 'funded', reseller: { name: 'mock', balanceUsd: 100 }, owedUsd: 30 };
 const CFG = { ...catalogue, chain: 'solana', coin: COIN, tokenProgram: TOKEN_2022, treasury: TREASURY, provider: 'mock',
   membership: { ...catalogue.membership, burnAccount: BURN_ACCOUNT },
   packages: ['fixed_5GB_30D_US', 'fixed_1GB_7D_DE', 'fixed_1GB_7D_EUROPE'].map(asMockPackage) };
@@ -57,7 +58,9 @@ test.beforeAll(async ({ baseURL }) => {
   host = new URL(baseURL).host;
   ledger = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://local').pathname;
-    const data = pathname === '/config.json' ? CFG : pathname === '/allowances.json' ? ALLOWANCES : null;
+    // The treasury report says what the pool holds beyond what the week owes members, which is
+    // what a welcome eSIM is paid from.
+    const data = pathname === '/config.json' ? CFG : pathname === '/allowances.json' ? ALLOWANCES : pathname === '/treasury.json' ? TREASURY_REPORT : null;
     res.writeHead(data ? 200 : 404, { 'content-type': 'application/json' }).end(JSON.stringify(data));
   });
   await new Promise((resolve) => ledger.listen(0, '127.0.0.1', resolve));
@@ -68,7 +71,7 @@ test.beforeAll(async ({ baseURL }) => {
     env: { SystemRoot: process.env.SystemRoot || '', TEMP: process.env.TEMP || '', TMP: process.env.TMP || '',
       HOST: '127.0.0.1', PORT: '0', NODE_ENV: 'development', ESIM_PROVIDER: 'mock', LN_PAYER: 'mock', STORE: 'memory',
       REDEMPTIONS_ENABLED: '1', FRONTEND_ORIGINS: frontendOrigin, SIGNIN_HOST: host,
-      ESIM_CONFIG_URL: origin + '/config.json', ALLOWANCES_URL: origin + '/allowances.json' },
+      ESIM_CONFIG_URL: origin + '/config.json', ALLOWANCES_URL: origin + '/allowances.json', TREASURY_URL: origin + '/treasury.json' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   backend.stdout.setEncoding('utf8');

@@ -9,7 +9,7 @@
  * Redis it reaches over HTTPS (Upstash, which Vercel's marketplace provisions and configures with
  * the KV_REST_API_URL / KV_REST_API_TOKEN pair this file reads). The ordinary commands it needs are
  * GET, SET (with NX, which is what makes a transactionId claimable exactly once across function
- * instances), DEL, ZADD and ZRANGEBYSCORE for a recent-orders index the treasury monitor reads.
+ * instances), DEL, ZADD and ZRANGEBYSCORE / ZREVRANGEBYSCORE for a recent-orders index the treasury monitor reads.
  * EVAL provides atomic comparisons when advancing an order or taking over/releasing a lease.
  *
  * The in-memory store behind STORE=memory is for tests and for a keyless deploy with the mock
@@ -114,10 +114,10 @@ function memoryStore() {
       if (!zs.has(set)) zs.set(set, new Map());
       zs.get(set).set(member, Number(score));
     },
-    async zrange(set, min, max, { limit = 1000 } = {}) {
+    async zrange(set, min, max, { limit = 1000, newest = false } = {}) {
       const z = zs.get(set);
       if (!z) return [];
-      return [...z.entries()].filter(([, s]) => s >= min && s <= max).sort((a, b) => a[1] - b[1]).slice(0, limit).map(([m]) => m);
+      return [...z.entries()].filter(([, s]) => s >= min && s <= max).sort((a, b) => (newest ? b[1] - a[1] : a[1] - b[1])).slice(0, limit).map(([m]) => m);
     },
     _reset() { kv.clear(); zs.clear(); expiry.clear(); },
   };
@@ -168,7 +168,10 @@ function restStore({ url, token }) {
       return Number(await cmd(['EVAL', COMPARE_MUTATE, String(batch.length), ...batch.map(entry => entry.key), ...args])) === 1;
     },
     async zadd(set, score, member) { await cmd(['ZADD', set, String(score), member]); },
-    async zrange(set, min, max, { limit = 1000 } = {}) {
+    // Members scored from `min` to `max`, at most `limit` of them: the lowest scores first, or with
+    // `newest` the highest first, so a cap keeps the most recent rather than the oldest.
+    async zrange(set, min, max, { limit = 1000, newest = false } = {}) {
+      if (newest) return (await cmd(['ZREVRANGEBYSCORE', set, String(max), String(min), 'LIMIT', '0', String(limit)])) || [];
       return (await cmd(['ZRANGEBYSCORE', set, String(min), String(max), 'LIMIT', '0', String(limit)])) || [];
     },
   };

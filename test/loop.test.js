@@ -1009,8 +1009,9 @@ async function main() {
     check('the incinerator\'s account holds every OTT sent to it', chain.tokens.get(coin.burnAccount).amount, OTT(4 * 1200000 + 1000000));
     check('BOB, ERIN and FRANK each hold 2,000,000 OTT now', [await held(BOB.address), await held(ERIN.address), await held(FRANK.address)], [OTT(2000000), OTT(2000000), OTT(2000000)]);
     const joinTx = chain.txs.get(joins[ALICE.address]);
-    check('the app\'s join paid one signature and 40,000 units at 50,000 micro-lamports, plus the incinerator account\'s rent once',
-      [joinTx.meta.fee, joinTx.meta.preBalances[0] - joinTx.meta.postBalances[0]], [7000, 7000 + Number(RENT.token2022)]);
+    // 5,000 for the signature and 40,000 units at 500,000 micro-lamports: 25,000 lamports.
+    check('the app\'s join paid one signature and 40,000 units at 500,000 micro-lamports, plus the incinerator account\'s rent once',
+      [joinTx.meta.fee, joinTx.meta.preBalances[0] - joinTx.meta.postBalances[0]], [25000, 25000 + Number(RENT.token2022)]);
 
     setClock(W - 1, 'fri', 12);
     keeperLog.length = 0;
@@ -1074,12 +1075,12 @@ async function main() {
     const claim3 = await runClaim();
     check('the daily claim finds nothing since Sunday and sends nothing', [claim3.claimed, chain.log.sent.length - sentBeforeClaim3], [[], 0]);
     const fund3 = await runFund(ffClient);
-    check('the daily top-up aims at what the week owes plus a five-welcome reserve: $144 + $20 − $100 = $64, 80,000 sats',
-      [fund3.action, fund3.amountUsd, fund3.sats, fund3.status], ['funded', 64, 80000, 'done']);
+    check('the daily top-up aims at what the week owes plus a day of welcome eSIMs: $144 + $100 − $100 = $144, 180,000 sats',
+      [fund3.action, fund3.amountUsd, fund3.sats, fund3.status], ['funded', 144, 180000, 'done']);
     setClock(W, 'mon', 6, 30);
     report = (await runTreasury()).data;
     r = await GET(ALICE);
-    check('with $164.00 in the pool, joining opens again', [report.reseller.balanceUsd, r.body.membership.enrolment.open], [164, true]);
+    check('with $244.00 in the pool, joining opens again', [report.reseller.balanceUsd, r.body.membership.enrolment.open], [244, true]);
 
     // ===========================================================================================
     console.log('\nSTAGE 5 — site/api/redeem.js serves the week\'s standings');
@@ -1156,7 +1157,7 @@ async function main() {
     setClock(W, 'mon', 8);
     report = (await runTreasury()).data;
     const paidSats = paidThisWeek.reduce((s, l) => s + l.sats, 0);
-    check('the pool is what was funded less what was paid: 205,000 sats less the invoices', [report.reseller.sats, report.reseller.balanceUsd], [205000 - paidSats, round2((205000 - paidSats) * 0.0008)]);
+    check('the pool is what was funded less what was paid: 305,000 sats less the invoices', [report.reseller.sats, report.reseller.balanceUsd], [305000 - paidSats, round2((305000 - paidSats) * 0.0008)]);
     // Wholesale charges 95% of list for Lightning: $1.89 for each of the four Germany bundles, $5.69 for Europe.
     check('the 30-day spend is what wholesale actually charged, for all five', [report.redemptions30d, report.spend30dUsd], [5, 13.25]);
     check('the treasury wallet and the fees waiting, read from the chain', [report.walletSol, report.claimableSol], [Number(chain.bal(TREASURY.address)) / 1e9, 0]);
@@ -1250,7 +1251,7 @@ async function main() {
     check('collected: 0.8 + 0.4 + 0.6 = 1.8 SOL, $276.00', [collected, claims.reduce((n, c) => n + c.usd, 0)], [LAMPORTS(1.8), 276]);
     check('the ledger valued the same collections', Object.values(ledger.fees.weekUsd).reduce((a, b) => a + b, 0), 276);
     check('FixedFloat received exactly what funding.json says the treasury sent', chain.bal(FF_DEPOSIT), sentToFixedFloat);
-    check('the pool\'s sats are exactly what was funded less what was paid', mockPayer._state.sats, 125000 + 80000 - allPaid);
+    check('the pool\'s sats are exactly what was funded less what was paid', mockPayer._state.sats, 125000 + 180000 - allPaid);
     const fees = [...chain.txs.values()].filter((tx) => tx.transaction.message.accountKeys[0].pubkey === TREASURY.address).reduce((n, tx) => n + BigInt(tx.meta.fee), 0n);
     const spentOnLaunch = RENT.mint + RENT.curve + RENT.token2022 + RENT.system + devBuy.paid + RENT.token2022;
     check('the treasury\'s SOL is its start, less the launch and its own fees, plus every collection, less every top-up',

@@ -34,8 +34,8 @@ a ticker has no room for.
 
 pump.fun keeps the creator fee on the bonding curve, and after graduation in the PumpSwap pool,
 until someone pays it out. Paying out is permissionless and can only ever pay the creator.
-`scripts/claim.js` does it once a day, and again just after Monday's new budget is published
-(`.github/workflows/claim.yml`): one transaction sweeps
+`scripts/claim.js` does it once a day, and again as soon as the data workflow publishes Monday's
+new budget (`.github/workflows/claim.yml`): one transaction sweeps
 whatever is waiting and pays it to the treasury, a wallet that holds nothing but fee income. That
 is what makes it acceptable to keep the treasury's key as a repository secret, and the daily
 collection is what keeps more than a day's fees from waiting. The transaction is simulated before
@@ -197,7 +197,7 @@ stale.
 | `scripts/lint.js` | The cheapest check there is: every script parses, every config is JSON, and the launch addresses agree with each other |
 | `config/addresses.json` | The same chain config as `site/config/addresses.json`, for the scripts that run outside the deployment |
 | `.github/workflows/data.yml` | Every 30 minutes: the allowances ledger and treasury file, commit if changed, issue if the pool is low; the API reads those published files |
-| `.github/workflows/claim.yml` | Daily: collect fees, fund the pool, refresh the treasury file, commit |
+| `.github/workflows/claim.yml` | Daily, and whenever a new week's ledger is published: collect fees, fund the pool, refresh the treasury file, commit |
 | `test/*.test.js` | The offline suite, one file per unit — see Running it |
 | `test/fixtures/solana/` | Real mainnet transactions and pump.fun accounts, and the pump.fun IDL entries the claim is checked against |
 | `test/support/fake-wholesale.js` | A fake wholesale server the wholesale-dependent tests run against instead of the real one |
@@ -347,13 +347,21 @@ storage probe. The published data and claim workflows use the adapter's default 
 `wf:`. Vercel Production uses `STORE_PREFIX=wf:` so treasury reporting reads the same order
 records; Preview uses `STORE_PREFIX=ott:preview:`. The published workflows do not consume a
 `STORE_PREFIX` repository variable. Any future namespace change must keep the backend and
-published workflow settings in agreement and preserve paid order history.
+published workflow settings in agreement and preserve paid order history. Once launched, a missing
+secret fails its step and opens a keeper issue rather than skipping quietly.
+
+The funding keeper never starts a top-up while the last one is unsettled, meaning SOL that went to
+FixedFloat and hasn't come back as sats that Blink shows paid. A slow order just waits, for up to
+the two hours its invoice lasts. After that, or for an order FixedFloat reports as expired or in an
+emergency, the run fails with the order id and the transfer, and the keeper alert opens an issue.
+Check the transfer on Solscan and the order with FixedFloat (support has the refund options), then
+set the repository variable `FUND_RESOLVED_ORDER` to that order id; the next run carries on.
 
 New purchases also default to closed in production. Keep `REDEMPTIONS_ENABLED=0` through setup;
 only exact `1` permits orders. Account and signed installation reads remain available while closed.
 Joining needs no separate switch. The app offers the burn once purchases are on, the weekly
-ledger knows the coin and has priced this week's amount, and the treasury reports the pool funded
-with room for a welcome eSIM beyond what the week owes.
+ledger knows the coin and has priced this week's amount, and the pool holds a welcome eSIM beyond
+what the week owes.
 `npm run check:prelaunch -- --remote` verifies setup without treating wallet funding or token launch
 as completed. Follow [the wallet-free setup steps](docs/backend-deployment.md#complete-setup-before-funding)
 before enabling live redemption.
@@ -394,14 +402,18 @@ allowance and a 40 GB weekly cap are not implemented or promised by the app.
    treasury that has never collected anything looks exactly like a quiet week.
 4. Commit and push (production deploys from `main`), publish Pages with `npm run deploy:pages`,
    and add the repository secrets above.
-5. **Put at least $50 in the Blink Lightning wallet** before switching purchases on with
-   `REDEMPTIONS_ENABLED=1` on the **Production** environment only. On Vercel the API never places
-   orders outside Production, whatever the switch says, because each deployment records orders
-   under its own prefix and a preview that could buy would let members spend twice; keep the Blink
-   key Production-only as well. The app offers joining only while the treasury report calls the pool
-   funded ($50 or more, with room for a $4 welcome eSIM beyond what the week owes), and on launch
-   day no creator fees have been collected into it yet. From then on the keeper tops it up from
-   the fees; run the claim workflow by hand (Actions → claim → Run workflow) to collect sooner.
+5. **Fund the Blink Lightning wallet for launch day** before switching purchases on with
+   `REDEMPTIONS_ENABLED=1` on the **Production** environment only: at least $100, plus about $4
+   for every join you expect before the first daily top-up. On launch day no creator fees have
+   been collected yet, and every member's welcome eSIM is paid from this wallet. The app offers
+   joining while the wallet holds a $4 welcome eSIM beyond what the week owes members, and a
+   welcome claim checks the live balance again before it orders; one the wallet can't cover yet is
+   refused with nothing ordered, the membership kept, and goes through after the next top-up. On
+   Vercel the API never places orders outside Production, whatever the switch says, because each
+   deployment records orders under its own prefix and a preview that could buy would let members
+   spend twice; keep the Blink key Production-only as well. From then on the keeper tops the
+   wallet up from the fees once a day; run the claim workflow by hand (Actions → claim → Run
+   workflow) to collect and top up sooner.
 6. **Protect what the API trusts.** It reads the ledger from `main` and pays from the Blink wallet,
    so: require 2FA for everyone with write access, keep collaborators few, and protect `main` so
    only admins and the keeper bot can push to it. Add a per-IP rate limit on `/api/*` in Vercel's
@@ -410,19 +422,23 @@ allowance and a 40 GB weekly cap are not implemented or promised by the app.
 
 Until then the deploy answers with the rules and "coin not launched yet", and the workflows say what
 they skipped rather than failing. Week one publishes a budget of zero, honestly and without
-crashing: there were no fees the week before to make one from. The join amount is priced from the
-first run after launch, so joining opens within half an hour of the coin going live, as long as the
-pool is funded (step 5).
+crashing: there were no fees the week before to make one from. The join amount is priced at the
+first ledger run after launch. GitHub often starts scheduled workflows hours late, so after pushing
+the launch fields run the data workflow by hand (Actions → data → Run workflow): joining opens when
+it finishes, as long as the pool is funded (step 5).
 
 Two things to know about how it runs once it is on. The funding keeper aims at what the week still
 owes its members — the published budget less what has been redeemed — rather than a flat target, so
 a big week pulls more across; it is bounded by a ceiling on the standing Lightning balance
 (`--max-pool`), a per-run cap on a single FixedFloat order (`--max`), and the treasury's own
 balance less the SOL it always keeps for fees and rent (`--keep-sol`), and it says which stopped
-it. It also keeps room for five welcome eSIMs at the $4 maximum on top of what the week owes
-(`--reserve` overrides that), because the API stops offering the burn once the pool can't pay for
-one. And `site/data/treasury.json` carries a `behind` status, for a pool that is not low by any
-backward-looking measure and still cannot cover what this week has already promised.
+it. It also keeps room for 25 welcome eSIMs at the $4 maximum ($100) on top of what the week owes
+(`--reserve` overrides that), about a day of joins, because the API stops offering the burn once
+the pool can't pay for one beyond what members are owed. A welcome eSIM never spends members'
+weekly credit: credit expires on Monday and a welcome claim never does, so when the pool can't
+cover both, the welcome waits for the next top-up. And `site/data/treasury.json` carries a
+`behind` status, for a pool that is not low by any backward-looking measure and still cannot cover
+what this week has already promised.
 
 ## What v1 doesn't do
 

@@ -66,6 +66,13 @@ const server = http.createServer((req, res) => {
       const out = [...z.entries()].filter(([, s]) => s >= Number(a[1]) && s <= Number(a[2])).sort((x, y) => x[1] - y[1]).slice(0, lim).map(([m]) => m);
       return reply(200, { result: out });
     }
+    if (cmd === 'ZREVRANGEBYSCORE') {
+      // max first, then min, as Redis takes them.
+      const z = fake.zs.get(a[0]) || new Map();
+      const lim = a[3] === 'LIMIT' ? Number(a[5]) : Infinity;
+      const out = [...z.entries()].filter(([, s]) => s <= Number(a[1]) && s >= Number(a[2])).sort((x, y) => y[1] - x[1]).slice(0, lim).map(([m]) => m);
+      return reply(200, { result: out });
+    }
     reply(400, { error: 'ERR unknown command ' + cmd });
   });
 });
@@ -84,6 +91,8 @@ async function exercise(store, label) {
   check('the index comes back in score order', await store.zrange('orders:recent', 0, 1000), ['a', 'b', 'c']);
   check('bounded by score', await store.zrange('orders:recent', 150, 1000), ['b', 'c']);
   check('and by limit', await store.zrange('orders:recent', 0, 1000, { limit: 2 }), ['a', 'b']);
+  check('newest first, a limit keeps the most recent', await store.zrange('orders:recent', 0, 1000, { limit: 2, newest: true }), ['c', 'b']);
+  check('bounded by score the same way', await store.zrange('orders:recent', 0, 250, { newest: true }), ['b', 'a']);
   await store.del('order:wf-1');
   check('DEL removes', await store.get('order:wf-1'), null);
   check('atomic compareSet can create only a missing key', await store.compareSet('lease', null, rec), true);

@@ -176,7 +176,10 @@ async function run({ rpc, config, provider = null, claims = [], now = () => Date
   if (provider && typeof provider.balanceUsd === 'function') {
     try {
       const bal = typeof provider.balance === 'function' ? await provider.balance() : { usd: await provider.balanceUsd() };
-      const balanceUsd = round2(Number(bal.usd));
+      // The Lightning wallet pays from its BTC balance only, so that is the pool: Blink's report
+      // also adds any USD wallet on the account, which no payment can draw on.
+      const btcUsd = Number.isFinite(Number(bal.sats)) && Number.isFinite(Number(bal.usdPerSat)) ? Number(bal.sats) * Number(bal.usdPerSat) : NaN;
+      const balanceUsd = round2(Number.isFinite(btcUsd) ? btcUsd : Number(bal.usd));
       orderList = typeof provider.listOrders === 'function'
         ? await provider.listOrders({ sinceIso: new Date(now() - DAYS * 86400 * 1000).toISOString().replace(/:\d\d\.\d{3}Z$/, '+00:00') })
         : [];

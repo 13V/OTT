@@ -190,7 +190,7 @@ test('the join sends exactly this week’s amount from the wallet’s OTT accoun
   expect(tx.instructions.map((ix) => ix.program)).toEqual([S.PROGRAMS.computeBudget, S.PROGRAMS.computeBudget, S.PROGRAMS.associatedToken, TOKEN_2022]);
   // A small priority fee: 40,000 compute units at 50,000 micro-lamports each.
   expect(tx.instructions[0].data).toEqual(Buffer.concat([Buffer.from([2]), u32le(40000)]));
-  expect(tx.instructions[1].data).toEqual(Buffer.concat([Buffer.from([3]), u64le(50000)]));
+  expect(tx.instructions[1].data).toEqual(Buffer.concat([Buffer.from([3]), u64le(500000)]));
   // CreateIdempotent of the incinerator's OTT account: a no-op once it exists.
   expect(tx.instructions[2]).toEqual({ program: S.PROGRAMS.associatedToken, accounts: [ADDR, BURN_ACCOUNT, INCINERATOR, COIN, S.PROGRAMS.system, TOKEN_2022], data: Buffer.from([1]) });
   // TransferChecked of exactly this week's amount, at the coin's 6 decimals, from the wallet's own account.
@@ -414,11 +414,63 @@ test('an earlier join already on chain is found instead of asking for a second o
   await expect(mine.locator('.data-membership h3')).toHaveText('Claim your welcome eSIM');
   await expect(page.locator('#toasts')).toContainText('Membership found');
   expect(wallet.calls('signAndSendTransaction')).toEqual([]);
-  const query = chain.asked('getSignaturesForAddress')[0];
-  expect(query.params[0]).toBe(BURN_ACCOUNT);
-  expect(query.params[1]).toMatchObject({ limit: 25 });
+  // The wallet's own OTT account first (nothing there in this fixture), then the incinerator's.
+  expect(chain.asked('getSignaturesForAddress').map((q) => [q.params[0], q.params[1].limit])).toEqual([[HOLDER_ACCOUNT, 25], [BURN_ACCOUNT, 25]]);
   expect(chain.asked('getTransaction')[0].params).toEqual([EARLIER_TX, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 1, commitment: 'confirmed' }]);
   expect(await joinStorage(page)).toBe(EARLIER_TX);
+});
+
+test('an earlier join in the wallet\'s own OTT history is found however busy the incinerator\'s account is', async ({ page }) => {
+  const wallet = await installWallet(page, { trusted: true });
+  // 25 newer transactions on the incinerator's account, none of them this wallet's join.
+  const others = Array.from({ length: 25 }, (_, i) => signatureFrom('busy ' + i));
+  const network = stubNetwork(page, {
+    balance: BALANCE,
+    signatures: {
+      [BURN_ACCOUNT]: others.map((signature, i) => ({ signature, slot: 400000200 + i, blockTime: NOW_S - 60, err: null, confirmationStatus: 'confirmed' })),
+      [HOLDER_ACCOUNT]: [{ signature: EARLIER_TX, slot: 400000100, blockTime: NOW_S - 86400, err: null, confirmationStatus: 'confirmed' }],
+    },
+    transactions: { [EARLIER_TX]: joinTransactionResult({ signature: EARLIER_TX, wallet: ADDR, amount: JOIN_UNITS }) },
+  });
+  await stubApi(page, [standing()]);
+  const mine = await openData(page);
+  await confirmJoin(mine.locator('.data-membership'));
+  await expect(mine.locator('.data-membership h3')).toHaveText('Claim your welcome eSIM');
+  await expect(page.locator('#toasts')).toContainText('Membership found');
+  expect(wallet.calls('signAndSendTransaction')).toEqual([]);
+  expect(network.requests.filter((r) => r.method === 'getSignaturesForAddress').map((r) => r.params[0])).toEqual([HOLDER_ACCOUNT]);
+  expect(await joinStorage(page)).toBe(EARLIER_TX);
+});
+
+test('a burn still confirming when the page reloads is shown as confirming, never offered again', async ({ page }) => {
+  await page.addInitScript(({ addr, tx }) => localStorage.setItem('ott-membership-pending:' + addr, JSON.stringify({ signature: tx, sentAt: Date.now() - 30000 })), { addr: ADDR, tx: TX_SIGNATURE });
+  const wallet = await installWallet(page, { trusted: true });
+  stubChain(page, { statuses: [null] });
+  await stubApi(page, [standing()]);
+  const mine = await openData(page);
+  const card = mine.locator('.data-membership');
+  await expect(card.locator('h3')).toHaveText('Your burn is confirming');
+  await expect(card.getByRole('button', { name: 'Check burn status' })).toBeVisible();
+  await expect(card.getByRole('button', { name: /^(?:Join|Burn)/ })).toHaveCount(0);
+  expect(wallet.calls('signAndSendTransaction')).toHaveLength(0);
+});
+
+test('a remembered burn that never reached Solana is let go once it can no longer land', async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(({ addr, tx }) => localStorage.setItem('ott-membership-pending:' + addr, JSON.stringify({ signature: tx, sentAt: Date.now() - 10 * 60 * 1000 })), { addr: ADDR, tx: TX_SIGNATURE });
+  await installWallet(page, { trusted: true });
+  stubChain(page, { statuses: [null] });
+  await stubApi(page, [standing()]);
+  const mine = await openData(page);
+  const card = mine.locator('.data-membership');
+  await card.getByRole('button', { name: 'Check burn status' }).click();
+  await expect.poll(async () => {
+    await page.clock.runFor(1600);
+    return card.locator('h3').textContent();
+  }, { timeout: 30000, intervals: [20] }).toBe('Join OT+T');
+  await expect(card).toContainText('The burn never reached Solana and now can’t, so no OTT was burned. You can try again.');
+  await expect(card.getByRole('button', { name: 'Join: burn 180,000 OTT' })).toBeVisible();
+  expect(await page.evaluate((addr) => localStorage.getItem('ott-membership-pending:' + addr), ADDR)).toBeNull();
 });
 
 test('another wallet’s join, a join too small, or a failed one is not taken for this wallet’s', async ({ page }) => {
@@ -446,12 +498,52 @@ test('a rejected join proof is forgotten and the wallet is shown how to join aga
   await page.addInitScript(({ addr, tx }) => localStorage.setItem('ott-membership-join:' + addr, tx), { addr: ADDR, tx: JOIN_TX });
   await installWallet(page, { trusted: true });
   stubChain(page);
-  await stubApi(page, [standing()], () => [{ ok: false, error: 'the join transaction was not found or did not send enough OTT' }, 409]);
+  const refused = 'the join transaction did not make this wallet a member: it failed, sent too little OTT, or came from another wallet';
+  await stubApi(page, [standing()], () => [{ ok: false, error: refused }, 409]);
   const mine = await openData(page);
   await mine.locator('.data-membership').getByRole('button', { name: /^Claim / }).click();
-  await expect(page.locator('#toasts')).toContainText('the join transaction was not found or did not send enough OTT');
+  await expect(page.locator('#toasts')).toContainText(refused);
   await expect(mine.locator('.data-membership h3')).toHaveText('Join OT+T');
   expect(await joinStorage(page)).toBeNull();
+});
+
+for (const [what, answer] of [
+  ['a burn the server can\'t see yet', 'your burn isn’t visible to the server yet; it’s safe, so try again in a moment'],
+  ['a burn in a week the ledger hasn\'t priced', 'your burn landed in a week whose join amount isn’t set yet; it’s safe, so try again after the next ledger update'],
+]) {
+  test(`${what} is kept, never forgotten, and the same claim can be sent again`, async ({ page }) => {
+    await page.addInitScript(({ addr, tx }) => localStorage.setItem('ott-membership-join:' + addr, tx), { addr: ADDR, tx: JOIN_TX });
+    const wallet = await installWallet(page, { trusted: true });
+    stubChain(page);
+    const posts = [];
+    await stubApi(page, [standing()], (body) => { posts.push(body); return [{ ok: false, error: answer }, 503]; });
+    const mine = await openData(page);
+    const card = mine.locator('.data-membership');
+    const claim = card.getByRole('button', { name: /^Claim / });
+    await claim.click();
+    await expect(card).toContainText('Could not claim: ' + answer);
+    await expect(card.locator('h3')).toHaveText('Claim your welcome eSIM');
+    await expect(card).not.toContainText('unconfirmed');
+    expect(await joinStorage(page)).toBe(JOIN_TX);
+    await expect(claim).toBeEnabled();
+    await claim.click();
+    await expect.poll(() => posts.length).toBe(2);
+    expect(posts.map((p) => p.joinTx)).toEqual([JOIN_TX, JOIN_TX]);
+    expect(wallet.calls('signAndSendTransaction')).toHaveLength(0);
+  });
+}
+
+test('a welcome claim the reserve can\'t pay for yet keeps the membership and offers the same claim again', async ({ page }) => {
+  await installWallet(page, { trusted: true });
+  stubChain(page);
+  const short = 'the reserve can’t pay for a welcome eSIM right now; your membership is kept, so try again after the next top-up';
+  await stubApi(page, [standing({ membership: membership({ member: true }) })], () => [{ ok: false, error: short }, 503]);
+  const mine = await openData(page);
+  const card = mine.locator('.data-membership');
+  await card.getByRole('button', { name: /^Claim / }).click();
+  await expect(card).toContainText('Could not claim: ' + short);
+  await expect(card).not.toContainText('unconfirmed');
+  await expect(card.getByRole('button', { name: /^Claim / })).toBeEnabled();
 });
 
 test('an API that reports no membership keeps the weekly flow and never mentions burning', async ({ page }) => {
