@@ -240,7 +240,9 @@ Issued: <unix seconds>
 
 The first line names the action: `OT+T — show my eSIM codes` (a read; no Plan or Slot),
 `OT+T — authorise a data redemption` (Plan and `Slot: <n>`), or the welcome line above (Plan, no
-Slot). The window is 10 minutes, and the site must be a known frontend host, as before.
+Slot). The window is 10 minutes, and the site must be a known frontend host, as before. The API
+accepts exactly these lines in this order: an added, repeated or reordered line, or a Windows line
+ending, is refused, so a signature can't be passed off inside other text.
 
 Order ids keep their formula exactly: the nth weekly order is
 `'ott-' + keccak256(address.toLowerCase() + ':' + week + ':' + n)[0..32]` and the welcome order

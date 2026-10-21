@@ -352,6 +352,28 @@ async function main() {
   r = await POST(welcome(EARLY, 'fixed_1GB_7D_AU', { joinTx: join({ from: EARLY.address, amount: LAST_WEEK_UNITS, at: START + 60 }) }));
   check('in the first ten minutes of the week, last week\'s lower amount is enough', [r.status, r.body.order && r.body.order.welcome], [200, true]);
 
+  console.log('\nchain lookups for named joins are bounded');
+  {
+    // Without the per-request cache reset, as a live instance sees them.
+    const raw = (body) => call(redeem, { method: 'POST', url: '/api/redeem', body });
+    redeem._resetCaches();
+    rpcCalls.length = 0;
+    const missingTx = randomSignature();
+    const claimant = newWallet();
+    r = await raw(welcome(claimant, 'fixed_1GB_7D_JP', { joinTx: missingTx }));
+    check('a join the chain has never seen is refused', [r.status, r.body.error], [409, NOT_FOUND]);
+    const asked = rpcCalls.length;
+    checkThat('the chain was asked', asked > 0);
+    r = await raw(welcome(claimant, 'fixed_1GB_7D_JP', { joinTx: missingTx }));
+    check('naming it again within seconds is answered without asking the chain again', [r.status, rpcCalls.length], [409, asked]);
+    redeem._resetCaches();
+    const cap = require(path.join(API, '_lib', 'rpc.js')).LOOKUPS_PER_MINUTE;
+    let last = null;
+    for (let i = 0; i <= cap; i++) last = await raw(welcome(newWallet(), 'fixed_1GB_7D_JP', { joinTx: randomSignature() }));
+    check('past the lookup cap a claim is told to try again, not refused', [last.status, last.body.error], [503, 'the chain could not be read just now; try again in a moment']);
+    redeem._resetCaches();
+  }
+
   console.log('\nwhen the chain cannot be read');
   const downChain = http.createServer((req, res) => { res.statusCode = 502; res.end('down'); });
   await new Promise((done) => downChain.listen(0, '127.0.0.1', done));

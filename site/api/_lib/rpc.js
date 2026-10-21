@@ -41,7 +41,33 @@ async function call(method, params) {
   } catch (e) { throw unavailable(); }
 }
 
-/** One transaction, jsonParsed, any version. null when no endpoint has it. */
-const getTransaction = (signature) => call('getTransaction', [signature, TX_OPTIONS]);
+// A claim naming a transaction that doesn't exist costs a lookup on every endpoint. So a missing
+// signature is remembered for a few seconds, and lookups are capped per instance per minute: a
+// script naming random transactions can't turn the API into an amplifier against the RPCs. Past
+// the cap the caller gets the same 503 as an outage, which the app treats as "try again".
+const MISSING_TTL_MS = 10 * 1000;
+const LOOKUPS_PER_MINUTE = 60;
+const missing = new Map(); // signature -> when it was last found missing
+let lookups = { minute: 0, count: 0 };
 
-module.exports = { call, getTransaction, endpoints, TX_OPTIONS };
+/** One transaction, jsonParsed, any version. null when no endpoint has it. */
+async function getTransaction(signature) {
+  const now = Date.now();
+  const seen = missing.get(signature);
+  if (seen !== undefined && now - seen < MISSING_TTL_MS) return null;
+  const minute = Math.floor(now / 60000);
+  if (lookups.minute !== minute) lookups = { minute, count: 0 };
+  lookups.count += 1;
+  if (lookups.count > LOOKUPS_PER_MINUTE) throw unavailable();
+  const tx = await call('getTransaction', [signature, TX_OPTIONS]);
+  if (tx === null) {
+    missing.set(signature, now);
+    if (missing.size > 5000) for (const k of [...missing.keys()].slice(0, 2500)) missing.delete(k);
+  }
+  return tx;
+}
+
+/** Tests only: forget remembered lookups. */
+function _reset() { missing.clear(); lookups = { minute: 0, count: 0 }; }
+
+module.exports = { call, getTransaction, endpoints, TX_OPTIONS, LOOKUPS_PER_MINUTE, _reset };

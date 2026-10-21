@@ -300,7 +300,8 @@
       const beforeDispatch = ['data redemption is not enabled yet', 'data config unavailable', 'package has no price', 'allowances unavailable', 'membership is not configured',
         // A join check that could not read the chain happens before any purchase is attempted.
         'the chain could not be read just now; try again in a moment'];
-      error.requestDeclined = [400, 401, 403, 409, 422].includes(res.status)
+      // 429 is the API's rate limit, which it applies before any purchase is attempted.
+      error.requestDeclined = [400, 401, 403, 409, 422, 429].includes(res.status)
         || res.status === 503 && beforeDispatch.includes(j.error);
       throw error;
     }

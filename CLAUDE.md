@@ -60,7 +60,7 @@ With that browser, one test fails: `mobile-app.spec.js` "the last screen control
 Don't run these unless asked:
 - `npm run claim` or `npm run fund` without `--dry-run` signs and sends Solana transactions with `TREASURY_PRIVATE_KEY` (falling back to `PRIVATE_KEY`). `claim --rehearse` and `claim --dry-run` only simulate.
 - `node scripts/test-esim.js --purchase` makes a paid operator purchase.
-- `npm run deploy:pages` pushes the committed `site/` to the public `gh-pages` branch.
+- `npm run deploy:pages` pushes the committed `site/` to the public `gh-pages` branch (the keeper workflows also do this after every run).
 - `npm run catalogue -- --write` rewrites the reviewed catalogue. The deployed backend's catalogue fingerprint must match the frontend's.
 - `npm run launch:config -- <mint> --write` fills in the launch fields, which turns the programme on once deployed.
 
@@ -70,7 +70,7 @@ Don't run these unless asked:
 
 Three parts share the repo:
 
-1. **Static front end: `site/`.** Plain files, with no framework or bundler. GitHub Pages serves it at https://13v.github.io/OTT/, and it is published only by `npm run deploy:pages`. Pages serves it under `/OTT/`, so URLs inside `site/` stay relative.
+1. **Static front end: `site/`.** Plain files, with no framework or bundler. GitHub Pages serves it at https://13v.github.io/OTT/, published from the committed tree by `npm run deploy:pages`, which the data and claim workflows also run at the end of every run (the site reads `data/*.json` from Pages, so Pages follows `main`). Pages serves it under `/OTT/`, so URLs inside `site/` stay relative.
 2. **API: `site/api/*.js`.** These are Vercel functions. The Vercel project's Root Directory is `site`, and every push to `main` deploys production. `scripts/serve-api.js` runs the same handlers as a plain Node server, which `render.yaml` uses. The front end calls the API at `apiBaseUrl` from `site/config/app.json`.
 3. **Keepers: `scripts/`.** Scheduled workflows run them and commit the regenerated `site/data/*.json` to `main`:
    - `data.yml`, every 30 minutes: `allowances.js` and `treasury.js`, plus alerts opened as GitHub issues when the pool is low, the site is unhealthy or a keeper fails.
@@ -108,7 +108,8 @@ Environment variables choose the adapters, and production fails closed:
 - **Lightning payer** (`LN_PAYER`, in `site/api/_lib/payers/`): `blink` (default) or `mock`.
 - **Store** (`site/api/_lib/store.js`): Upstash Redis over REST (`KV_REST_API_URL` / `KV_REST_API_TOKEN`, keys prefixed by `STORE_PREFIX`, default `wf:`), or `STORE=memory`. Atomic compare-and-set and compare-and-delete run as Lua `EVAL` scripts.
 - **Chain** (`site/api/_lib/rpc.js`): `SOLANA_RPC_URL` first, then the `rpcs` in `config/addresses.json`.
-- **Production** means `NODE_ENV=production` or `VERCEL_ENV=production`. It refuses the mock provider, the mock payer and the memory store, and requires a configured sign-in host (`SIGNIN_HOST` for the Pages frontend). New orders also need `REDEMPTIONS_ENABLED` set to exactly `1`; outside production it defaults to on.
+- **Production** means `NODE_ENV=production` or `VERCEL_ENV=production`. It refuses the mock provider, the mock payer and the memory store, and requires a configured sign-in host (`SIGNIN_HOST` for the Pages frontend). New orders also need `REDEMPTIONS_ENABLED` set to exactly `1`; outside production it defaults to on. On Vercel, a `preview` or `development` deployment never places orders, because each deployment records orders under its own `STORE_PREFIX`.
+- **Limits:** a signed request is checked exactly against the message format `site/esim.js` builds, small-order ed25519 keys are refused, signed requests have per-instance and per-wallet ceilings (429), and `_lib/rpc.js` remembers missing join transactions briefly and caps chain lookups per instance (503, which the app retries).
 
 `providers/wholesale.js` keeps one Redis record per transaction id:
 - The record moves `claiming → invoiced → paid → done`. It is claimed with SET NX and paid under a lease, so a crash resumes the order instead of paying twice.

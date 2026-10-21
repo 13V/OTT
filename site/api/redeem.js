@@ -113,6 +113,11 @@ const STANDING_TTL_MS = 10 * 1000;
 // holders never meets it; serverless means this is per instance, which makes it a brake rather
 // than a gate, and the brake is the part worth having.
 const STANDING_BURST = 240;
+// Signed requests skip that cache, so they get ceilings of their own: per instance, and per
+// wallet, because one signature can be replayed for its whole ten-minute window. A person reading
+// their codes and placing a few orders never comes near either.
+const SIGNED_BURST = 120;
+const SIGNED_PER_WALLET = 12;
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 
 // ---------------------------------------------------------------------------------------------
@@ -122,6 +127,18 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'esim.json');
 const cache = new Map(); // url -> { at, value }
 const standingCache = new Map(); // address:week -> { at, body }
 let burst = { minute: 0, count: 0 };
+let signedBurst = { minute: 0, count: 0, wallets: new Map() };
+
+/** True while this instance is still willing to do signed work, overall and for this wallet. */
+function withinSigned(address, nowMs) {
+  const minute = Math.floor(nowMs / 60000);
+  if (signedBurst.minute !== minute) signedBurst = { minute, count: 0, wallets: new Map() };
+  signedBurst.count += 1;
+  if (!signedBurst.wallets.has(address) && signedBurst.wallets.size >= 5000) return false;
+  const n = (signedBurst.wallets.get(address) || 0) + 1;
+  signedBurst.wallets.set(address, n);
+  return signedBurst.count <= SIGNED_BURST && n <= SIGNED_PER_WALLET;
+}
 
 /** True while this instance is still willing to compute a standing it has not got cached. */
 function withinBurst(nowMs) {
@@ -363,6 +380,13 @@ function checkMessage(message, address, nowS, want) {
   // The slot restarts at zero each Monday. A signature from the last ten minutes of the old
   // week must not mint that slot again in the new one; the authenticated timestamp binds it.
   if (want.action === 'redeem' && weekOf(Number(issued)) !== weekOf(nowS)) return 'redemption was signed for another week; sign again';
+  // Exactly the message this site builds (site/esim.js signInMessage), line for line: nothing
+  // added, repeated or reordered, so a signature can't be passed off inside other text.
+  const expected = [HEADS[want.action], 'Site: ' + field('Site'), 'Wallet: ' + address];
+  if (want.action === 'redeem' || want.action === 'welcome') expected.push('Plan: ' + String(want.packageCode));
+  if (want.action === 'redeem') expected.push('Slot: ' + String(want.n));
+  expected.push('Issued: ' + issued);
+  if (lines.join('\n') !== expected.join('\n')) return 'sign-in message is not in the expected form';
   return null;
 }
 
@@ -758,6 +782,11 @@ module.exports = async (req, res) => {
     if (why) return fail(res, 401, why);
     // The wallet's ed25519 signature over the message's exact UTF-8 bytes, base58 (signMessage).
     if (!solanaAuth.verifyMessage(body.message, body.signature, address)) return fail(res, 401, 'signature does not match address');
+    // Refused before any store or chain work, so the app can treat it as declined and retry.
+    if (!withinSigned(address, Date.now())) {
+      res.setHeader('retry-after', '30');
+      return fail(res, 429, 'too many requests; try again in a moment');
+    }
 
     const prov = chooseProvider();
     const allowances = await readAllowances().catch(() => null);
@@ -853,4 +882,9 @@ module.exports.checkMessage = checkMessage;
 // deployment — the only thing that changes a wallet's standing there is a POST, and a POST clears
 // it — but a test that reaches past the endpoint to reset the provider underneath it has changed
 // the world in a way no request did, and has to say so.
-module.exports._resetCaches = () => { cache.clear(); standingCache.clear(); burst = { minute: 0, count: 0 }; };
+module.exports._resetCaches = () => {
+  cache.clear(); standingCache.clear(); burst = { minute: 0, count: 0 };
+  signedBurst = { minute: 0, count: 0, wallets: new Map() };
+  chainRpc._reset();
+};
+module.exports.SIGNED_PER_WALLET = SIGNED_PER_WALLET;

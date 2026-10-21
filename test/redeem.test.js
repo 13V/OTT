@@ -748,6 +748,42 @@ async function main() {
   r = await GET(addr(RICH));
   check('missing allowances is 503, not a throw', [r.status, r.body.ok], [503, false]);
 
+  console.log('\nsigned requests have ceilings of their own');
+  mock._reset(); redeem._resetCaches();
+  {
+    // One signature can be replayed for its whole window, and signed requests skip the public cache.
+    const replayer = newWallet();
+    const body = signed(replayer, null);
+    const statuses = [];
+    for (let i = 0; i <= redeem.SIGNED_PER_WALLET; i++) statuses.push((await POST(body)).status);
+    check('a wallet replaying one signed read is answered up to its ceiling', statuses.slice(0, -1).includes(429), false);
+    check('and then refused with a 429, before any store work', statuses[statuses.length - 1], 429);
+    check('another wallet is unaffected', (await POST(signed(newWallet(), null))).status === 429, false);
+  }
+  mock._reset(); redeem._resetCaches();
+
+  console.log('\nweak public keys cannot sign');
+  // The small-order points of edwards25519 verify a signature made of another small-order point
+  // and a zero scalar, for any message, with no private key. Every such address is refused.
+  {
+    const SMALL = ['0100000000000000000000000000000000000000000000000000000000000000', 'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+      '0000000000000000000000000000000000000000000000000000000000000000', '0000000000000000000000000000000000000000000000000000000000000080',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85'];
+    let forged = 0;
+    for (const a of SMALL) {
+      const address = S.encodeBase58(Buffer.from(a, 'hex'));
+      const message = ['OT+T — show my eSIM codes', 'Site: 13v.github.io', 'Wallet: ' + address, 'Issued: 1792500000'].join('\n');
+      for (const r of SMALL) {
+        if (solanaAuth.verifyMessage(message, S.encodeBase58(Buffer.concat([Buffer.from(r, 'hex'), Buffer.alloc(32)])), address)) forged++;
+      }
+    }
+    check('no small-order address verifies a forged signature', forged, 0);
+    const real = newWallet();
+    const msg = 'OT+T — show my eSIM codes\nSite: 13v.github.io\nWallet: ' + addr(real) + '\nIssued: 1792500000';
+    check('an ordinary key still verifies its own signature', solanaAuth.verifyMessage(msg, real.sign(msg), addr(real)), true);
+  }
+
   server.close();
   console.log(failures ? `\n${failures} failure(s)` : '\nall good');
   process.exit(failures ? 1 : 0);

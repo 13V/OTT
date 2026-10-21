@@ -202,3 +202,12 @@ jobs:
             echo "could not push after 5 attempts"
             exit 1
           fi
+
+      # The site reads data/*.json from GitHub Pages, which serves the separate gh-pages branch, so
+      # publish what main now holds: the data just committed, and any site change merged since the
+      # last publish. scripts/publish-pages.js changes nothing when Pages already has this tree.
+      - name: Publish the site to GitHub Pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/publish-pages.js

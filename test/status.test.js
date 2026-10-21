@@ -254,6 +254,18 @@ async function main() {
     process.env.REDEMPTIONS_ENABLED = '1';
     r = await GET();
     check('enabling a fixture does not bypass real infrastructure readiness', r.body.redemption, { enabled: true, ready: false });
+    // A Vercel preview or development deployment can never buy, whatever the switch says: its
+    // orders would be recorded apart from Production's, so members could spend twice.
+    const vercelSetting = process.env.VERCEL_ENV;
+    try {
+      for (const env of ['preview', 'development']) {
+        process.env.VERCEL_ENV = env;
+        r = await GET();
+        check('a Vercel ' + env + ' deployment never enables purchases', r.body.redemption.enabled, false);
+      }
+    } finally {
+      if (vercelSetting === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = vercelSetting;
+    }
   } finally {
     if (gateSetting === undefined) delete process.env.REDEMPTIONS_ENABLED; else process.env.REDEMPTIONS_ENABLED = gateSetting;
   }

@@ -62,6 +62,22 @@ const wallet = () => S.encodeBase58(new Uint8Array(crypto.generateKeyPairSync('e
   const redeemMessage = page.signInMessage(ADDRESS, { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: 2 });
   check('weekly redemption messages pass', redeem.checkMessage(redeemMessage, ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '2' }), null);
   check('and read messages pass', redeem.checkMessage(page.signInMessage(ADDRESS, { action: 'read' }), ADDRESS, now(), { action: 'read' }), null);
+  // Only the exact form the page writes passes: nothing added, repeated or reordered, so a real
+  // signature can't be hidden inside other text a phishing page asks a wallet to sign.
+  const OTHER = wallet();
+  const readLines = page.signInMessage(ADDRESS, { action: 'read' }).split('\n');
+  const altered = {
+    'an extra line': [...readLines.slice(0, 3), 'Note: harmless', ...readLines.slice(3)],
+    'a second Wallet line': [...readLines.slice(0, 3), 'Wallet: ' + OTHER, ...readLines.slice(3)],
+    'text after the timestamp': [...readLines, 'P.S. sign this to win'],
+    'lines in another order': [readLines[0], readLines[2], readLines[1], readLines[3]],
+    'Windows line endings': readLines.map((l, i) => (i < readLines.length - 1 ? l + '\r' : l)),
+  };
+  for (const [what, lines] of Object.entries(altered)) {
+    check('a read message with ' + what + ' is refused', redeem.checkMessage(lines.join('\n'), ADDRESS, now(), { action: 'read' }) !== null, true);
+  }
+  const redeemLines = redeemMessage.split('\n');
+  check('a redemption with its slot moved after the timestamp is refused', redeem.checkMessage([...redeemLines.slice(0, 4), redeemLines[5], redeemLines[4]].join('\n'), ADDRESS, now(), { action: 'redeem', packageCode: 'fixed_1GB_7D_AU', n: '2' }) !== null, true);
 
   console.log('\nthe page offers exactly the welcome plans the API accepts');
   const welcome = rules.membershipConfig(config).welcome;

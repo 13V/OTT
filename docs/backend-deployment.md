@@ -62,7 +62,11 @@ describes updating an existing project this way. Opening the dashboard alone or
 redeploying the older uploaded files does not publish a new local release.
 
 Apply the hosted configuration below to **both Production and Preview**, including
-`NODE_ENV=production` and `REDEMPTIONS_ENABLED=0`. Do not use the portable server's `HOST`, `PORT`
+`NODE_ENV=production` and `REDEMPTIONS_ENABLED=0`, but keep `BLINK_API_KEY` on Production only.
+At launch set `REDEMPTIONS_ENABLED=1` on Production only. The API refuses new orders on any Vercel
+deployment other than Production whatever the switch says: each deployment records orders under
+its own `STORE_PREFIX`, so a preview that could buy from the same wallet would let members spend
+their week's credit, and claim the welcome eSIM, a second time. Do not use the portable server's `HOST`, `PORT`
 or start command for these serverless functions. Use the verified provider base
 `https://nadanada.me/api/v2` and `LN_PAYER=blink`. Production uses `STORE_PREFIX=wf:`;
 Preview uses `STORE_PREFIX=ott:preview:` so its records remain separate. Keep the current

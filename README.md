@@ -267,9 +267,12 @@ between local development origins. Invalid settings fail before asking for a sig
 client sends no cookies to the API and refuses redirects of signed requests. Configuration and
 live account data remain outside the service-worker cache.
 
-GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. After committing changes, run
-`npm run deploy:pages` to publish the committed `site/` tree on `gh-pages`. It excludes `api/`,
-Vercel configuration and untracked files, adds `.nojekyll`, and does not change the current checkout.
+GitHub Pages hosts the frontend at <https://13v.github.io/OTT/>. `npm run deploy:pages` publishes
+the committed `site/` tree on `gh-pages`. It excludes `api/`, Vercel configuration and untracked
+files, adds `.nojekyll`, and does not change the current checkout. The data and claim workflows run
+the same publish at the end of every run, because the site reads `data/*.json` from Pages: Pages
+then follows `main`, both the keepers' data and any merged site change, within one keeper run.
+Run `npm run deploy:pages` to publish at once.
 Pages cannot run the redemption/status functions. A backend deployment is needed before launch;
 using a separate API host requires the public `apiBaseUrl` above and the backend settings below.
 
@@ -392,10 +395,18 @@ allowance and a 40 GB weekly cap are not implemented or promised by the app.
 4. Commit and push (production deploys from `main`), publish Pages with `npm run deploy:pages`,
    and add the repository secrets above.
 5. **Put at least $50 in the Blink Lightning wallet** before switching purchases on with
-   `REDEMPTIONS_ENABLED=1`. The app offers joining only while the treasury report calls the pool
+   `REDEMPTIONS_ENABLED=1` on the **Production** environment only. On Vercel the API never places
+   orders outside Production, whatever the switch says, because each deployment records orders
+   under its own prefix and a preview that could buy would let members spend twice; keep the Blink
+   key Production-only as well. The app offers joining only while the treasury report calls the pool
    funded ($50 or more, with room for a $4 welcome eSIM beyond what the week owes), and on launch
    day no creator fees have been collected into it yet. From then on the keeper tops it up from
    the fees; run the claim workflow by hand (Actions → claim → Run workflow) to collect sooner.
+6. **Protect what the API trusts.** It reads the ledger from `main` and pays from the Blink wallet,
+   so: require 2FA for everyone with write access, keep collaborators few, and protect `main` so
+   only admins and the keeper bot can push to it. Add a per-IP rate limit on `/api/*` in Vercel's
+   Firewall if your plan has it, and a usage alert in Upstash, so a flood of requests can't use up
+   the store's quota for everyone. Disconnect any other Vercel project that deploys this repository.
 
 Until then the deploy answers with the rules and "coin not launched yet", and the workflows say what
 they skipped rather than failing. Week one publishes a budget of zero, honestly and without
