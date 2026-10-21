@@ -16,10 +16,16 @@
   // A join amount above this share of the supply is refused whatever the API says. It mirrors
   // MAX_BURN_SHARE_BPS in site/api/_lib/membership.js; test/membership-client.test.js holds them equal.
   const MAX_JOIN_SHARE_BPS = 200;
-  // A small priority fee keeps the join from stalling when the network is busy: 50,000
-  // micro-lamports per compute unit over 40,000 units is 0.000002 SOL.
+  // A priority fee keeps the join from stalling when the network is busy, as it will be on launch
+  // day: 500,000 micro-lamports per compute unit over 40,000 units is 0.00002 SOL.
   const JOIN_COMPUTE_UNITS = 40000;
-  const JOIN_PRIORITY_MICROLAMPORTS = 50000;
+  const JOIN_PRIORITY_MICROLAMPORTS = 500000;
+  // The API's two answers for a burn it can't judge yet (site/api/redeem.js words them): the
+  // claim was refused before anything was ordered, and the burn this page remembers still counts.
+  const JOIN_NOT_YET = [
+    'your burn isn’t visible to the server yet; it’s safe, so try again in a moment',
+    'your burn landed in a week whose join amount isn’t set yet; it’s safe, so try again after the next ledger update',
+  ];
   let selectedPackageCode = '';
   let myDataRender = 0;
 
@@ -295,12 +301,19 @@
     if (!j) throw new Error('redeem API answered HTTP ' + res.status);
     if (!j.ok) {
       const error = new Error(j.error || 'redeem API refused (HTTP ' + res.status + ')');
+      error.status = res.status;
       // Validation/auth/slot refusals happen before provider dispatch. A server or
       // gateway failure can follow a payment, so it must keep its unconfirmed state.
       const beforeDispatch = ['data redemption is not enabled yet', 'data config unavailable', 'package has no price', 'allowances unavailable', 'membership is not configured',
         // A join check that could not read the chain happens before any purchase is attempted.
-        'the chain could not be read just now; try again in a moment'];
-      error.requestDeclined = [400, 401, 403, 409, 422].includes(res.status)
+        'the chain could not be read just now; try again in a moment',
+        // A welcome claim the pool can't pay for yet, or whose burn can't be judged yet, is
+        // refused before anything is ordered (site/api/redeem.js words these).
+        'the reserve can’t pay for a welcome eSIM right now; your membership is kept, so try again after the next top-up',
+        'the reserve that pays for welcome eSIMs can’t be confirmed right now; your membership is kept, so try again in a moment',
+        JOIN_NOT_YET[0], JOIN_NOT_YET[1]];
+      // 429 is the API's rate limit, which it applies before any purchase is attempted.
+      error.requestDeclined = [400, 401, 403, 409, 422, 429].includes(res.status)
         || res.status === 503 && beforeDispatch.includes(j.error);
       throw error;
     }
@@ -357,9 +370,36 @@
   // rejects is forgotten.
   const JOIN_STORAGE = 'ott-membership-join:';
   const confirmedJoins = new Map();
-  // A join sent but not yet confirmed. While one is outstanding the page offers a status check,
-  // never a second send.
+  // A join sent but not yet confirmed: { signature, sentAt }. While one is outstanding the page
+  // offers a status check, never a second send, and it is kept in browser storage too, so a reload
+  // while it confirms can't invite a second send either. It is let go only once it is on chain, has
+  // failed there, or can no longer land (JOIN_PENDING_EXPIRES_MS).
+  const PENDING_STORAGE = 'ott-membership-pending:';
   const pendingJoins = new Map();
+  function knownPending(addr) {
+    if (!isAddress(addr)) return null;
+    if (pendingJoins.has(addr)) return pendingJoins.get(addr);
+    try {
+      const raw = window.localStorage && window.localStorage.getItem(PENDING_STORAGE + addr);
+      const stored = raw ? JSON.parse(raw) : null;
+      if (stored && isSignature(stored.signature) && Number.isFinite(Number(stored.sentAt))) {
+        const pending = { signature: stored.signature, sentAt: Number(stored.sentAt) };
+        pendingJoins.set(addr, pending);
+        return pending;
+      }
+    } catch (e) { /* Storage can be unavailable or hold something else; memory still has this page's own. */ }
+    return null;
+  }
+  function rememberPending(addr, signature) {
+    if (!isAddress(addr) || !isSignature(signature)) return;
+    const pending = { signature, sentAt: Date.now() };
+    pendingJoins.set(addr, pending);
+    try { window.localStorage && window.localStorage.setItem(PENDING_STORAGE + addr, JSON.stringify(pending)); } catch (e) { /* memory is enough */ }
+  }
+  function forgetPending(addr) {
+    pendingJoins.delete(addr);
+    try { window.localStorage && window.localStorage.removeItem(PENDING_STORAGE + addr); } catch (e) { /* nothing stored */ }
+  }
   function knownJoin(addr) {
     if (!isAddress(addr)) return null;
     if (confirmedJoins.has(addr)) return confirmedJoins.get(addr);
@@ -884,50 +924,92 @@
    */
   const SIGNATURE_POLL_MS = 1500;
   const SIGNATURE_ATTEMPTS = 80;
-  // How many of the incinerator account's newest transactions the earlier-join check reads. Joins
-  // are rare next to trades, so this covers the gap between two ledger updates.
+  // How many of the newest transactions the earlier-join check reads, first on the wallet's own OTT
+  // account (a short history, so this reaches back a long way) and then on the incinerator's.
   const JOIN_SCAN_LIMIT = 25;
+  // A page loaded last week may still show last week's amount. Sent in the first ten minutes of the
+  // new week, that is always enough (the API's grace, GRACE_S in site/api/_lib/membership.js), so
+  // the page sends it for eight, leaving time for the send to land; after that, it asks for a reload.
+  const JOIN_GRACE_SAFE_S = 8 * 60;
+  // A sent join that no node knows this long after it was sent can never land: its blockhash, which
+  // can't be newer than the send, lasts about a minute and a half.
+  const JOIN_PENDING_EXPIRES_MS = 5 * 60 * 1000;
   // A welcome claim sent without a confirmed answer: its plan, in this page's memory only. A retry
   // must name the same plan, which the API answers with the order it already placed.
   const unconfirmedWelcome = new Map();
 
-  /** A sent transaction's fate: { ok: true }, { ok: false } when it failed on chain, or null while it has not landed. */
+  /**
+   * A sent transaction's fate: { ok: true }, { ok: false } when it failed on chain, { ok: null,
+   * unseen } while it has not landed (`unseen` when every lookup answered and none knew it), or
+   * null once the page has moved on.
+   */
   async function waitForSignature(ctx, signature, alive) {
+    let unseen = true;
     for (let i = 0; i < SIGNATURE_ATTEMPTS; i++) {
       let status = null;
       try {
         const r = await ctx.rpc('getSignatureStatuses', [[signature], { searchTransactionHistory: true }]);
+        if (!r || !Array.isArray(r.value)) unseen = false;
         status = r && Array.isArray(r.value) ? r.value[0] : null;
-      } catch (e) { status = null; }
+      } catch (e) { status = null; unseen = false; }
       if (!alive()) return null;
       if (status && status.err) return { ok: false };
       if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) return { ok: true };
+      if (status) unseen = false;
       await new Promise((resolve) => setTimeout(resolve, SIGNATURE_POLL_MS));
       if (!alive()) return null;
+    }
+    return { ok: null, unseen };
+  }
+
+  /**
+   * A recent join from this wallet that already sent this week's amount, or null, read by the same
+   * rule the API applies: first the newest transactions on the wallet's own OTT account, whose
+   * history is short, so a burn sent from another device or before a reload is found however busy
+   * the incinerator's account is; then the newest on the incinerator's account, for a send from
+   * another of the wallet's token accounts. Any failure answers null; the confirmation step still
+   * tells the holder not to send twice.
+   */
+  async function findJoin(ctx, m, addr) {
+    if (!m.requirement || !/^\d{1,30}$/.test(String(m.requirement.burnUnits || ''))) return null;
+    const need = BigInt(String(m.requirement.burnUnits));
+    let own = null;
+    try { own = await Sol().associatedTokenAddress(addr, m.coin, m.tokenProgram); } catch (e) { own = null; }
+    const read = new Set();
+    for (const account of [own, m.burnAccount]) {
+      if (!account) continue;
+      let list;
+      try { list = await ctx.rpc('getSignaturesForAddress', [account, { limit: JOIN_SCAN_LIMIT, commitment: 'confirmed' }]); }
+      catch (e) { continue; }
+      for (const entry of Array.isArray(list) ? list : []) {
+        if (!entry || entry.err || !isSignature(entry.signature) || read.has(entry.signature)) continue;
+        read.add(entry.signature);
+        let tx = null;
+        try { tx = await ctx.rpc('getTransaction', [entry.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 1, commitment: 'confirmed' }]); }
+        catch (e) { continue; }
+        const join = joinFromTransaction(tx, { coin: m.coin, burnAccount: m.burnAccount });
+        if (join && join.wallet === addr && join.amount >= need) return entry.signature;
+      }
     }
     return null;
   }
 
   /**
-   * A recent join from this wallet that already sent this week's amount, or null: the newest
-   * transactions on the incinerator's account, read by the same rule the API applies. Any failure
-   * answers null; the confirmation step still tells the holder not to send twice.
+   * Why this wallet can't send the join now, or '': the amount on the page is for a week that has
+   * ended (past the grace the API allows), the wallet is a program account (a multisig or smart
+   * wallet: the ledger counts only ordinary wallets), or it is the project's treasury, which is
+   * never a member. Each of those burns would be gone and count for nothing.
    */
-  async function findJoin(ctx, m, addr) {
-    if (!m.requirement || !/^\d{1,30}$/.test(String(m.requirement.burnUnits || ''))) return null;
-    const need = BigInt(String(m.requirement.burnUnits));
-    let list;
-    try { list = await ctx.rpc('getSignaturesForAddress', [m.burnAccount, { limit: JOIN_SCAN_LIMIT, commitment: 'confirmed' }]); }
-    catch (e) { return null; }
-    for (const entry of Array.isArray(list) ? list : []) {
-      if (!entry || entry.err || !isSignature(entry.signature)) continue;
-      let tx = null;
-      try { tx = await ctx.rpc('getTransaction', [entry.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 1, commitment: 'confirmed' }]); }
-      catch (e) { continue; }
-      const join = joinFromTransaction(tx, { coin: m.coin, burnAccount: m.burnAccount });
-      if (join && join.wallet === addr && join.amount >= need) return entry.signature;
-    }
-    return null;
+  function joinRefusal(cfg, req, addr, nowS = Math.floor(Date.now() / 1000)) {
+    const S = Sol();
+    const week = weekOf(nowS);
+    const forWeek = Number(req && req.week);
+    const current = forWeek === week || (forWeek === week - 1 && nowS - weekStartOf(week) < JOIN_GRACE_SAFE_S);
+    if (!current) return 'The join amount on this page is for a week that has ended. Reload to see this week’s amount before you burn.';
+    const bytes = S && S.addressBytes(addr);
+    if (!bytes || !S.isOnCurve(bytes)) return 'This wallet is a program account, such as a multisig or a smart wallet. Joins count only from an ordinary wallet, so nothing was sent.';
+    if (cfg && addr === cfg.treasury) return 'The project treasury can’t join OT+T, so nothing was sent.';
+    return '';
   }
 
   /**
@@ -1003,8 +1085,9 @@
       clear(wrap);
       const join = knownJoin(addr);
       if (m.member === true || join) {
+        forgetPending(addr);
         if (m.welcomeOrder) paintMember(); else paintWelcome(join);
-      } else if (pendingJoins.has(addr)) paintPending(pendingJoins.get(addr));
+      } else if (knownPending(addr)) paintPending(knownPending(addr).signature);
       else if (m.enrolment && m.enrolment.open === true && req) paintJoin();
       else paintClosed();
     }
@@ -1056,6 +1139,8 @@
       try {
         if (!walletAvailable()) throw new Error('No Solana wallet found to send the burn.');
         if (!isAddress(m.coin) || !req) throw new Error('The burn details are not available. Reload and try again.');
+        const refusal = joinRefusal(cfg, req, addr);
+        if (refusal) throw new Error(refusal);
         say(status, 'Checking the join details…');
         let supply = null;
         try { const r = await ctx.rpc('getTokenSupply', [m.coin, { commitment: 'confirmed' }]); supply = r && r.value; } catch (e) { supply = null; }
@@ -1097,14 +1182,15 @@
         const signature = await window.OTTWallet.signAndSendTransaction(wire, message);
         if (!isSignature(signature)) throw new Error('The wallet did not return a transaction signature. Check your wallet before trying again.');
         sent = signature;
-        // Recorded before anything else can fail, so this page never offers a second send for it.
-        pendingJoins.set(addr, sent);
+        // Recorded before anything else can fail, so this page (and a reload of it) never offers a
+        // second send for it.
+        rememberPending(addr, sent);
         if (!stillHere(generation)) return;
         await settleJoin(sent, status);
       } catch (e) {
         // The wallet sent it for this wallet, but answered after the page had moved on: it may
         // still land, so this page never offers this wallet a second send for it.
-        if (!sent && e && e.account === addr && isSignature(e.signature)) { sent = e.signature; pendingJoins.set(addr, sent); }
+        if (!sent && e && e.account === addr && isSignature(e.signature)) { sent = e.signature; rememberPending(addr, sent); }
         if (!panel.isConnected || ctx.isCurrent && !ctx.isCurrent() || currentAccount(ctx) !== addr) return;
         if (sent) { paintPending(sent, 'The burn was sent, but its status could not be checked. Don’t burn again: check its status in a moment.'); return; }
         const rejected = e && (e.code === 4001 || /reject|denied|cancel|not approved/i.test(errText(e)));
@@ -1120,9 +1206,20 @@
       const generation = walletGeneration;
       say(status, 'Waiting for the burn to confirm on Solana…');
       const result = await waitForSignature(ctx, signature, () => stillHere(generation));
-      if (!stillHere(generation)) return;
-      if (!result) { paintPending(signature, 'The burn hasn’t confirmed yet. Don’t burn again: check its status in a moment.'); return; }
-      pendingJoins.delete(addr);
+      if (!stillHere(generation) || !result) return;
+      if (result.ok === null) {
+        // No node knows it, long after it was sent: it can no longer land, so nothing was burned.
+        const pending = knownPending(addr);
+        if (result.unseen && pending && pending.signature === signature && Date.now() - pending.sentAt > JOIN_PENDING_EXPIRES_MS) {
+          forgetPending(addr);
+          clear(wrap);
+          paintJoin('The burn never reached Solana and now can’t, so no OTT was burned. You can try again.');
+          return;
+        }
+        paintPending(signature, 'The burn hasn’t confirmed yet. Don’t burn again: check its status in a moment.');
+        return;
+      }
+      forgetPending(addr);
       if (!result.ok) {
         clear(wrap);
         paintJoin('The burn transaction failed on chain, so no OTT was burned. You can try again.');
@@ -1241,7 +1338,9 @@
             paintMine(ctx, cfg, allow, panel);
             return;
           }
-          if (/join transaction|did not send enough|join OT\+T first/i.test(msg) && m.member !== true) {
+          // Only the API's answer that the burn was read and does not count lets the page forget it.
+          // A burn the server can't see yet, or can't price yet, is kept for the next try.
+          if (e.status === 409 && /did not make this wallet a member|join OT\+T first/i.test(msg) && m.member !== true) {
             forgetJoin(addr);
             ctx.toast?.('Membership not confirmed', msg, 'error');
             repaintFrom(ctx, cfg, addr, allow, standing, panel);
@@ -1825,7 +1924,7 @@
   window.WhateverData = {
     render, renderMyData, signInMessage, loadAccount,
     // Membership helpers, shared with tests that hold them to the API's own rules.
-    joinTransaction, joinFromTransaction, welcomeEligible, publishedJoinMismatch, MAX_JOIN_SHARE_BPS,
+    joinTransaction, joinFromTransaction, welcomeEligible, publishedJoinMismatch, joinRefusal, MAX_JOIN_SHARE_BPS, JOIN_GRACE_SAFE_S,
     resetWallet: () => { walletGeneration++; lastAccount = null; lastRead = null; },
     selectPackage: (code) => { selectedPackageCode = String(code || ''); },
     // Shared with site/status.js, the same way SEL already is, so the two files cannot silently

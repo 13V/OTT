@@ -470,7 +470,8 @@
           return body.result;
         } catch (e) {
           lastError = e;
-          log('  rpc ' + method + ' on ' + url.replace(/[?#].*$/, '') + ': ' + (e && e.message));
+          // The host only: a keyed endpoint can carry its key in the path as well as the query.
+          log('  rpc ' + method + ' on ' + url.replace(/^(\w+:\/\/)(?:[^@/?#]*@)?([^/?#]*).*$/, '$1$2') + ': ' + (e && e.message));
           if (pauseMs) await new Promise((r) => setTimeout(r, pauseMs * Math.min(4, 1 + Math.floor(attempt / urls.length))));
         } finally { if (timer) clearTimeout(timer); }
       }
