@@ -101,7 +101,7 @@
   position: absolute; z-index: 2;
   transform: translate(-50%, -130%);
   background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius-control); box-shadow: var(--shadow-hover);
+  border-radius: var(--radius-control); box-shadow: var(--shadow-float);
   padding: 5px 9px; font-size: .72rem; font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; color: var(--text);
   white-space: nowrap; pointer-events: none;
@@ -186,23 +186,23 @@ th.u-th-active { color: var(--text); }
    row of these reads as one group of numbers rather than four cards competing for attention. */
 .u-tile {
   display: flex; align-items: flex-start; gap: 12px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
-  padding: 14px 16px;
+  background: transparent; border: 0; border-top: 1px solid var(--border-strong); border-radius: 0;
+  padding: 14px 0 6px;
 }
 .u-tile-icon {
   display: flex; align-items: center; justify-content: center; flex: none;
-  width: 34px; height: 34px; border-radius: 50%;
-  background: var(--accent-tint); border: 1px solid var(--border); color: var(--accent);
+  width: 30px; height: 30px; border-radius: 2px;
+  background: transparent; border: 1px solid var(--border-strong); color: var(--accent);
 }
 .u-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .u-tile-body { min-width: 0; flex: 1; }
 .u-tile-label {
-  font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
+  font: 600 11.5px/1.15 var(--font-sans); font-stretch: var(--wide); text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-secondary); margin-bottom: 8px;
 }
 .u-tile-value-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .u-tile-value {
-  font: 700 1.3rem/1 var(--font-sans);
+  font: 800 1.45rem/1 var(--font-sans); font-stretch: 106%;
   font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1;
   color: var(--text); letter-spacing: -0.01em;
 }

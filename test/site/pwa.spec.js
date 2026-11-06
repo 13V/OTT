@@ -171,13 +171,13 @@ test('the service worker caches public release files but never configuration, le
       cache: 'no-store',
     });
     await fetch(new URL('assets/flags/jp.svg', base));
-    await fetch(new URL('fonts/InstrumentSans-latin-variable.woff2', base));
+    await fetch(new URL('fonts/Archivo-latin-variable.woff2', base));
     return privatePaths.map((rel) => new URL(rel, base).href);
   }, { base, address: HOLDER });
   const urls = await cacheUrls(page);
   expect(urls).toContain(base + 'index.html');
   expect(urls).toContain(base + 'assets/flags/jp.svg');
-  expect(urls).toContain(base + 'fonts/InstrumentSans-latin-variable.woff2');
+  expect(urls).toContain(base + 'fonts/Archivo-latin-variable.woff2');
   for (const url of result) expect(urls).not.toContain(url);
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));

@@ -161,23 +161,24 @@ test('phone and tablet airport boards keep full names, usable buttons and locall
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     const type = await page.evaluate(() => ({
-      displayLoaded: document.fonts.check('400 32px "Instrument Serif"'),
-      bodyLoaded: document.fonts.check('400 16px "Instrument Sans"'),
-      monoLoaded: document.fonts.check('500 12px "Geist Mono"'),
+      displayLoaded: document.fonts.check('800 32px "Archivo"'),
+      bodyLoaded: document.fonts.check('400 16px "Archivo"'),
+      typedLoaded: document.fonts.check('700 16px "Courier Prime"'),
       boardFamily: getComputedStyle(document.querySelector('.ott-airport-board .cov-name')).fontFamily,
+      telegramFamily: getComputedStyle(document.querySelector('.ott-telegram')).fontFamily,
       displayFamily: getComputedStyle(document.querySelector('.ott-hero-title')).fontFamily,
       bodyFamily: getComputedStyle(document.body).fontFamily,
       fontUrls: performance.getEntriesByType('resource').filter((resource) => /\.woff2(?:\?|$)/.test(resource.name)).map((resource) => resource.name),
     }));
     expect(type.displayLoaded).toBe(true);
     expect(type.bodyLoaded).toBe(true);
-    expect(type.monoLoaded).toBe(true);
-    expect(type.displayFamily).toContain('Instrument Serif');
-    expect(type.bodyFamily).toContain('Instrument Sans');
-    expect(type.boardFamily).toContain('Geist Mono');
-    expect(type.fontUrls.some((url) => url.includes('InstrumentSerif'))).toBe(true);
-    expect(type.fontUrls.some((url) => url.includes('InstrumentSans'))).toBe(true);
-    expect(type.fontUrls.some((url) => url.includes('GeistMono'))).toBe(true);
+    expect(type.typedLoaded).toBe(true);
+    expect(type.displayFamily).toContain('Archivo');
+    expect(type.bodyFamily).toContain('Archivo');
+    expect(type.boardFamily).toContain('Archivo');
+    expect(type.telegramFamily).toContain('Courier Prime');
+    expect(type.fontUrls.some((url) => url.includes('Archivo'))).toBe(true);
+    expect(type.fontUrls.some((url) => url.includes('CourierPrime'))).toBe(true);
     expect(type.fontUrls.every((url) => url.startsWith(new URL(page.url()).origin + '/fonts/'))).toBe(true);
   }
   expect(errors).toEqual([]);

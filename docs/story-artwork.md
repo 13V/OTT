@@ -43,8 +43,10 @@ interface instead of competing with it.
 - Fine risograph grain and halftone texture, and generous dark negative space.
 - No text, letters, numbers, readable signs or logos in any scene.
 
-On the page each scene is framed as a still: a rounded panel with a hairline border
-(`.ott-story-figure` in `site/home.css`), with a line of the story in italic serif under it.
+On the page each scene is printed straight onto the ink, with no frame. The page's ground is the
+illustrations' own ink, and a soft mask fades every edge (`.ott-story-figure` in `site/home.css`).
+The big scenes run off one edge of the window. Each has a numbered caption, Fig. 1 to Fig. 9, in
+reading order, with one line of the story.
 
 ## Where each scene is used
 

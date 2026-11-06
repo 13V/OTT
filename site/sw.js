@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v17';
+const CACHE_NAME = CACHE_PREFIX + 'v18';
 const SHELL = [
-  'index.html', 'fonts.css?v=20261106-otter', 'style.css?v=20261106-otter', 'ui.css', 'home.css?v=20261106-otter', 'membership-story.css?v=20261106-otter', 'account-preview.css?v=20261106-otter',
-  'mobile-app.css?v=20261106-otter', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'account-preview.js?v=20261106-otter',
-  'membership-story.js?v=20261106-otter', 'home.js?v=20261106-otter', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261106-otter', 'app.js?v=20261106-otter', 'pwa.js',
+  'index.html', 'fonts.css?v=20261106-print', 'style.css?v=20261106-print', 'ui.css', 'home.css?v=20261106-print', 'membership-story.css?v=20261106-print', 'account-preview.css?v=20261106-print',
+  'mobile-app.css?v=20261106-print', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'account-preview.js?v=20261106-print',
+  'membership-story.js?v=20261106-print', 'home.js?v=20261106-print', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261106-print', 'app.js?v=20261106-print', 'pwa.js',
   'client-config.js?v=20261017-solana', 'solana.js?v=20261021-audit', 'wallet.js?v=20261017-solana',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',
@@ -21,9 +21,8 @@ const FLAGS = [
   'in', 'it', 'jp', 'mx', 'pt', 'sg', 'th', 'tr', 'us', 'vn',
 ].map((code) => 'assets/flags/' + code + '.svg');
 const FONTS = [
-  'InstrumentSans-latin-variable', 'InstrumentSans-latin-ext-variable',
-  'InstrumentSerif-latin-400', 'InstrumentSerif-latin-ext-400', 'InstrumentSerif-latin-400-italic', 'InstrumentSerif-latin-ext-400-italic',
-  'GeistMono-latin-400', 'GeistMono-latin-ext-400', 'GeistMono-latin-500', 'GeistMono-latin-ext-500',
+  'Archivo-latin-variable', 'Archivo-latin-ext-variable',
+  'CourierPrime-latin-400', 'CourierPrime-latin-ext-400', 'CourierPrime-latin-700', 'CourierPrime-latin-ext-700',
 ].map((name) => 'fonts/' + name + '.woff2');
 const ICONS = ['assets/app/icon.svg', 'assets/app/icon-180.png', 'assets/app/icon-192.png', 'assets/app/icon-512.png'];
 const urls = (files) => files.map((file) => new URL(file, ROOT).href);

@@ -1,301 +1,260 @@
-/* The public story. One otter carries it: every chapter has an ink scene, framed like a still on
- * the obsidian page, beside the protocol's figures in serif and mono. Account and status layouts
- * stay in style.css. */
-body.home-active .wrap { max-width: 1280px; }
+/* The public story as a telephone company's printed matter: numbered sections ruled like a report,
+ * the otter's scenes run off the edge of the page with no frame, the pitch typed on telegram strips
+ * and the terms set as a schedule of rates. Account and status layouts stay in style.css. */
 body.home-active #view { padding-top: 0; }
-#how-it-works, #plans, #coverage, #trust, #data-pool { scroll-margin-top: 96px; }
+#how-it-works, #plans, #coverage, #trust, #data-pool { scroll-margin-top: 88px; }
+/* How far a scene reaches past the column to touch the edge of the window. */
+:root { --bleed: max(16px, calc((100vw - var(--wrap-width)) / 2 + 24px)); }
+@media (max-width: 480px) { :root { --bleed: 16px; } }
+body.home-active #view > .section { padding-block: clamp(72px, 9vw, 128px) 0; }
+body.home-active #view > .section:last-child { padding-bottom: clamp(72px, 9vw, 128px); }
 
 /* ============================================================ shared pieces */
-.ott-eyebrow, .ott-company-name { color: var(--accent); font: 500 11px/1.3 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; }
-.ott-section-head { max-width: 860px; margin-bottom: 48px; }
-.ott-section-head h2 { margin-top: 18px; font: 400 clamp(40px, 5vw, 68px)/1 var(--font-display); letter-spacing: -.02em; }
-.ott-section-head p { max-width: 62ch; margin-top: 20px; color: var(--text-secondary); font-size: clamp(16px, 1.3vw, 19px); line-height: 1.6; }
+/* A numbered section: the number and name in the margin, the title and its paragraph beside them,
+   all under one rule. */
+.ott-section-head {
+  display: grid; grid-template-columns: minmax(150px, 3fr) minmax(0, 9fr); column-gap: clamp(24px, 4vw, 64px); row-gap: 20px;
+  align-items: start; margin-bottom: clamp(44px, 6vw, 80px); padding-top: 18px; border-top: 1px solid var(--border-strong);
+}
+.ott-eyebrow { grid-column: 1; grid-row: 1 / span 2; display: flex; align-items: baseline; gap: 14px; color: var(--text-secondary); font: 600 15px/1.3 var(--font-sans); }
+.ott-eyebrow b { min-width: 2.2em; color: var(--accent); font: 700 15px/1.3 var(--font-mono); }
+.ott-section-head h2 { grid-column: 2; max-width: 18ch; font: 800 clamp(40px, 5vw, 76px)/.93 var(--font-display); font-stretch: 104%; letter-spacing: -.04em; }
+.ott-section-head p { grid-column: 2; max-width: 56ch; color: var(--text-secondary); font-size: clamp(17px, 1.35vw, 19px); line-height: 1.6; }
+/* Inside a narrower column the margin folds above the title. */
+.ott-coverage-copy .ott-section-head, .ott-travel-copy .ott-section-head, .ott-faq-side .ott-section-head, .ott-trust-intro .ott-section-head { grid-template-columns: minmax(0, 1fr); }
+.ott-coverage-copy .ott-section-head > *, .ott-travel-copy .ott-section-head > *, .ott-faq-side .ott-section-head > *, .ott-trust-intro .ott-section-head > * { grid-column: 1; grid-row: auto; }
 
 .ott-primary-action {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; padding: 14px 26px;
-  border: 0; border-radius: var(--radius-button); background: var(--accent-gradient); color: var(--accent-ink);
-  font: 600 16px/1.2 var(--font-sans); letter-spacing: -.01em; text-align: center;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 10px 30px var(--accent-glow);
-  transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 54px; padding: 16px 26px;
+  border: 0; border-radius: var(--radius-button); background: var(--accent); color: var(--accent-ink);
+  font: 700 16px/1.1 var(--font-sans); letter-spacing: 0; text-align: center; transition: background-color .15s ease;
 }
-.ott-primary-action:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 14px 38px rgba(255, 106, 44, .38); }
-.ott-text-action { display: inline-flex; align-items: center; min-height: 44px; padding: 4px 0; border-bottom: 1px solid var(--border-strong); color: var(--text); font: 500 15px/1.2 var(--font-sans); }
-.ott-text-action:hover { color: var(--accent-hover); border-bottom-color: var(--accent); }
+.ott-primary-action:hover { background: var(--accent-hover); }
+.ott-text-action { display: inline-flex; align-items: center; min-height: 44px; padding: 4px 0; border-bottom: 1.5px solid var(--text); color: var(--text); font: 600 16px/1.2 var(--font-sans); }
+.ott-text-action:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* A scene from the story: the ink illustration framed as a still, with a line of the story under
-   it in the serif's italic. */
-.ott-story-figure { position: relative; min-width: 0; margin: 0; }
-.ott-story-figure > img {
-  display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius-panel);
-  background: #0A0D16; box-shadow: 0 30px 80px rgba(0, 0, 0, .45);
+/* A scene, printed straight onto the page: the ink of the drawing is the ink of the page. */
+.ott-story-figure { min-width: 0; margin: 0; }
+.ott-story-figure > img, .ott-close-art img {
+  display: block; width: 100%; height: auto;
+  /* A soft printed edge on every side, so a scene fades into the ink instead of ending in a box. */
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 7%, #000 93%, transparent), linear-gradient(to bottom, transparent, #000 7%, #000 93%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #000 7%, #000 93%, transparent), linear-gradient(to bottom, transparent, #000 7%, #000 93%, transparent);
+  mask-composite: intersect;
 }
-.ott-story-figure > figcaption {
-  max-width: 52ch; margin-top: 16px; padding-left: 14px; border-left: 1px solid rgba(255, 106, 44, .55);
-  color: var(--text-secondary); font: italic 400 17px/1.45 var(--font-serif);
+.ott-story-figure > figcaption, .ott-hero-caption {
+  display: flex; align-items: baseline; gap: 12px; max-width: 64ch; margin-top: 14px;
+  color: var(--text-secondary); font: 400 14px/1.5 var(--font-sans);
 }
+.ott-fig { flex: none; color: var(--text); font: 700 11.5px/1.5 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-story-figure > figcaption strong { color: var(--text); font-weight: 700; }
 
 /* ============================================================ hero */
 .ott-home, .ott-hero { overflow: clip; }
-.ott-hero.section { padding: clamp(36px, 5vw, 72px) 0 0; border: 0; background: none; }
-.ott-hero-inner { display: grid; grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr); align-items: center; column-gap: clamp(32px, 5vw, 80px); }
-.ott-hero-copy { grid-column: 1; grid-row: 1; min-width: 0; padding-block: 12px 104px; }
-.ott-company-name {
-  display: inline-flex; align-items: center; gap: 10px; margin-bottom: 30px; padding: 8px 14px 8px 11px;
-  border: 1px solid var(--border-strong); border-radius: 999px; background: rgba(255, 255, 255, .03);
-  color: var(--text-secondary); font-size: 10.5px; white-space: nowrap;
-}
-.ott-company-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
-.ott-hero-title { margin: 0; color: var(--text); font: 400 clamp(60px, 7.2vw, 112px)/.92 var(--font-display); letter-spacing: -.025em; }
+body.home-active #view > .ott-hero.section { padding: clamp(36px, 5vw, 72px) 0 0; }
+.ott-hero-inner { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: clamp(24px, 3vw, 48px); align-items: center; }
+.ott-hero-copy { grid-column: 1; grid-row: 1; position: relative; z-index: 1; min-width: 0; padding-block: 12px 40px; }
+.ott-hero-title { margin: 0; color: var(--text); font: 800 clamp(60px, 7.8vw, 114px)/.86 var(--font-display); font-stretch: 100%; letter-spacing: -.045em; }
 .ott-hero-title span { display: block; }
-.ott-hero-accent { color: var(--accent); font-style: italic; }
-.ott-hero-sub { max-width: 30ch; margin-top: 30px; color: var(--text); font: 400 clamp(19px, 1.6vw, 23px)/1.45 var(--font-sans); letter-spacing: -.01em; }
-.ott-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; margin-top: 34px; }
-.ott-hero-note { max-width: 50ch; margin-top: 30px; padding-left: 14px; border-left: 2px solid var(--accent); color: var(--text-secondary); font-size: 13.5px; line-height: 1.55; }
-.ott-hero-trust { display: inline-flex; align-items: center; min-height: 44px; margin-top: 10px; color: var(--accent); font: 500 11px/1.2 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.ott-hero-trust:hover { color: var(--accent-hover); }
-
-/* style.css draws .hero-visual as a panel; here the panel is the illustration itself. */
-.ott-hero-art.hero-visual { grid-column: 2; grid-row: 1; position: relative; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
-.ott-hero-art.hero-visual::before { content: none; }
-.ott-hero-scene { position: relative; isolation: isolate; width: min(100%, 560px); margin: 0 0 0 auto; }
-.ott-hero-scene::before { content: ''; position: absolute; z-index: -1; inset: 18% -10% -4% 6%; background: radial-gradient(closest-side, rgba(255, 106, 44, .24), transparent); filter: blur(34px); }
-.ott-hero-scene > img { display: block; width: 100%; height: auto; border: 1px solid var(--border-strong); border-radius: 32px; background: #0A0D16; box-shadow: 0 40px 110px rgba(0, 0, 0, .6); }
-.ott-hero-caption { position: absolute; top: 28px; left: 30px; right: 30px; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
-.ott-hero-caption span { color: var(--accent); font: 500 10.5px/1 var(--font-mono); letter-spacing: .18em; }
-.ott-hero-caption strong { color: var(--text); font: italic 400 clamp(28px, 2.6vw, 38px)/1.05 var(--font-serif); letter-spacing: -.01em; }
-
-/* The pool, as its parameters: a glass panel that rises over the foot of the illustration. */
-.ott-pool-card {
-  grid-column: 1 / -1; grid-row: 2; position: relative; z-index: 2; margin-top: -64px;
-  display: grid; grid-template-columns: minmax(260px, .9fr) minmax(0, 2.1fr);
-  grid-template-areas: 'head head' 'headline rows' 'split rows' 'legend route';
-  border: 1px solid var(--border-strong); border-radius: 24px; overflow: hidden;
-  background: rgba(13, 15, 20, .84); -webkit-backdrop-filter: blur(20px) saturate(140%); backdrop-filter: blur(20px) saturate(140%);
-  box-shadow: var(--highlight), 0 30px 90px rgba(0, 0, 0, .55);
+/* The pitch, typed on telegram strips and pasted on, a little out of true. */
+.ott-hero-sub { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 44px; }
+.ott-telegram {
+  display: inline-block; padding: 10px 16px 9px; background: var(--paper); color: var(--paper-ink);
+  font: 700 clamp(15px, 1.3vw, 18px)/1.25 var(--font-mono); letter-spacing: .03em; text-transform: uppercase;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
 }
-.ott-pool-head { grid-area: head; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border); }
-.ott-pool-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.ott-pool-icon { position: relative; width: 34px; height: 34px; flex: none; border-radius: 10px; background: var(--accent-gradient); box-shadow: 0 6px 18px var(--accent-glow); }
-.ott-pool-icon::before, .ott-pool-icon::after { content: ''; position: absolute; left: 50%; top: 50%; background: var(--accent-ink); border-radius: 2px; transform: translate(-50%, -50%); }
-.ott-pool-icon::before { width: 14px; height: 3px; }
-.ott-pool-icon::after { width: 3px; height: 14px; }
-.ott-pool-id strong { display: block; font: 600 15px/1.2 var(--font-sans); letter-spacing: -.01em; }
-.ott-pool-id span { display: block; margin-top: 3px; color: var(--text-tertiary); font: 500 10.5px/1.2 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
-.ott-pool-state { display: inline-flex; align-items: center; gap: 8px; padding: 6px 11px; border: 1px solid rgba(255, 106, 44, .4); border-radius: 999px; background: var(--accent-tint); color: var(--accent); font: 500 10px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
-.ott-pool-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
-.ott-pool-state.is-live { border-color: rgba(61, 220, 151, .4); background: var(--positive-tint); color: var(--positive); }
-.ott-pool-headline { grid-area: headline; padding: 22px 24px 0; border-right: 1px solid var(--border); }
-.ott-pool-k { display: block; color: var(--text-secondary); font: 500 10.5px/1.3 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.ott-pool-big { display: flex; align-items: baseline; gap: 4px; margin-top: 10px; font: 400 88px/.9 var(--font-display); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.ott-pool-big small { color: var(--accent); font: 400 44px/1 var(--font-display); }
-.ott-pool-sub { display: block; max-width: 28ch; margin-top: 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
-.ott-pool-split { grid-area: split; display: flex; align-items: center; gap: 4px; padding: 20px 24px 0; border-right: 1px solid var(--border); }
-.ott-pool-split i { flex: calc(var(--w) * 100) 1 0; height: 8px; border-radius: 99px; background: var(--accent-gradient); box-shadow: 0 0 14px var(--accent-glow); }
-.ott-pool-split i + i { background: rgba(138, 180, 255, .55); box-shadow: none; }
-.ott-pool-legend { grid-area: legend; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px 18px; padding: 14px 24px 22px; border-right: 1px solid var(--border); color: var(--text-secondary); font: 500 10.5px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
-.ott-pool-legend span { display: inline-flex; align-items: center; gap: 8px; }
-.ott-pool-legend b { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
-.ott-pool-legend b.is-cool { background: var(--accent-cool); }
-.ott-pool-rows { grid-area: rows; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; margin: 0; }
-.ott-pool-row { min-width: 0; padding: 20px 22px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
-.ott-pool-row:nth-child(3n) { border-right: 0; }
-.ott-pool-row dt { color: var(--text-tertiary); font: 500 10px/1.2 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.ott-pool-row dd { margin: 9px 0 0; color: var(--text); font: 500 16px/1.3 var(--font-sans); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
-.ott-pool-row .ott-countdown { color: var(--accent); font-family: var(--font-mono); font-size: 15px; letter-spacing: 0; }
-.ott-pool-route { grid-area: route; display: flex; align-items: center; gap: 12px; padding: 0 22px; color: var(--text-secondary); font: 500 10.5px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
-.ott-pool-route span { flex: none; }
-.ott-pool-route span:last-child { color: var(--accent); }
-.ott-pool-route i { flex: 1; min-width: 14px; height: 1px; background: linear-gradient(90deg, rgba(255, 106, 44, .2), rgba(255, 106, 44, .8)); }
+.ott-telegram:first-child { transform: rotate(-.6deg); }
+.ott-telegram + .ott-telegram { margin-left: clamp(16px, 3vw, 44px); transform: rotate(.4deg); }
+.ott-telegram b { color: var(--paper-muted); font-weight: 700; }
+.ott-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 30px; margin-top: 44px; }
+.ott-hero-note { max-width: 52ch; margin-top: 30px; color: var(--text-secondary); font-size: 14.5px; line-height: 1.55; }
+.ott-hero-trust { display: inline-flex; align-items: center; min-height: 44px; margin-top: 6px; color: var(--accent); font: 600 14.5px/1.2 var(--font-sans); }
+.ott-hero-trust:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 4px; }
 
-.ott-token-strip { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 40px; padding-block: 22px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.ott-token-facts { display: flex; flex-wrap: wrap; gap: 24px 64px; margin: 0; }
-.ott-token-fact dt { margin-bottom: 8px; color: var(--text-tertiary); font: 500 10px/1.2 var(--font-mono); letter-spacing: .14em; }
-.ott-token-fact dd { margin: 0; font: 500 17px/1.3 var(--font-sans); letter-spacing: -.01em; }
-.ott-token-status { display: inline-flex; align-items: center; gap: 9px; min-height: 24px; color: var(--text); }
-.ott-status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-.ott-token-rules { display: inline-flex; align-items: center; min-height: 44px; color: var(--text-secondary); font: 500 14px/1.2 var(--font-sans); border-bottom: 1px solid var(--border-strong); }
-.ott-token-status:hover, .ott-token-rules:hover { color: var(--accent-hover); }
+/* style.css draws .hero-visual as a box; here it is the drawing, running off the right edge. */
+.ott-hero-art.hero-visual { grid-column: 2; grid-row: 1; position: relative; width: auto; min-height: 0; margin: 0 calc(-1 * var(--bleed)) 0 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.ott-hero-scene { margin: 0; }
+.ott-hero-scene > img {
+  display: block; width: 100%; height: auto;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 18%), linear-gradient(to bottom, transparent, #000 12%, #000 90%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #000 18%), linear-gradient(to bottom, transparent, #000 12%, #000 90%, transparent);
+  mask-composite: intersect;
+}
+.ott-hero-caption { margin: 12px 0 0; padding-right: var(--bleed); }
+.ott-hero-caption strong { color: var(--text); font-weight: 600; }
 
-/* ============================================================ the parameters */
-.ott-params.section { padding-block: 64px 24px; }
-.ott-params-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--panel-gradient), var(--bg-raised); box-shadow: var(--highlight); overflow: hidden; }
-.ott-param { min-width: 0; padding: 28px 28px 30px; border-right: 1px solid var(--border); }
-.ott-param:last-child { border-right: 0; }
-.ott-param-value { display: flex; align-items: baseline; gap: 3px; font: 400 clamp(46px, 4.6vw, 64px)/1 var(--font-display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.ott-param-value small { color: var(--accent); font: 400 .6em/1 var(--font-display); }
-.ott-param-label { display: block; margin-top: 16px; color: var(--accent); font: 500 10.5px/1.3 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
-.ott-param p { max-width: 30ch; margin-top: 8px; color: var(--text-secondary); font-size: 13.5px; line-height: 1.5; }
+/* The programme's line on the exchange board. */
+.ott-token-strip { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; justify-content: space-between; gap: 20px 32px; flex-wrap: wrap; margin-top: clamp(24px, 4vw, 48px); padding-block: 20px; border-block: 1px solid var(--border-strong); }
+.ott-token-facts { display: flex; flex-wrap: wrap; row-gap: 16px; margin: 0; }
+.ott-token-fact { padding: 0 clamp(18px, 2.6vw, 40px); border-left: 1px solid var(--border); }
+.ott-token-fact:first-child { padding-left: 0; border-left: 0; }
+.ott-token-fact dt { margin-bottom: 8px; color: var(--text-tertiary); font: 600 11.5px/1.2 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-token-fact dd { margin: 0; color: var(--text); font: 700 19px/1.2 var(--font-sans); font-stretch: 104%; letter-spacing: -.01em; }
+.ott-token-fact .ott-countdown { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ott-token-status { display: inline-flex; align-items: center; gap: 9px; color: var(--text); }
+.ott-status-dot { width: 8px; height: 8px; flex: none; background: var(--accent); }
+.ott-token-rules { display: inline-flex; align-items: center; min-height: 44px; color: var(--text); font: 600 15px/1.2 var(--font-sans); border-bottom: 1.5px solid var(--border-strong); }
+.ott-token-status:hover, .ott-token-rules:hover { color: var(--accent); }
+
+/* ============================================================ the schedule of rates */
+.ott-tariff-wrap { min-width: 0; }
+.ott-tariff-table { width: 100%; border-collapse: collapse; }
+.ott-tariff-table thead th { padding: 0 24px 14px 0; border-bottom: 1px solid var(--border-strong); color: var(--text-tertiary); text-align: left; font: 600 11.5px/1.2 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-tariff-table tbody th, .ott-tariff-table td { padding: 22px 24px 22px 0; border-bottom: 1px solid var(--border); text-align: left; vertical-align: baseline; }
+.ott-tariff-table tbody th { width: 25%; color: var(--text); font: 600 18px/1.3 var(--font-sans); }
+.ott-tariff-table .ott-rate { width: 23%; color: var(--text); font: 800 clamp(30px, 3.2vw, 44px)/1 var(--font-sans); font-stretch: 108%; letter-spacing: -.035em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ott-tariff-table td:last-child { padding-right: 0; color: var(--text-secondary); font-size: 16px; line-height: 1.55; }
 
 /* ============================================================ coverage and plans */
 .ott-catalogue { background: none; }
-.ott-coverage-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 6vw, 96px); align-items: center; }
+.ott-coverage-layout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(36px, 5vw, 80px); align-items: center; }
 .ott-coverage-copy { min-width: 0; }
-.ott-coverage-copy .ott-section-head { margin-bottom: 30px; }
-.ott-coverage-copy .ott-section-head h2 { max-width: 14ch; }
-.ott-coverage-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 26px; }
-.ott-destination-shortcut { display: inline-flex; align-items: center; min-height: 44px; padding: 10px 16px; border: 1px solid var(--border-strong); border-radius: 999px; background: rgba(255, 255, 255, .03); color: var(--text); font: 500 14px/1 var(--font-sans); white-space: nowrap; transition: border-color .15s ease, color .15s ease; }
-.ott-destination-shortcut:hover { border-color: rgba(255, 106, 44, .6); color: var(--accent-hover); }
-.ott-coverage-copy .search-shell { margin-bottom: 26px; }
+.ott-coverage-copy .ott-section-head { margin-bottom: 32px; }
+.ott-coverage-art { margin-right: calc(-1 * var(--bleed)); }
+.ott-coverage-art > figcaption { padding-right: var(--bleed); }
+.ott-coverage-shortcuts { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0 0 30px; }
+.ott-destination-shortcut { display: inline-flex; align-items: center; min-height: 44px; color: var(--text); font: 600 16px/1.2 var(--font-sans); border-bottom: 1.5px solid var(--border-strong); white-space: nowrap; }
+.ott-destination-shortcut:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.ott-coverage-copy .search-shell { margin-bottom: 28px; }
 .ott-coverage-copy .destination-search { width: 100%; }
-.ott-clear-search { flex: none; min-width: 72px; min-height: 56px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 16px; background: transparent; color: var(--text-secondary); font: 500 14px/1 var(--font-sans); cursor: pointer; }
-.ott-clear-search:hover { color: var(--text); background: var(--surface-2); }
+.ott-clear-search { flex: none; min-width: 72px; min-height: 56px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-button); background: transparent; color: var(--text-secondary); font: 600 14.5px/1 var(--font-sans); cursor: pointer; }
+.ott-clear-search:hover { color: var(--text); border-color: var(--text-secondary); }
 .ott-coverage-copy .destination-results { right: 0; }
 .ott-coverage-copy .destination-result { min-height: 44px; color: var(--text); cursor: pointer; }
-.ott-coverage-result { padding: 20px 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel-gradient), var(--surface); box-shadow: var(--highlight); }
-.ott-coverage-result-label { display: block; color: var(--accent); font: 500 10px/1.4 var(--font-mono); letter-spacing: .14em; }
-.ott-coverage-result h3 { margin-top: 8px; font: 400 32px/1.05 var(--font-display); letter-spacing: -.01em; }
-.ott-coverage-availability { margin-top: 8px; color: var(--text); font-size: 15px; line-height: 1.5; }
-.ott-coverage-region { margin-top: 4px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
-.ott-coverage-device { max-width: 52ch; margin-top: 16px; color: var(--text-tertiary); font-size: 13px; line-height: 1.5; }
-.ott-coverage-art > figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-style: normal; }
-.ott-coverage-art > figcaption strong { color: var(--text); font: 400 26px/1 var(--font-display); white-space: nowrap; }
-.ott-coverage-art > figcaption span { color: var(--text-secondary); font: italic 400 17px/1.3 var(--font-serif); }
+.ott-coverage-result { padding: 18px 0 0; border-top: 1px solid var(--border-strong); }
+.ott-coverage-result-label { display: block; color: var(--accent); font: 600 11.5px/1.4 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; }
+.ott-coverage-result h3 { margin-top: 8px; font: 800 34px/1 var(--font-display); font-stretch: 104%; letter-spacing: -.03em; }
+.ott-coverage-availability { margin-top: 8px; color: var(--text); font-size: 15.5px; line-height: 1.5; }
+.ott-coverage-region { margin-top: 4px; color: var(--text-secondary); font-size: 14px; line-height: 1.5; }
+.ott-coverage-device { max-width: 52ch; margin-top: 16px; color: var(--text-tertiary); font-size: 13.5px; line-height: 1.5; }
 
-.ott-plan-details { margin-top: 56px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.ott-plan-details > summary, .ott-coverage-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 64px; padding: 18px 2px; cursor: pointer; color: var(--text); font: 500 17px/1.3 var(--font-sans); list-style: none; }
+.ott-plan-details { margin-top: clamp(48px, 6vw, 80px); border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
+.ott-plan-details > summary, .ott-coverage-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 68px; padding: 18px 0; cursor: pointer; color: var(--text); font: 700 19px/1.3 var(--font-sans); list-style: none; }
 .ott-plan-details > summary::-webkit-details-marker, .ott-coverage-details > summary::-webkit-details-marker { display: none; }
-.ott-plan-details > summary::after { content: '+'; flex: none; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--text-secondary); font: 400 18px/1 var(--font-sans); transition: transform .2s ease, color .2s ease; }
-.ott-plan-details[open] > summary::after { transform: rotate(45deg); color: var(--accent); border-color: rgba(255, 106, 44, .5); }
+.ott-plan-details > summary::after { content: '+'; flex: none; width: 24px; color: var(--text-secondary); font: 400 28px/1 var(--font-sans); text-align: center; transition: transform .2s ease, color .2s ease; }
+.ott-plan-details[open] > summary::after { transform: rotate(45deg); color: var(--accent); }
 .ott-plan-details[open] > summary { border-bottom: 1px solid var(--border); }
-.ott-plan-details-inner { padding: 26px 0 30px; }
-.ott-plan-details-inner > label { display: block; margin-bottom: 10px; color: var(--text-secondary); font: 500 11px/1.2 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.ott-place-select { display: block; width: 100%; max-width: 520px; height: 54px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-2); color: var(--text); font-size: 16px; }
+.ott-plan-details-inner { padding: 26px 0 32px; }
+.ott-plan-details-inner > label { display: block; margin-bottom: 10px; color: var(--text-secondary); font: 600 14px/1.25 var(--font-sans); }
+.ott-place-select { display: block; width: 100%; max-width: 520px; height: 54px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--bg-raised); color: var(--text); font-size: 16px; }
 .ott-plan-grid { margin-top: 26px; }
-.ott-credit-explain, .ott-prelaunch-explain { max-width: 80ch; margin-top: 20px; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.ott-credit-explain, .ott-prelaunch-explain { max-width: 80ch; margin-top: 20px; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
 .ott-prelaunch-explain { margin-top: 8px; color: var(--text-tertiary); }
 .ott-package-empty { margin-top: 12px; color: var(--text-secondary); }
 
-/* The departures board: every covered place, flipped up in mono like a terminal's board. */
-.ott-coverage-details { margin-top: 0; border-top: 0; }
-.ott-coverage-details > summary > span { color: var(--text-tertiary); font: 500 10.5px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.ott-airport-scene { margin: 4px 0 24px; }
-.ott-airport-board { padding: clamp(18px, 2.4vw, 30px); border: 1px solid var(--border-strong); border-radius: 24px; background: linear-gradient(180deg, #0E1117 0%, #090B0F 100%); box-shadow: var(--highlight), 0 30px 80px rgba(0, 0, 0, .45); }
-.ott-airport-board-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
-.ott-airport-board-label { display: block; color: var(--accent); font: 500 10.5px/1.2 var(--font-mono); letter-spacing: .16em; }
-.ott-airport-board-head h3 { margin-top: 10px; font: 400 clamp(30px, 3vw, 40px)/1 var(--font-display); letter-spacing: -.01em; }
-.ott-airport-board-head p { max-width: 28ch; color: var(--text-secondary); font-size: 13px; line-height: 1.4; text-align: right; }
-.ott-coverage-group h4 { margin: 22px 0 4px; color: var(--text-tertiary); font: 500 10px/1.2 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; }
-.ott-coverage-details .cov-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 22px; margin: 0; border: 0; border-radius: 0; background: none; overflow: visible; }
-.ott-coverage-details .cov-item { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 2px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none; color: var(--text); cursor: pointer; transition: color .15s ease; }
-.ott-coverage-details .cov-name { min-width: 0; color: var(--text); font: 500 12.5px/1.25 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
-.ott-coverage-details .cov-flag { flex: none; width: 22px; height: 16px; border-radius: 3px; object-fit: cover; box-shadow: 0 0 0 1px rgba(255, 255, 255, .14); }
-.ott-coverage-details .cov-arrow { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 13px; transition: color .15s ease, transform .15s ease; }
-.ott-coverage-details .cov-item:hover .cov-name, .ott-coverage-details .cov-item:focus-visible .cov-name { color: var(--accent-hover); }
-.ott-coverage-details .cov-item:hover .cov-arrow { color: var(--accent); transform: translate(2px, -2px); }
+/* The directory: every covered place, listed the way a telephone book lists names. */
+.ott-coverage-details { border-top: 0; border-bottom: 1px solid var(--border-strong); }
+.ott-coverage-details > summary > span { color: var(--text-tertiary); font: 600 11.5px/1 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-airport-scene { margin: 8px 0 32px; }
+.ott-airport-board { padding: 0; border: 0; background: none; }
+.ott-airport-board-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding-bottom: 18px; }
+.ott-airport-board-label { display: block; color: var(--accent); font: 600 11.5px/1.2 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-airport-board-head h3 { margin-top: 10px; font: 800 clamp(32px, 3.4vw, 46px)/.95 var(--font-display); font-stretch: 106%; letter-spacing: -.035em; }
+.ott-airport-board-head p { max-width: 30ch; color: var(--text-secondary); font-size: 14.5px; line-height: 1.4; text-align: right; }
+.ott-coverage-group h4 { margin: 26px 0 0; padding-bottom: 10px; border-bottom: 1px solid var(--border-strong); color: var(--text-tertiary); font: 600 11.5px/1.2 var(--font-sans); font-stretch: var(--wide); letter-spacing: .06em; text-transform: uppercase; }
+.ott-coverage-details .cov-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 32px; margin: 0; border: 0; border-radius: 0; background: none; overflow: visible; }
+.ott-coverage-details .cov-item { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none; color: var(--text); cursor: pointer; }
+.ott-coverage-details .cov-name { min-width: 0; color: var(--text); font: 500 16px/1.25 var(--font-sans); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.ott-coverage-details .cov-flag { flex: none; width: 22px; height: 16px; border-radius: 1px; object-fit: cover; box-shadow: 0 0 0 1px rgba(238, 231, 215, .2); }
+.ott-coverage-details .cov-arrow { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 14px; }
+.ott-coverage-details .cov-item:hover .cov-name, .ott-coverage-details .cov-item:focus-visible .cov-name { color: var(--accent); }
+.ott-coverage-details .cov-item:hover .cov-arrow { color: var(--accent); }
 .ott-coverage-details .cov-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ott-coverage-region-group .cov-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.ott-airport-note { margin-top: 14px; color: var(--text-tertiary); font-size: 13px; line-height: 1.5; }
+.ott-airport-note { margin-top: 16px; color: var(--text-tertiary); font-size: 13.5px; line-height: 1.5; }
 .ott-catalogue button:focus-visible, .ott-catalogue input:focus-visible, .ott-catalogue select:focus-visible, .ott-catalogue summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* ============================================================ travel */
 .ott-travel { background: none; }
-.ott-travel-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); gap: clamp(36px, 5vw, 80px); align-items: center; }
-.ott-travel-image .ott-scene-caption { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 14px; font-style: normal; }
-.ott-scene-caption strong { color: var(--text); font: 500 11px/1.2 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
-.ott-scene-caption span { color: var(--text-secondary); font: italic 400 17px/1.35 var(--font-serif); }
-.ott-travel-copy .ott-section-head { margin-bottom: 26px; }
-.ott-travel-steps { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
-.ott-benefit { display: grid; grid-template-columns: 44px 1fr; align-items: baseline; gap: 14px; padding: 22px 0; border-bottom: 1px solid var(--border); }
-.ott-benefit span { color: var(--accent); font: 500 11px/1 var(--font-mono); letter-spacing: .12em; }
-.ott-benefit p { font: 400 clamp(26px, 2.4vw, 34px)/1.1 var(--font-display); letter-spacing: -.01em; }
+.ott-travel-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(36px, 5vw, 80px); align-items: center; }
+.ott-travel-image { margin-left: calc(-1 * var(--bleed)); }
+.ott-travel-image > figcaption { padding-left: var(--bleed); }
+.ott-scene-caption strong { color: var(--text); font-weight: 700; }
+.ott-travel-copy { min-width: 0; }
+.ott-travel-copy .ott-section-head { margin-bottom: 28px; }
+.ott-travel-steps { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border-strong); }
+.ott-benefit { display: grid; grid-template-columns: 52px 1fr; align-items: baseline; gap: 12px; padding: 22px 0; border-bottom: 1px solid var(--border); }
+.ott-benefit span { color: var(--text-tertiary); font: 400 15px/1 var(--font-mono); }
+.ott-benefit p { font: 700 clamp(24px, 2.4vw, 34px)/1.1 var(--font-sans); font-stretch: 104%; letter-spacing: -.025em; }
 
 /* ============================================================ questions and the close */
 .ott-faq { background: none; }
-.ott-faq-layout { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: clamp(32px, 5vw, 80px); align-items: start; }
-.ott-faq-side { position: sticky; top: 104px; }
+.ott-faq-layout { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(32px, 5vw, 80px); align-items: start; }
+.ott-faq-side { position: sticky; top: 100px; }
 .ott-faq-side .ott-section-head { margin-bottom: 18px; }
-.ott-faq-more { max-width: 34ch; color: var(--text-secondary); font-size: 15px; line-height: 1.55; }
-.ott-faq-more a { color: var(--accent); border-bottom: 1px solid rgba(255, 106, 44, .45); }
+.ott-faq-more { max-width: 34ch; color: var(--text-secondary); font-size: 15.5px; line-height: 1.55; }
+.ott-faq-more a { color: var(--accent); border-bottom: 1px solid currentColor; }
 .ott-faq-layout .faq-list { max-width: none; min-width: 0; }
 
-.ott-close {
-  position: relative; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); align-items: center; gap: clamp(28px, 5vw, 72px);
-  margin-top: 96px; padding: clamp(20px, 3vw, 36px); border: 1px solid var(--border); border-radius: 36px;
-  background: radial-gradient(90% 120% at 100% 100%, rgba(255, 106, 44, .14), transparent 60%), var(--panel-gradient), var(--bg-raised);
-  box-shadow: var(--highlight), 0 40px 120px rgba(0, 0, 0, .5); overflow: hidden;
-}
-.ott-close-art { min-width: 0; margin: 0; }
-.ott-close-art img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 26px; background: #0A0D16; }
-.ott-close-copy { min-width: 0; padding-right: clamp(0px, 3vw, 40px); }
-.ott-close h2 { margin-top: 18px; font: 400 clamp(44px, 5.4vw, 76px)/.98 var(--font-display); letter-spacing: -.02em; }
-.ott-close-story { max-width: 40ch; margin-top: 20px; color: var(--text-secondary); font: italic 400 clamp(18px, 1.5vw, 21px)/1.45 var(--font-serif); }
-.ott-close-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 26px; margin-top: 32px; }
+.ott-close { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); align-items: center; gap: clamp(32px, 5vw, 80px); margin-top: clamp(96px, 12vw, 160px); padding-top: clamp(28px, 4vw, 48px); border-top: 1px solid var(--border-strong); }
+.ott-close-art { min-width: 0; margin: 0 0 0 calc(-1 * var(--bleed)); }
+.ott-close-art img { display: block; width: 100%; height: auto; }
+.ott-close-art figcaption { display: flex; align-items: baseline; gap: 12px; margin-top: 14px; padding-left: var(--bleed); color: var(--text-secondary); font-size: 14px; }
+.ott-close-copy { min-width: 0; }
+.ott-close h2 { margin-top: 22px; font: 800 clamp(52px, 6.6vw, 104px)/.88 var(--font-display); font-stretch: 104%; letter-spacing: -.045em; }
+.ott-close-story { max-width: 36ch; margin-top: 24px; color: var(--text-secondary); font-size: clamp(18px, 1.5vw, 21px); line-height: 1.5; }
+.ott-close-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 30px; margin-top: 36px; }
+.ott-close .ott-eyebrow { display: inline-block; padding: 6px 10px; border: 2px solid var(--accent); border-radius: 2px; color: var(--accent); font: 800 12px/1.1 var(--font-sans); font-stretch: 125%; letter-spacing: .07em; transform: rotate(-2.5deg); }
 
 /* ============================================================ narrower screens */
-@media (max-width: 1150px) {
-  .ott-pool-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ott-pool-row:nth-child(3n) { border-right: 1px solid var(--border); }
-  .ott-pool-row:nth-child(2n) { border-right: 0; }
-  .ott-params-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ott-param:nth-child(2n) { border-right: 0; }
-  .ott-param:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
-  .ott-coverage-details .cov-grid, .ott-coverage-region-group .cov-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .ott-coverage-details .cov-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
+  .ott-section-head { grid-template-columns: minmax(0, 1fr); }
+  .ott-eyebrow { grid-row: auto; }
+  .ott-section-head h2, .ott-section-head p { grid-column: 1; }
   .ott-hero-inner { grid-template-columns: minmax(0, 1fr); }
   .ott-hero-copy { padding-bottom: 0; }
-  .ott-hero-art.hero-visual { grid-column: 1; grid-row: 2; margin-top: 36px; }
-  .ott-hero-scene { margin-inline: auto; }
-  .ott-pool-card { grid-column: 1; grid-row: 3; margin-top: -48px; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'head' 'headline' 'split' 'legend' 'rows' 'route'; }
-  .ott-pool-headline, .ott-pool-split, .ott-pool-legend { border-right: 0; }
-  .ott-pool-legend { border-bottom: 1px solid var(--border); }
-  .ott-pool-route { padding: 18px 22px; }
-  .ott-token-strip { grid-column: 1; grid-row: 4; }
+  /* On a phone the drawing runs edge to edge under the pitch. */
+  .ott-hero-art.hero-visual { grid-column: 1; grid-row: 2; margin: 32px calc(-1 * var(--bleed)) 0; }
+  .ott-hero-scene > img { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent); mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent); }
+  .ott-hero-caption { padding-inline: var(--bleed); }
+  .ott-token-strip { grid-column: 1; grid-row: 3; }
   .ott-coverage-layout, .ott-travel-grid, .ott-faq-layout, .ott-close { grid-template-columns: minmax(0, 1fr); }
-  .ott-coverage-art { max-width: 640px; }
+  .ott-coverage-art, .ott-travel-image, .ott-close-art { margin-inline: calc(-1 * var(--bleed)); }
+  .ott-coverage-art > figcaption, .ott-travel-image > figcaption, .ott-close-art figcaption { padding-inline: var(--bleed); }
+  .ott-travel-image { order: 2; }
   .ott-faq-side { position: static; }
-  .ott-close-art { max-width: 520px; }
 }
 @media (max-width: 700px) {
-  .ott-section-head { margin-bottom: 32px; }
-  .ott-section-head h2 { font-size: clamp(36px, 10vw, 48px); }
-  .ott-company-name { margin-bottom: 22px; font-size: 9.5px; letter-spacing: .12em; }
-  .ott-hero-title { font-size: clamp(50px, 14.5vw, 76px); }
-  .ott-hero-sub { margin-top: 22px; font-size: 18px; }
-  .ott-hero-actions { gap: 12px 22px; margin-top: 28px; }
-  .ott-hero-note { margin-top: 22px; font-size: 13px; }
-  .ott-hero-caption { top: 20px; left: 20px; right: 20px; gap: 8px; }
-  .ott-hero-caption strong { font-size: 26px; }
-  .ott-hero-scene > img { border-radius: 24px; }
-  .ott-pool-head { padding: 14px 18px; }
-  .ott-pool-headline { padding: 20px 18px 0; }
-  .ott-pool-big { font-size: 76px; }
-  .ott-pool-split { padding-inline: 18px; }
-  .ott-pool-legend { padding-inline: 18px; }
-  .ott-pool-row { padding: 16px 18px; }
-  .ott-pool-route { padding-inline: 18px; gap: 8px; font-size: 9.5px; letter-spacing: .1em; }
-  .ott-token-strip { display: block; margin-top: 32px; }
-  .ott-token-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 12px; }
-  .ott-token-fact dd { font-size: 14px; }
-  .ott-token-fact dt { font-size: 9px; letter-spacing: .1em; }
-  .ott-token-status { align-items: baseline; gap: 6px; }
-  .ott-token-rules { margin-top: 14px; font-size: 14px; }
-  .ott-params.section { padding-top: 48px; }
-  .ott-params-grid { grid-template-columns: minmax(0, 1fr); }
-  .ott-param { border-right: 0; border-bottom: 1px solid var(--border); padding: 22px 20px; }
-  .ott-param:last-child { border-bottom: 0; }
-  .ott-story-figure > img { border-radius: 20px; }
-  .ott-story-figure > figcaption { font-size: 16px; }
-  .ott-coverage-result h3 { font-size: 28px; }
+  body.home-active #view > .section { padding-top: 64px; }
+  .ott-section-head { margin-bottom: 36px; }
+  .ott-section-head h2 { font-size: clamp(38px, 11vw, 54px); }
+  .ott-hero-title { font-size: clamp(54px, 16.5vw, 84px); }
+  .ott-hero-sub { margin-top: 30px; }
+  .ott-telegram { font-size: 14px; padding: 9px 12px 8px; }
+  .ott-hero-actions { gap: 12px 24px; margin-top: 32px; }
+  .ott-hero-note { margin-top: 24px; font-size: 14px; }
+  .ott-token-strip { display: block; }
+  .ott-token-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; }
+  .ott-token-fact, .ott-token-fact:first-child { padding: 0; border: 0; }
+  .ott-token-fact dd { font-size: 17px; }
+  .ott-token-rules { margin-top: 16px; }
+  /* The schedule of rates stacks each row: the item, its rate, then what it means. */
+  .ott-tariff-table thead { display: none; }
+  .ott-tariff-table, .ott-tariff-table tbody, .ott-tariff-table tr, .ott-tariff-table tbody th, .ott-tariff-table td { display: block; width: auto; }
+  .ott-tariff-table tr { padding: 20px 0; border-bottom: 1px solid var(--border); }
+  .ott-tariff-table tbody tr:first-child { border-top: 1px solid var(--border-strong); }
+  .ott-tariff-table tbody th, .ott-tariff-table td { padding: 0; border: 0; }
+  .ott-tariff-table tbody th { color: var(--text-secondary); font-size: 15px; }
+  .ott-tariff-table .ott-rate { margin-top: 6px; font-size: 36px; }
+  .ott-tariff-table td:last-child { margin-top: 8px; font-size: 15px; }
+  .ott-coverage-result h3 { font-size: 30px; }
   .ott-coverage-copy .search-control { gap: 8px; }
   .ott-clear-search { min-width: 60px; padding-inline: 12px; }
-  .ott-plan-details { margin-top: 40px; }
-  .ott-plan-details > summary, .ott-coverage-details > summary { font-size: 15px; }
-  .ott-airport-board { padding: 16px; border-radius: 20px; }
+  .ott-plan-details > summary, .ott-coverage-details > summary { font-size: 17px; }
   .ott-airport-board-head { display: block; }
   .ott-airport-board-head p { max-width: none; margin-top: 8px; text-align: left; }
-  .ott-coverage-details .cov-grid, .ott-coverage-region-group .cov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
-  .ott-coverage-details .cov-name { font-size: 11.5px; letter-spacing: .06em; }
+  .ott-coverage-details .cov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+  .ott-coverage-details .cov-name { font-size: 15px; }
   .ott-coverage-details .cov-arrow { display: none; }
-  .ott-benefit { grid-template-columns: 36px 1fr; padding: 18px 0; }
-  .ott-close { margin-top: 64px; padding: 14px 14px 26px; border-radius: 28px; }
-  .ott-close-art img { border-radius: 20px; }
-  .ott-close-copy { padding: 0 8px; }
-  .ott-close h2 { font-size: clamp(40px, 11vw, 54px); }
+  .ott-benefit { grid-template-columns: 40px 1fr; padding: 18px 0; }
+  .ott-close h2 { font-size: clamp(46px, 13vw, 64px); }
 }
 @media (max-width: 390px) {
-  .ott-hero-title { font-size: 48px; }
-  .ott-destination-shortcut { padding-inline: 13px; font-size: 13px; }
-  .ott-pool-rows { grid-template-columns: minmax(0, 1fr); }
-  .ott-pool-row, .ott-pool-row:nth-child(3n) { border-right: 0; }
+  .ott-hero-title { font-size: 52px; }
+  .ott-telegram { font-size: 13px; }
+  .ott-telegram + .ott-telegram { margin-left: 12px; }
 }

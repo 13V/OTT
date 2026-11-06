@@ -208,10 +208,16 @@ stale.
 The holder web app opens at `#/app`, with Home, Plans, eSIMs and Help screens. The website's
 **Open app** link enters it; **Add to phone** offers browser installation or platform instructions.
 The manifest starts the installed app at that route and uses relative paths for GitHub Pages.
-The site and the app share one dark design: an obsidian ground, hairline glass panels and one
-signal-orange accent. Instrument Serif carries the story, Instrument Sans the interface and Geist
-Mono every figure and label. The story is told by an otter, drawn in ink, with one scene per
-chapter: the burn, the raft that shares the fees, the airport, Tokyo, the den, the switchboard.
+The site and the app are set as the printed matter of a telephone company, since OT+T is named
+like one.
+- The pitch is typed on telegram strips, and the terms are a schedule of rates.
+- The pass, the fee example and the enrolment receipt are paper documents, and progress is
+  stamped.
+- The ground is the ink of the illustrations, the text is cream and the one spot colour is orange,
+  printed flat.
+- Archivo sets everything, and Courier Prime does the typing.
+- An otter, drawn in ink, tells the story with one scene per chapter: the burn, the raft that
+  shares the fees, the airport, Tokyo, the den and the switchboard.
 The app reuses those scenes, with compact coverage search and a step-by-step phone setup guide.
 The character, the style, every scene and how it was made are recorded in
 [docs/story-artwork.md](docs/story-artwork.md).
