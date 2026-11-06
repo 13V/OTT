@@ -5,19 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OT+T — a memecoin with a data plan</title>
 <meta name="description" content="OT+T is a memecoin on pump.fun with a data plan: burn about $5 of OTT once to join and get an eSIM, then collected trading fees fund members’ weekly mobile data.">
-<meta name="theme-color" content="#F4F0E7">
+<meta name="theme-color" content="#07080A">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="OTT">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:,">
-<link href="fonts.css" rel="stylesheet">
-<link rel="stylesheet" href="./style.css?v=20261017-burn">
+<link href="./fonts.css?v=20261106-otter" rel="stylesheet">
+<link rel="stylesheet" href="./style.css?v=20261106-otter">
 <link rel="stylesheet" href="./ui.css">
-<link rel="stylesheet" href="./home.css?v=20261007-membership">
-<link rel="stylesheet" href="./membership-story.css?v=20261007-membership">
-<link rel="stylesheet" href="./account-preview.css">
-<link rel="stylesheet" href="./mobile-app.css?v=20261017-solana">
+<link rel="stylesheet" href="./home.css?v=20261106-otter">
+<link rel="stylesheet" href="./membership-story.css?v=20261106-otter">
+<link rel="stylesheet" href="./account-preview.css?v=20261106-otter">
+<link rel="stylesheet" href="./mobile-app.css?v=20261106-otter">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./assets/app/icon-180.png">
 </head>
@@ -26,7 +26,7 @@
 
 <header id="masthead">
   <div class="mh-top wrap">
-    <a class="brand" href="#/" data-route="home" aria-label="OTT website home"><img class="brand-art" src="./assets/app/app-clay-logo.webp" alt="OT+T" width="1860" height="845" decoding="async"></a>
+    <a class="brand" href="#/" data-route="home" aria-label="OTT website home"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word" aria-hidden="true">OT<b>+</b>T</span></a>
     <nav id="nav" aria-label="Primary">
       <a data-route="home" href="#/">The idea</a>
       <a href="#plans">Destinations</a>
@@ -101,16 +101,15 @@
 <script src="./holder-tools.js?v=20261006-holders"></script>
 <!-- My data and redemption stay in esim.js; home.js renders the public homepage. -->
 <script src="./esim.js?v=20261021-audit"></script>
-<script src="./clay-type.js"></script>
-<script src="./account-preview.js?v=20261017-burn"></script>
-<script src="./membership-story.js?v=20261017-solana"></script>
-<script src="./home.js?v=20261017-solana"></script>
+<script src="./account-preview.js?v=20261106-otter"></script>
+<script src="./membership-story.js?v=20261106-otter"></script>
+<script src="./home.js?v=20261106-otter"></script>
 <!-- The Status route (#/status): the network status page and the operator's dashboard. Same wiring
      as esim.js — app.js hands it its helpers when the route is opened, and it loads nothing at boot. -->
 <script src="./status.js?v=20261017-solana"></script>
 <script src="./holders.js?v=20261017-solana"></script>
-<script src="./mobile-app.js?v=20261017-solana"></script>
+<script src="./mobile-app.js?v=20261106-otter"></script>
 <script src="./pwa.js"></script>
-<script src="./app.js?v=20261017-solana"></script>
+<script src="./app.js?v=20261106-otter"></script>
 </body>
 </html>

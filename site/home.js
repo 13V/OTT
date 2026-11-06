@@ -1,37 +1,108 @@
 'use strict';
-/** The public OTT story. Account balances and redemption remain in esim.js. */
+/**
+ * The public OTT story, told the way a protocol explains itself: what the pool is, the parameters
+ * it runs on, the route a trade's fee takes to a phone, and how to check every step. Account
+ * balances and redemption remain in esim.js.
+ */
 (function () {
   const money = (value) => Number.isFinite(Number(value)) ? '$' + Number(value).toFixed(2) : '—';
-  const isAddress = (value) => !!window.OTTSolana && window.OTTSolana.isAddress(value);
-  const asset = (name) => './assets/ott/' + name + '.webp';
+  const art = (name) => './assets/story/' + name + '.webp';
   const entries = (cfg) => Array.isArray(cfg.packages) ? cfg.packages.filter((p) => p && p.code && p.slug && Number(p.gb) > 0 && Number(p.priceUsd) > 0) : [];
   const places = (cfg) => [...new Map(entries(cfg).map((p) => [p.slug, { slug: p.slug, name: p.name, kind: p.kind, flag: p.flag || '' }])).values()];
   const at = (cfg, slug) => entries(cfg).filter((p) => p.slug === slug).sort((a, b) => Number(a.gb) - Number(b.gb));
   const sectionHead = (h, label, title, body) => h('div', { class: 'ott-section-head' },
     h('span', { class: 'ott-eyebrow' }, label), h('h2', {}, title), body ? h('p', {}, body) : null);
-  const image = (h, name, alt, attrs = {}) => h('img', { src: asset(name), alt, decoding: 'async', ...attrs });
-  const clayLabel = (h, value, attrs = {}) => window.WhateverClayType?.label(h, value, attrs) || h('span', attrs, value);
-  // The published membership terms from config/esim.json, as phrases. A missing figure leaves
-  // its phrase out rather than guessing one.
+  const image = (h, name, alt, attrs = {}) => h('img', { src: art(name), alt, decoding: 'async', ...attrs });
+  // pump.fun's creator fee on a bonding-curve trade, which the treasury collects. It is pump.fun's
+  // published rate, not a programme setting, so it is the one figure here not read from the config.
+  const CURVE_FEE = '0.30%';
+  // The published membership terms from config/esim.json, as phrases and figures. A missing figure
+  // leaves its phrase out rather than guessing one.
   function terms(cfg) {
     const m = cfg.membership && typeof cfg.membership === 'object' ? cfg.membership : {};
     const w = m.welcome && typeof m.welcome === 'object' ? m.welcome : null;
     const bps = Number(cfg.budgetBps);
+    const share = bps > 0 && bps <= 10000 ? bps / 100 : null;
+    const welcomeOk = w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0);
     return {
       // The join amount is set in dollars and turned into OTT each week, so the story quotes dollars.
       burn: Number(m.burnUsd) > 0 ? 'about $' + Number(m.burnUsd) + ' of OTT' : 'OTT',
-      welcome: w && [w.gb, w.days, w.maxUsd].every((v) => Number(v) > 0) ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan up to ' + money(w.maxUsd) : 'a welcome eSIM',
+      burnUsd: Number(m.burnUsd) > 0 ? Number(m.burnUsd) : null,
+      welcome: welcomeOk ? 'any ' + Number(w.gb) + ' GB, ' + Number(w.days) + '-day plan up to ' + money(w.maxUsd) : 'a welcome eSIM',
+      welcomeShort: welcomeOk ? Number(w.gb) + ' GB · ' + Number(w.days) + ' days' : null,
       cap: Number(m.capMultiple) > 0 ? Number(m.capMultiple) : null,
-      share: bps > 0 && bps <= 10000 ? bps / 100 + '%' : 'a published share',
+      share: share !== null ? share + '%' : 'a published share',
+      shareNumber: share,
     };
   }
+
+  /** "3d 04h 12m" until a unix time, or "now". */
+  function until(target) {
+    const left = Math.max(0, Math.floor(target - Date.now() / 1000));
+    if (!left) return 'now';
+    const d = Math.floor(left / 86400), hr = Math.floor((left % 86400) / 3600), min = Math.floor((left % 3600) / 60);
+    return (d ? d + 'd ' : '') + String(hr).padStart(2, '0') + 'h ' + String(min).padStart(2, '0') + 'm';
+  }
+
+  /** The weekly snapshot countdown. It stops itself once its element has left the page. */
+  function snapshotCountdown(h) {
+    const week = window.WhateverData;
+    const value = h('dd', { class: 'ott-countdown' });
+    if (!week || typeof week.weekOf !== 'function' || typeof week.weekEndOf !== 'function') {
+      value.textContent = 'Mondays 00:00 UTC';
+      return value;
+    }
+    const paint = () => {
+      const end = week.weekEndOf(week.weekOf(Math.floor(Date.now() / 1000)));
+      value.textContent = 'in ' + until(end);
+      value.setAttribute('title', 'Next Monday snapshot, 00:00 UTC');
+    };
+    paint();
+    const timer = setInterval(() => { if (!value.isConnected) { clearInterval(timer); return; } paint(); }, 30000);
+    return value;
+  }
+
+  /**
+   * The pool, as its parameters: the hero's card. Every figure comes from the published config,
+   * and before launch the card says so instead of showing a balance it does not have.
+   */
+  function poolCard(h, cfg, launched) {
+    const t = terms(cfg);
+    const share = t.shareNumber;
+    const row = (k, v) => h('div', { class: 'ott-pool-row' }, h('dt', {}, k), typeof v === 'string' ? h('dd', {}, v) : v);
+    return h('div', { class: 'ott-pool-card', role: 'group', 'aria-label': 'The OTT data pool' },
+      h('div', { class: 'ott-pool-head' },
+        h('div', { class: 'ott-pool-id' },
+          h('span', { class: 'ott-pool-icon', 'aria-hidden': 'true' }),
+          h('div', {}, h('strong', {}, 'OTT Data Pool'), h('span', {}, 'Solana · pump.fun'))),
+        h('span', { class: 'ott-pool-state' + (launched ? ' is-live' : '') }, launched ? 'Live' : 'Prelaunch')),
+      h('div', { class: 'ott-pool-headline' },
+        h('span', { class: 'ott-pool-k' }, 'Members’ share of fees'),
+        h('strong', { class: 'ott-pool-big' }, share !== null ? String(share) : '—', share !== null ? h('small', {}, '%') : null),
+        h('span', { class: 'ott-pool-sub' }, 'of last week’s collected creator fees, split by holdings')),
+      share !== null ? h('div', { class: 'ott-pool-split', 'aria-hidden': 'true' },
+        h('i', { style: '--w:' + share / 100 }), h('i', { style: '--w:' + (100 - share) / 100 })) : null,
+      share !== null ? h('div', { class: 'ott-pool-legend' },
+        h('span', {}, h('b', { class: 'is-accent' }), 'Members ' + share + '%'),
+        h('span', {}, h('b', { class: 'is-cool' }), 'Reserve ' + (100 - share) + '%')) : null,
+      h('dl', { class: 'ott-pool-rows' },
+        t.burnUsd ? row('Join', '~$' + t.burnUsd + ' burn, once') : null,
+        t.welcomeShort ? row('Welcome eSIM', t.welcomeShort) : null,
+        t.cap ? row('Share cap', t.cap + '× the average') : null,
+        row('Settles over', 'Bitcoin Lightning'),
+        row('Unused credit', 'Expires weekly'),
+        row('Next snapshot', snapshotCountdown(h))),
+      h('div', { class: 'ott-pool-route', 'aria-hidden': 'true' },
+        ['Trade', 'Fees', 'Pool', 'eSIM'].map((step, i) => [i ? h('i') : null, h('span', {}, step)])));
+  }
+
   function hero(h, launched, cfg, network) {
     const ticker = String(cfg.brand?.ticker || 'OTT');
     const knownNetwork = network?.chain === 'solana';
     return h('section', { class: 'ott-hero section' }, h('div', { class: 'ott-hero-inner wrap' },
       h('div', { class: 'ott-hero-copy' },
-        h('p', { class: 'ott-company-name' }, 'ONCHAIN TELEPHONE + TELEGRAPH'),
-        h('h1', { class: 'ott-hero-title' }, h('span', {}, 'A memecoin '), h('span', {}, 'with a '), h('span', {}, 'data plan.')),
+        h('p', { class: 'ott-company-name' }, h('span', { class: 'ott-company-dot', 'aria-hidden': 'true' }), 'ONCHAIN TELEPHONE + TELEGRAPH'),
+        h('h1', { class: 'ott-hero-title' }, h('span', {}, 'A memecoin '), h('span', {}, 'with a '), h('span', { class: 'ott-hero-accent' }, 'data plan.')),
         h('p', { class: 'ott-hero-sub' }, 'Burn once to get your eSIM.', h('br'), 'Trading fees fund your data.'),
         h('div', { class: 'ott-hero-actions' },
           h('a', { class: 'ott-primary-action', href: launched ? '#/data' : '#/app' }, launched ? 'Check my credit' : 'Explore the app'),
@@ -41,15 +112,30 @@
         h('a', { class: 'ott-hero-trust', href: '#trust' }, 'What happens when you burn ↗')),
       h('div', { class: 'ott-hero-art hero-visual' },
         h('figure', { class: 'ott-hero-scene' },
-          h('figcaption', { class: 'ott-hero-caption' }, image(h, 'hero-touch-grass-lettering', 'Touch Grass, Stay Online.', { width: '1536', height: '768', fetchpriority: 'high' })),
-          image(h, 'hero-touch-grass', 'Handmade clay OTT holder touching a tuft of grass with one fingertip while looking at his phone. His dog waits beside him on an orange SIM-shaped grass island.', { width: '1122', height: '1402', fetchpriority: 'high' }),
-        )),
+          image(h, 'otter-hero', 'Our otter, in its signal-orange neckerchief, floats on its back in a night harbour, reading a phone that lights up its face.', { width: '1120', height: '1394', fetchpriority: 'high' }),
+          h('figcaption', { class: 'ott-hero-caption' }, h('span', {}, 'MEET THE OTTER'), h('strong', {}, 'Touch grass. Stay online.')))),
+      poolCard(h, cfg, launched),
       h('div', { class: 'ott-token-strip', 'aria-label': 'OTT token information' },
         h('dl', { class: 'ott-token-facts' },
           h('div', { class: 'ott-token-fact' }, h('dt', {}, 'TOKEN'), h('dd', {}, ticker)),
           knownNetwork ? h('div', { class: 'ott-token-fact' }, h('dt', {}, 'NETWORK'), h('dd', {}, 'Solana · pump.fun')) : null,
           h('div', { class: 'ott-token-fact' }, h('dt', {}, 'PROGRAMME'), h('dd', {}, h('a', { href: '#/status', class: 'ott-token-status' }, h('span', { class: 'ott-status-dot', 'aria-hidden': 'true' }), launched ? 'Programme configured' : 'Prelaunch', ' ↗')))),
         h('a', { class: 'ott-token-rules', href: '#/about' }, 'Membership & data rules ↗'))));
+  }
+
+  /** The protocol in four numbers, each with what it means in one line. */
+  function parameters(h, cfg) {
+    const t = terms(cfg);
+    const cell = (value, unit, label, note) => h('div', { class: 'ott-param', role: 'listitem' },
+      h('strong', { class: 'ott-param-value' }, value, unit ? h('small', {}, unit) : null),
+      h('span', { class: 'ott-param-label' }, label),
+      h('p', {}, note));
+    return h('section', { class: 'section ott-params', 'aria-label': 'Programme parameters' }, h('div', { class: 'wrap' },
+      h('div', { class: 'ott-params-grid', role: 'list' },
+        cell(CURVE_FEE, null, 'Creator fee', 'pump.fun pays it to the OT+T treasury on every bonding-curve trade.'),
+        t.shareNumber !== null ? cell(t.shareNumber + '/' + (100 - t.shareNumber), null, 'Members / reserve', 'How each week’s collected fees divide between members’ data and the reserve.') : null,
+        t.burnUsd ? cell('$' + t.burnUsd, null, 'One burn to join', 'Priced in OTT each Monday. Membership doesn’t expire.') : null,
+        t.cap ? cell(t.cap, '×', 'Share cap', 'The most any member gets each week, against the average share.') : null)));
   }
 
   function catalogue(h, cfg, launched, onChoose) {
@@ -132,9 +218,11 @@
     });
     state.slug = first?.slug || '';
     paint();
+    // A departures board: every covered place, in the protocol's mono, each one a button that
+    // only changes the coverage preview above.
     const board = h('div', { class: 'ott-airport-board' },
       h('div', { class: 'ott-airport-board-head' },
-        h('div', {}, h('span', { class: 'ott-airport-board-label' }, 'OT+T COVERAGE'), h('h3', {}, clayLabel(h, 'Where to next?'))),
+        h('div', {}, h('span', { class: 'ott-airport-board-label' }, 'OT+T COVERAGE'), h('h3', {}, 'Where to next?')),
         h('p', {}, 'Choose a place to check its plans.')),
       ['country', 'region'].map((kind) => {
         const group = list.filter((p) => p.kind === kind).sort((a, b) => a.name.localeCompare(b.name));
@@ -142,14 +230,12 @@
         return h('div', { class: 'ott-coverage-group ott-coverage-' + kind + '-group' },
           h('h4', {}, kind === 'country' ? 'Countries' : 'Regions'),
           h('div', { class: 'cov-grid' }, group.map((p) => h('button', { type: 'button', class: 'cov-item', onclick: () => choose(p.slug) },
-            flag(p), clayLabel(h, p.name, { class: 'cov-name' }), h('span', { class: 'cov-arrow', 'aria-hidden': 'true' }, '↗')))));
+            flag(p), h('span', { class: 'cov-name' }, p.name), h('span', { class: 'cov-arrow', 'aria-hidden': 'true' }, '↗')))));
       }));
     const details = h('details', { class: 'coverage-details ott-coverage-details', id: 'coverage' },
       h('summary', {}, 'See where your data works', h('span', {}, list.length + ' places')),
-      h('figure', { class: 'ott-airport-scene' },
-        h('div', { class: 'ott-airport-world' },
-          h('div', { class: 'ott-airport-backdrop' }, image(h, 'coverage-airport-world', 'Hand-moulded clay airport scene. The same OTT holder stands with his back to us, looking up at a coverage board suspended from the ceiling.', { width: '1536', height: '1024', loading: 'lazy' })), board),
-        h('figcaption', {}, launched ? 'Choose a country or region above to see available plans.' : 'Catalogue preview. Membership enrolment and redemption open at launch.')));
+      h('div', { class: 'ott-airport-scene' }, board,
+        h('p', { class: 'ott-airport-note' }, launched ? 'Choose a country or region above to see available plans.' : 'Catalogue preview. Membership enrolment and redemption open at launch.')));
     const planDetails = h('details', { class: 'ott-plan-details' },
       h('summary', {}, 'View available plans'),
       h('div', { class: 'ott-plan-details-inner' },
@@ -160,33 +246,32 @@
 
     const root = h('section', { class: 'section ott-catalogue', id: 'plans' }, h('div', { class: 'wrap' },
       h('div', { class: 'ott-coverage-layout', id: 'plan-options' },
-        h('figure', { class: 'ott-everyday-scene' }, image(h, 'everyday-dog-world', 'Hand-moulded clay illustration of the OTT holder walking his dog through his neighbourhood while checking his phone.', { width: '1200', height: '900', loading: 'lazy' }),
-          h('figcaption', {}, 'An OTT everyday illustration')),
         h('div', { class: 'ott-coverage-copy' },
           sectionHead(h, 'DATA FOR EVERY DAY', 'Use it at home. Take it with you.', 'Use your data credit at home or on your next trip.'),
           h('div', { class: 'ott-coverage-shortcuts', 'aria-label': 'Featured destinations' }, shortcuts.map((p) => h('a', { href: '#plans', class: 'ott-destination-shortcut', 'data-slug': p.slug }, p.name + ' ↗'))),
           h('div', { class: 'search-shell' }, h('label', { for: 'destination-search' }, 'Where will you use your data?'), h('div', { class: 'search-control' }, search, clearButton), results),
           coverageResult,
-          h('p', { class: 'ott-coverage-device' }, 'Use a compatible, unlocked phone that supports eSIMs. Mobile data only; calls and SMS are not included.'))),
+          h('p', { class: 'ott-coverage-device' }, 'Use a compatible, unlocked phone that supports eSIMs. Mobile data only; calls and SMS are not included.')),
+        h('figure', { class: 'ott-coverage-art ott-story-figure' },
+          image(h, 'otter-pier', 'Our otter strolls along a lamp-lit pier at night, phone in paw, with the city lights across the water.', { width: '1440', height: '956', loading: 'lazy' }),
+          h('figcaption', {}, h('strong', {}, list.length + ' places'), h('span', {}, 'in the current catalogue, at home and away')))),
       planDetails, details));
     root.chooseDestination = choose;
     return root;
   }
 
+  /** What a week of data is for, in three moments. */
   function travel(h) {
     return h('section', { class: 'section ott-travel' }, h('div', { class: 'wrap' },
-      sectionHead(h, 'STAY CONNECTED', 'Find your way in a new city.'),
       h('div', { class: 'ott-travel-grid' },
-        h('figure', { class: 'ott-travel-image' },
-          image(h, 'shibuya-clay', 'Clay illustration of Shibuya Crossing: a traveller checks his phone in front of the orange OT+T booth, sharply focused as the crowd passes in motion blur.', { width: '1536', height: '1024', loading: 'lazy' }),
-          h('figcaption', { class: 'ott-scene-caption' },
-            h('strong', {}, 'Shibuya, Tokyo'),
-            h('span', {}, 'Maps, messages and a place to eat.'),
-            h('small', {}, 'An OTT travel illustration'))),
-        h('div', { class: 'ott-travel-copy' },
-          h('div', { class: 'ott-benefit' }, h('span', {}, '01'), h('p', {}, 'Find your hotel.')),
-          h('div', { class: 'ott-benefit' }, h('span', {}, '02'), h('p', {}, 'Tell them you’ve landed.')),
-          h('div', { class: 'ott-benefit' }, h('span', {}, '03'), h('p', {}, 'Pick somewhere for dinner.'))))));
+        h('figure', { class: 'ott-travel-image ott-story-figure' },
+          image(h, 'otter-tokyo', 'Our otter, backpack on, checks a glowing map at a busy Tokyo crossing at night.', { width: '1440', height: '956', loading: 'lazy' }),
+          h('figcaption', { class: 'ott-scene-caption' }, h('strong', {}, 'Shibuya, Tokyo'), h('span', {}, 'Off the plane and already online.'))),
+        h('div', { class: 'ott-travel-copy' }, sectionHead(h, 'STAY CONNECTED', 'Find your way in a new city.'),
+          h('ol', { class: 'ott-travel-steps' },
+          h('li', { class: 'ott-benefit' }, h('span', {}, '01'), h('p', {}, 'Find your hotel.')),
+          h('li', { class: 'ott-benefit' }, h('span', {}, '02'), h('p', {}, 'Tell them you’ve landed.')),
+          h('li', { class: 'ott-benefit' }, h('span', {}, '03'), h('p', {}, 'Pick somewhere for dinner.')))))));
   }
 
   function faq(h, launched, cfg) {
@@ -204,14 +289,19 @@
       ['What if I don’t have enough credit?', 'Choose a smaller package your weekly credit covers, or wait for next week’s credit. The pool also needs enough funding when you order.' + (launched ? '' : ' Before launch, the app offers a sample journey.')],
     ];
     return h('section', { class: 'section ott-faq' }, h('div', { class: 'wrap' },
-      sectionHead(h, 'GOOD TO KNOW', 'Before you connect.'),
       h('div', { class: 'ott-faq-layout' },
-        h('div', { class: 'faq-list' }, entries.map(([q, a]) => h('details', { class: 'faq-item' }, h('summary', {}, q), h('p', {}, a)))),
-        h('figure', { class: 'ott-faq-art', 'aria-hidden': 'true' },
-          image(h, 'faq-clay-help', '', { width: '1254', height: '1254', loading: 'lazy' }))),
-      h('div', { class: 'ott-close' }, h('h2', {}, 'Where are you heading?'),
-        h('div', {}, h('a', { class: 'ott-primary-action', href: '#plans' }, 'Explore destinations'),
-          h('a', { class: 'ott-text-action', href: launched ? '#/data' : '#/app' }, launched ? 'Open My data ↗' : 'Explore the app ↗')))));
+        h('div', { class: 'ott-faq-side' },
+          sectionHead(h, 'GOOD TO KNOW', 'Before you connect.'),
+          h('p', { class: 'ott-faq-more' }, 'The full rules, figures and limits are published. ', h('a', { href: '#/about' }, 'Read the programme rules ↗'))),
+        h('div', { class: 'faq-list' }, entries.map(([q, a]) => h('details', { class: 'faq-item' }, h('summary', {}, q), h('p', {}, a))))),
+      h('div', { class: 'ott-close' },
+        h('figure', { class: 'ott-close-art' }, image(h, 'otter-paws', 'Two otters asleep on their backs under the stars, holding paws so they don’t drift apart.', { width: '1040', height: '1300', loading: 'lazy' })),
+        h('div', { class: 'ott-close-copy' },
+          h('span', { class: 'ott-eyebrow' }, launched ? 'MEMBERSHIP OPEN' : 'OPENS AT LAUNCH'),
+          h('h2', {}, 'Where are you heading?'),
+          h('p', { class: 'ott-close-story' }, 'Sea otters hold paws while they sleep, so they don’t drift apart. That’s the whole idea: wherever you go, stay connected.'),
+          h('div', { class: 'ott-close-actions' }, h('a', { class: 'ott-primary-action', href: '#plans' }, 'Explore destinations'),
+            h('a', { class: 'ott-text-action', href: launched ? '#/data' : '#/app' }, launched ? 'Open My data ↗' : 'Explore the app ↗'))))));
   }
 
   async function render(view, ctx) {
@@ -229,10 +319,9 @@
     if (ctx.isCurrent && !ctx.isCurrent()) return;
     const launched = !!window.OTTSolana && window.OTTSolana.launchedConfig(cfg);
     view.appendChild(hero(h, launched, cfg, ctx.cfg));
-    const travelSection = travel(h);
     const catalogueSection = catalogue(h, cfg, launched);
     const membership = window.WhateverMembershipStory;
-    const story = [membership.journey(h, cfg, launched), membership.allocation(h, cfg), catalogueSection, travelSection,
+    const story = [parameters(h, cfg), membership.journey(h, cfg, launched), membership.allocation(h, cfg), catalogueSection, travel(h),
       window.WhateverAccountPreview.render(h, launched), membership.trust(h, cfg, launched), faq(h, launched, cfg)];
     story.forEach((section) => view.appendChild(section));
     view.querySelectorAll('.ott-destination-shortcut').forEach((link) => link.addEventListener('click', (event) => {

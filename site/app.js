@@ -255,7 +255,7 @@
     const reserveShare = Number(cfg.budgetBps) > 0 && Number(cfg.budgetBps) < 10000 ? (10000 - Number(cfg.budgetBps)) / 100 + '%' : null;
 
     clear(body);
-    body.appendChild(h('div', { class: 'prose' },
+    const prose = h('div', { class: 'prose' },
       entry('One burn starts your membership',
         'OT+T stands for Onchain Telephone + Telegraph. To join, burn ' + (joinUsd ? 'about ' + joinUsd + ' of OTT' : 'the published amount of OTT') + ' once by sending it to Solana’s burn address, the incinerator, which nobody holds the key to. The app shows this week’s amount in OTT, builds the transaction and asks you to confirm. The amount is set once a week from OTT’s price, so joining costs about the same whatever the price does. Holding OTT or connecting a wallet alone won’t enrol you. Membership doesn’t expire, and there’s one per wallet.' + (programmeLaunched ? '' : ' Joining opens when OTT launches on pump.fun.')),
       entry('Your first eSIM',
@@ -274,7 +274,12 @@
       entry('An eSIM still needs a mobile network',
         'An external supplier provides the eSIM and mobile service. You will need a compatible, unlocked phone and coverage at your destination. OTT can make the funding and membership records verifiable; it cannot put the mobile network itself on-chain. The app preview demonstrates plan selection and setup using sample data, without an active eSIM.'),
       entry('What is available today',
-        'You can explore the catalogue and sample app, connect a Solana wallet and review programme status. ' + (programmeLaunched ? 'Membership and weekly credit follow the rules above while purchases are switched on.' : 'OTT has not launched yet, so joining, weekly credit and purchases stay closed until it does.'))));
+        'You can explore the catalogue and sample app, connect a Solana wallet and review programme status. ' + (programmeLaunched ? 'Membership and weekly credit follow the rules above while purchases are switched on.' : 'OTT has not launched yet, so joining, weekly credit and purchases stay closed until it does.')));
+    // The rules sit beside the story's guide, who stays in view while the page scrolls.
+    body.appendChild(h('div', { class: 'about-layout' }, prose,
+      h('figure', { class: 'about-art ott-story-figure' },
+        h('img', { src: './assets/story/otter-help.webp', alt: 'Our otter holds up a phone and points at the screen, ready to walk you through it.', width: '960', height: '960', loading: 'lazy', decoding: 'async' }),
+        h('figcaption', {}, 'The whole programme on one page: what you burn, what you get, and where the fees go.'))));
     body.appendChild(h('p', { class: 'prose-note' }, catalogueText));
   }
 

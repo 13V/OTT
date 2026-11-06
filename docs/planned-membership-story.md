@@ -26,6 +26,8 @@ The funded phone test passed on 17 October 2026: the supplier's eSIM installed a
 data on the operator's phone in Australia. That test bought the eSIM directly from the supplier,
 so it didn't exercise OTT's automated Lightning payment.
 
-The illustration keeps the existing character identity and the requested standing pose, holding
-an eSIM pass and an OTT token with a sculpted clay flame. The final prompt and tool mode are
-recorded in `membership-art-direction.md`.
+Each chapter has an ink scene of the otter. Chapter one shows the burn: a coin melts in a fire
+bowl while the otter tucks a glowing SIM into the pouch under its arm, as sea otters keep a
+favourite stone. Chapter two shows the raft: otters holding paws while the fees reach each of
+them. Chapter three is the airport, where the credit is spent. The character, the briefs and the
+files are recorded in [story-artwork.md](story-artwork.md).

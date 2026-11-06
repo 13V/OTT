@@ -52,7 +52,7 @@ test('the one-time burn enrols for a first eSIM while collected trading fees fun
   await expect(journey).toContainText('Enrolment opens when OTT launches.');
   await expect(journey).toContainText('can’t be refunded');
   const illustration = journey.locator('.ott-member-enrol-art img');
-  await expect(illustration).toHaveAttribute('src', './assets/ott/membership-burn-world.png');
+  await expect(illustration).toHaveAttribute('src', './assets/story/otter-join.webp');
   await illustration.scrollIntoViewIfNeeded();
   await expect.poll(() => illustration.evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
   await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);

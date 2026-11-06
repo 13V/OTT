@@ -1,8 +1,12 @@
 'use strict';
-/** The public membership story and its published rules. No wallet, API or enrolment actions. */
+/**
+ * The public membership story and its published rules, told through the otter: a stone kept in a
+ * pouch (the welcome eSIM), a raft that holds paws (members sharing the fees), a gate at the
+ * airport (spending the credit). No wallet, API or enrolment actions.
+ */
 (function () {
   const image = (h, name, alt, attrs = {}) => h('img', {
-    src: './assets/ott/' + name, alt, decoding: 'async', loading: 'lazy', ...attrs,
+    src: './assets/story/' + name, alt, decoding: 'async', loading: 'lazy', ...attrs,
   });
   const head = (h, label, title, body) => h('div', { class: 'ott-section-head' },
     h('span', { class: 'ott-eyebrow' }, label), h('h2', {}, title), h('p', {}, body));
@@ -34,9 +38,9 @@
         h('span', {}, 'ONE BURN'), h('span', { 'aria-hidden': 'true' }, '→'),
         h('span', {}, 'FEES FUND DATA'), h('span', { 'aria-hidden': 'true' }, '→'), h('span', {}, 'MEMBERS GET CONNECTED')),
       h('div', { class: 'ott-member-enrol' },
-        h('figure', { class: 'ott-member-enrol-art' },
-          image(h, 'membership-burn-world.png', 'The adult clay OTT traveller stands holding an orange eSIM membership pass in one hand and an OTT token with a sculpted clay flame in the other.', { width: '1122', height: '1402' }),
-          h('figcaption', {}, 'An OTT membership illustration')),
+        h('figure', { class: 'ott-member-enrol-art ott-story-figure' },
+          image(h, 'otter-join.webp', 'Our otter stands by a small fire bowl where a coin is melting into the embers, tucking a glowing SIM card into the pouch under its arm.', { width: '1040', height: '1300' }),
+          h('figcaption', {}, 'Sea otters keep a favourite stone in a pouch under the arm. Ours keeps a SIM.')),
         h('div', { class: 'ott-member-enrol-copy' }, chapter(h, '01', 'GET YOUR PASS'),
           h('h3', {}, 'One burn. Your first eSIM.'),
           h('p', {}, 'Join once by burning ' + (t.burn || 'OTT') + ' from your wallet. Your membership starts with a welcome eSIM for a compatible, unlocked phone.'),
@@ -50,14 +54,18 @@
       h('div', { class: 'ott-member-ongoing', role: 'list', 'aria-label': 'How fees fund ongoing data' },
         h('article', { class: 'ott-member-stop', role: 'listitem' },
           chapter(h, '02', 'FILL THE DATA POOL'),
-          h('figure', { class: 'ott-member-world' }, image(h, 'journey-budget-world.webp', 'Clay OTT traveller checking the data budget over breakfast.', { width: '1024', height: '1024' })),
+          h('figure', { class: 'ott-member-world ott-story-figure' },
+            image(h, 'otter-raft.webp', 'Seven otters float in a ring holding paws, while threads of orange light run from the city into the middle of the ring and out to each of them.', { width: '1440', height: '956' }),
+            h('figcaption', {}, 'Otters resting together are called a raft. They hold paws so nobody drifts off.')),
           h('div', { class: 'ott-member-stop-copy' }, h('h3', {}, 'Trading fees pay for data.'),
             h('p', {}, (t.share ? t.share + '% of the fees actually collected each week becomes the next week’s member data budget. ' : 'A published share of the fees actually collected each week becomes the member data budget. ')
               + 'The rest stays in the pool as a reserve for welcome eSIMs and payment costs.'),
             h('p', { class: 'ott-member-small' }, 'Unused weekly credit expires. The money stays in the pool for future data.'))),
         h('article', { class: 'ott-member-stop', role: 'listitem' },
           chapter(h, '03', 'GO SOMEWHERE'),
-          h('figure', { class: 'ott-member-world' }, image(h, 'journey-connection-world.webp', 'Clay OTT traveller using his phone to find his way through Tokyo.', { width: '1024', height: '1024' })),
+          h('figure', { class: 'ott-member-world ott-story-figure' },
+            image(h, 'otter-airport.webp', 'Our otter sits on a suitcase at a night-time airport gate, phone already connected, watching the planes outside.', { width: '1440', height: '956' }),
+            h('figcaption', {}, 'Land somewhere new, already online.')),
           h('div', { class: 'ott-member-stop-copy' }, h('h3', {}, 'Members use their data credit.'),
             h('p', {}, 'Install your eSIM privately. Then use your weekly credit for data at home or on your next trip, with compatible top-ups where available. No additional burn for each data package.'),
             h('p', { class: 'ott-member-small' }, 'Your weekly share follows the OTT you hold at the Monday snapshot' + (t.cap ? ', and no member gets more than ' + t.cap + '× the average' : '') + '. It is not unlimited data.')))),
@@ -105,7 +113,7 @@
       result.textContent = money(funded / number);
       // With one member there is no one to share an excess with: the cap is the whole budget.
       most.textContent = t.cap ? money(Math.min(funded, t.cap * funded / number)) : '—';
-      explanation.textContent = 'At ' + money(Number(fees.value)) + ' in daily fees and a ' + Number(percent.value) + '% example data allocation, ' + money(funded) + ' per week is shared among ' + count(number) + ' ' + (number === 1 ? 'member' : 'members') + ' by holdings: ' + money(funded / number) + ' each on average'
+      explanation.textContent = 'At ' + money(Number(fees.value)) + ' in daily fees, with ' + Number(percent.value) + '% allocated to data, ' + money(funded) + ' per week is shared among ' + count(number) + ' ' + (number === 1 ? 'member' : 'members') + ' by holdings: ' + money(funded / number) + ' each on average'
         + (t.cap ? ', and no member gets more than ' + money(Math.min(funded, t.cap * funded / number)) + '.' : '.');
     }
     [fees, percent, members].forEach((input) => input.addEventListener('input', calculate));
@@ -137,12 +145,16 @@
 
   function trust(h, cfg, launched) {
     const t = terms(cfg);
-    const item = (number, title, detail, status) => h('li', {},
+    const item = (number, title, detail, status) => h('li', { class: /pending/i.test(status) ? 'is-pending' : 'is-done' },
       h('span', { class: 'ott-trust-number' }, number),
       h('div', {}, h('h3', {}, title), h('p', {}, detail)), h('span', { class: 'ott-trust-state' }, status));
     return h('section', { class: 'section ott-membership-trust', id: 'trust' }, h('div', { class: 'wrap' },
-      head(h, 'TRUST YOU CAN CHECK', 'Your connection. With a clear receipt.',
-        'A burn is final, so the rules, the money trail and what protects your first eSIM are set out here before you commit tokens.'),
+      h('div', { class: 'ott-trust-intro' },
+        head(h, 'TRUST YOU CAN CHECK', 'Your connection. With a clear receipt.',
+          'A burn is final, so the rules, the money trail and what protects your first eSIM are set out here before you commit tokens.'),
+        h('figure', { class: 'ott-trust-art ott-story-figure' },
+          image(h, 'otter-operator.webp', 'Our otter, headset on, works the night shift at an old telephone switchboard, plugging in a glowing cord beside a spike of paper receipts.', { width: '1440', height: '956' }),
+          h('figcaption', {}, 'Onchain Telephone + Telegraph. Every connection on the record, every receipt on the spike.'))),
       h('div', { class: 'ott-trust-layout' },
         h('aside', { class: 'ott-trust-receipt', 'aria-label': 'Illustrative enrolment receipt' },
           h('div', { class: 'ott-trust-receipt-head' }, h('strong', {}, 'OT+T'), h('span', {}, 'YOUR ENROLMENT RECEIPT')),

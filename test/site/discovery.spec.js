@@ -149,17 +149,18 @@ test('narrow layout has usable navigation and no horizontal overflow', async ({ 
   expect(errors).toEqual([]);
 });
 
-test('the mobile clay hero explains the product and invites prelaunch visitors into the app', async ({ page }) => {
+test('the mobile hero explains the product and invites prelaunch visitors into the app', async ({ page }) => {
   stubNetwork(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/index.html#/');
   await expect(page.locator('.hero-visual')).toBeVisible();
   await expect(page.locator('.ott-hero-title')).toHaveText('A memecoin with a data plan.');
-  const caption = page.locator('.ott-hero-caption').getByRole('img', { name: 'Touch Grass, Stay Online.', exact: true });
+  const caption = page.locator('.ott-hero-caption');
   await expect(caption).toBeVisible();
-  await expect.poll(() => caption.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
+  await expect(caption).toContainText('Touch grass. Stay online.');
   const image = page.locator('.ott-hero-scene > img');
-  await expect(image).toHaveAttribute('src', './assets/ott/hero-touch-grass.webp');
+  await expect(image).toHaveAttribute('src', './assets/story/otter-hero.webp');
+  await expect(image).toHaveAttribute('alt', /otter/);
   await expect.poll(() => image.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
   await expect(page.locator('.ott-hero-note')).toContainText(/enrolment.*(?:not open|closed)/i);
   await expect(page.locator('.ott-hero-note')).toContainText('sample eSIM setup without a wallet');
@@ -213,7 +214,7 @@ test('a featured destination in the catalogue updates coverage while the Tokyo i
   await page.locator('#plan-place').selectOption('germany');
   await expect(page.locator('.ott-coverage-result h3')).toHaveText('Germany');
   await expect(page.locator('.ott-scene-caption strong')).toHaveText('Shibuya, Tokyo');
-  await expect(page.locator('.ott-travel-image img')).toHaveAttribute('src', './assets/ott/shibuya-clay.webp');
+  await expect(page.locator('.ott-travel-image img')).toHaveAttribute('src', './assets/story/otter-tokyo.webp');
 });
 
 test('allocation example is clearly illustrative and computes real input changes', async ({ page }) => {

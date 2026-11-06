@@ -208,10 +208,13 @@ stale.
 The holder web app opens at `#/app`, with Home, Plans, eSIMs and Help screens. The website's
 **Open app** link enters it; **Add to phone** offers browser installation or platform instructions.
 The manifest starts the installed app at that route and uses relative paths for GitHub Pages.
-The same holder appears in a clay park, a Japanese street and a connection kit. Cream SIM-shaped
-passes keep credit and package actions together, with compact coverage search and a step-by-step
-phone setup guide. The self-hosted fonts carry through from the website. Artwork files and their
-generation briefs are recorded in [docs/app-artwork.md](docs/app-artwork.md).
+The site and the app share one dark design: an obsidian ground, hairline glass panels and one
+signal-orange accent. Instrument Serif carries the story, Instrument Sans the interface and Geist
+Mono every figure and label. The story is told by an otter, drawn in ink, with one scene per
+chapter: the burn, the raft that shares the fees, the airport, Tokyo, the den, the switchboard.
+The app reuses those scenes, with compact coverage search and a step-by-step phone setup guide.
+The character, the style, every scene and how it was made are recorded in
+[docs/story-artwork.md](docs/story-artwork.md).
 
 Before launch, **Try the app preview** uses an example $20 allocation with $5 already spent.
 Adding a package changes only this page's sample account. It never issues an eSIM, requests a

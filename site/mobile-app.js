@@ -239,19 +239,22 @@
       : h('span', { class: 'om-country-flag om-region-symbol', 'aria-hidden': 'true' }, icon('plans'));
   }
 
+  // The story's otter, drawn in ink: one scene per screen. The Home hero is portrait (4:5); the
+  // rest are 3:2 scenes, cropped by the frame on phones.
   function world(h, kind, screenClass) {
     const scenes = {
-      home: ['app/app-home-world', 'The OTT holder walking his dog through a little clay park.'],
-      japan: ['app/app-japan-world', 'The same OTT holder exploring a handmade clay street in Japan.'],
-      kit: ['app/app-kit-world', 'The OTT holder and his dog checking a phone beside his backpack and map.'],
-      travel: ['ott/coverage-airport-world', 'The OTT holder looking up at a clay airport departures board.'],
+      home: ['otter-pier', 'An ink-drawn otter in an orange neckerchief strolls along a pier at night, its phone glowing in one paw.'],
+      japan: ['otter-tokyo', 'An ink-drawn otter in an orange neckerchief stands at a busy Tokyo crossing at night, following a glowing map on its phone.'],
+      kit: ['otter-den', 'An ink-drawn otter in an orange neckerchief checks its phone in a cosy den, next to a backpack, a folded map and a mug.'],
+      travel: ['otter-airport', 'An ink-drawn otter in an orange neckerchief sits on a suitcase at a night-time airport gate, its phone connected.'],
     };
-    const [name, alt] = kind === 'home' && !screenClass
-      ? ['ott/hero-touch-grass', 'The OTT holder and his dog on a handmade clay grass island, checking his phone.']
+    const hero = kind === 'home' && !screenClass;
+    const [name, alt] = hero
+      ? ['otter-hero', 'An ink-drawn otter in an orange neckerchief floats on its back in a night harbour, reading a phone that lights up its face.']
       : scenes[kind] || scenes.home;
     return h('div', { class: 'om-world om-world-' + (screenClass || (kind === 'japan' ? 'plans' : kind)) },
-      h('img', { class: 'om-world-art', src: './assets/' + name + '.webp', alt,
-        width: kind === 'home' && !screenClass ? 1122 : 1536, height: kind === 'home' && !screenClass ? 1402 : 1024,
+      h('img', { class: 'om-world-art', src: './assets/story/' + name + '.webp', alt,
+        width: hero ? 1120 : 1440, height: hero ? 1394 : 956,
         decoding: 'async', fetchpriority: 'high' }));
   }
 
@@ -620,7 +623,7 @@
         action(h, 'Installed but no data?', event => troubleshoot(h, event.currentTarget, helpPlatform), 'om-secondary-button om-troubleshooting-button'),
         h('div', { class: 'om-platform-switch', role: 'group', 'aria-label': 'Phone type' }, ios, android), guide),
       h('section', { class: 'om-panel om-help-notes' },
-        h('img', { src: './assets/ott/faq-clay-help.webp', alt: '', loading: 'lazy', width: 720, height: 720 }),
+        h('img', { src: './assets/story/otter-help.webp', alt: 'An ink-drawn otter in an orange neckerchief holds up its phone and points at the screen, ready to help.', loading: 'lazy', width: 960, height: 960 }),
         h('h2', {}, 'Before you connect'),
         h('details', {}, h('summary', {}, 'How will I get an eSIM with OTT?'), h('p', {}, 'Membership starts with one send of about $5 of OTT to Solana’s burn address, which enrols you and includes your first eSIM. After that, collected trading fees fund members’ data through a shared pool. Holding tokens or connecting a wallet alone does not enrol you.' + (launched(cfg) ? '' : ' Joining opens when OTT launches.')), h('a', { class: 'om-text-link', href: '#/about' }, 'Read the membership plan ', icon('arrow'))),
         h('details', {}, h('summary', {}, 'Do I pay again for every top-up?'), h('p', {}, 'No. Joining is a one-time send, and membership doesn’t expire. Weekly data is then funded by collected trading fees and spent as credit. The credit changes with fees and the number of members; unlimited data is not promised.')),
@@ -713,8 +716,10 @@
     const installButton = action(h, [icon('download'), h('span', {}, 'Add to phone')], event => install(h, event.currentTarget), 'om-install-button');
     const status = h('span', { class: 'om-status-pill' }, 'Loading');
     const header = h('header', { class: 'om-header' },
+      // The site's wordmark: the signal-orange plus tile, then OT+T.
       h('a', { class: 'om-brand', href: '#/app', 'aria-label': 'OTT app home' },
-        h('img', { class: 'om-brand-art', src: './assets/app/app-clay-logo.webp', alt: 'OT+T', width: 1860, height: 845, decoding: 'async' })),
+        h('span', { class: 'brand-mark', 'aria-hidden': 'true' }),
+        h('span', { class: 'brand-word', 'aria-hidden': 'true' }, 'OT', h('b', {}, '+'), 'T')),
       h('div', { class: 'om-header-actions' }, status, installButton));
     const nav = h('nav', { class: 'om-nav', 'aria-label': 'App navigation' }, SCREENS.map(name => h('a', {
       href: name === 'home' ? '#/app' : '#/app/' + name,

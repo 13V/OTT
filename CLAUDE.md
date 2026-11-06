@@ -130,6 +130,7 @@ Environment variables choose the adapters, and production fails closed:
 - The router hands each route module a `ctx` object: the `h()` DOM helper, Solana RPC calls that rotate over the `browserRpcs` endpoints in `config/addresses.json` (PublicNode: mainnet-beta refuses browser origins), wallet `connect`, Solscan and pump.fun links, and `isCurrent()` for dropping stale async renders.
 - `site/wallet.js` connects Solana wallets through the Wallet Standard (`wallet-standard:app-ready` / `register-wallet`), with Phantom's injected provider as a fallback, and asks which wallet to use when several are installed. It remembers only the wallet's name, so a reload reconnects silently.
 - `site/client-config.js` only allows API calls to `./api/{redeem,status}` at the configured origin.
+- The design is dark: obsidian tokens and one signal-orange accent in `site/style.css`'s `:root`, Instrument Serif (weight 400 only) for titles, Instrument Sans for text and Geist Mono for labels and figures. The illustrations are one character, an otter drawn in ink, in `site/assets/story/`; `docs/story-artwork.md` records each scene and how it was made. The service worker caches only the scenes its `ART` list names.
 
 ## Rules that span several files
 

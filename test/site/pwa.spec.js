@@ -104,7 +104,9 @@ test('the manifest and real icons launch the installed app inside the /OTT/ proj
   expect(new URL(manifest.scope, base).href).toBe(base);
   expect(new URL(manifest.id, base).href).toBe(base);
   expect(manifest.display).toBe('standalone');
-  expect(manifest.theme_color).toBe('#172F31');
+  // The installed app opens on the same obsidian as the site's theme-color.
+  expect(manifest.theme_color).toBe('#07080A');
+  expect(manifest.background_color).toBe('#07080A');
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', './manifest.webmanifest');
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', './assets/app/icon-180.png');
   for (const size of [180, 192, 512]) {
@@ -180,7 +182,7 @@ test('the service worker caches public release files but never configuration, le
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));
   expect(publicVersions.map(url => new URL(url).pathname.split('/').pop()).sort()).toEqual([
-    'account-preview.js', 'app.js', 'client-config.js', 'esim.js', 'holder-tools.js', 'holders.js', 'home.css', 'home.js', 'membership-story.css', 'membership-story.js', 'mobile-app.css', 'mobile-app.js', 'solana.js', 'status.js', 'style.css', 'wallet.js',
+    'account-preview.css', 'account-preview.js', 'app.js', 'client-config.js', 'esim.js', 'fonts.css', 'holder-tools.js', 'holders.js', 'home.css', 'home.js', 'membership-story.css', 'membership-story.js', 'mobile-app.css', 'mobile-app.js', 'solana.js', 'status.js', 'style.css', 'wallet.js',
   ]);
   for (const url of publicVersions) expect(urls).toContain(url);
   expect(urls.some(url => (new URL(url).search && !publicVersions.includes(url)) || /\/(api|config|data|activation)\//.test(new URL(url).pathname))).toBe(false);

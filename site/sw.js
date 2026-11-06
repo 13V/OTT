@@ -2,34 +2,33 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v16';
+const CACHE_NAME = CACHE_PREFIX + 'v17';
 const SHELL = [
-  'index.html', 'fonts.css', 'style.css?v=20261017-burn', 'ui.css', 'home.css?v=20261007-membership', 'membership-story.css?v=20261007-membership', 'account-preview.css',
-  'mobile-app.css?v=20261017-solana', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'clay-type.js', 'account-preview.js?v=20261017-burn',
-  'membership-story.js?v=20261017-solana', 'home.js?v=20261017-solana', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261017-solana', 'app.js?v=20261017-solana', 'pwa.js',
+  'index.html', 'fonts.css?v=20261106-otter', 'style.css?v=20261106-otter', 'ui.css', 'home.css?v=20261106-otter', 'membership-story.css?v=20261106-otter', 'account-preview.css?v=20261106-otter',
+  'mobile-app.css?v=20261106-otter', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'account-preview.js?v=20261106-otter',
+  'membership-story.js?v=20261106-otter', 'home.js?v=20261106-otter', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261106-otter', 'app.js?v=20261106-otter', 'pwa.js',
   'client-config.js?v=20261017-solana', 'solana.js?v=20261021-audit', 'wallet.js?v=20261017-solana',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',
 ];
+// The otter's story: every scene the site and the app show.
 const ART = [
-  'hero-touch-grass', 'hero-touch-grass-lettering', 'journey-trading-world',
-  'journey-budget-world', 'journey-share-world', 'journey-connection-world',
-  'shibuya-clay', 'everyday-dog-world', 'mydata-lounge-world',
-  'coverage-airport-world', 'clay-alphabet', 'faq-clay-help',
-].map((name) => 'assets/ott/' + name + '.webp');
+  'otter-hero', 'otter-join', 'otter-raft', 'otter-airport', 'otter-pier', 'otter-tokyo',
+  'otter-den', 'otter-operator', 'otter-paws', 'otter-help',
+].map((name) => 'assets/story/' + name + '.webp');
 const FLAGS = [
   'ae', 'au', 'br', 'ca', 'de', 'es', 'fr', 'gb', 'gr', 'id',
   'in', 'it', 'jp', 'mx', 'pt', 'sg', 'th', 'tr', 'us', 'vn',
 ].map((code) => 'assets/flags/' + code + '.svg');
 const FONTS = [
-  'BricolageGrotesque-latin-variable', 'BricolageGrotesque-latin-ext-variable',
   'InstrumentSans-latin-variable', 'InstrumentSans-latin-ext-variable',
+  'InstrumentSerif-latin-400', 'InstrumentSerif-latin-ext-400', 'InstrumentSerif-latin-400-italic', 'InstrumentSerif-latin-ext-400-italic',
+  'GeistMono-latin-400', 'GeistMono-latin-ext-400', 'GeistMono-latin-500', 'GeistMono-latin-ext-500',
 ].map((name) => 'fonts/' + name + '.woff2');
 const ICONS = ['assets/app/icon.svg', 'assets/app/icon-180.png', 'assets/app/icon-192.png', 'assets/app/icon-512.png'];
-const APP_ART = ['app-home-world', 'app-japan-world', 'app-kit-world', 'app-clay-logo'].map((name) => 'assets/app/' + name + '.webp');
 const urls = (files) => files.map((file) => new URL(file, ROOT).href);
 const shellUrls = new Set(urls(SHELL));
-const assetUrls = new Set(urls([...ART, 'assets/ott/membership-burn-world.png', ...APP_ART, ...FLAGS, ...FONTS, ...ICONS]));
+const assetUrls = new Set(urls([...ART, ...FLAGS, ...FONTS, ...ICONS]));
 const indexUrl = new URL('index.html', ROOT).href;
 
 self.addEventListener('install', (event) => {

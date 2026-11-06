@@ -121,7 +121,7 @@
 }
 .u-chip:hover { color: var(--text); }
 /* A flat accent fill for the active chip — the only colour this identity spends on "selected". */
-.u-chip--active { background: var(--accent); color: #fff; }
+.u-chip--active { background: var(--accent); color: var(--accent-ink); }
 
 /* ============================================================ 7. pressure bar */
 .u-pressure { display: flex; flex-direction: column; gap: 7px; }
