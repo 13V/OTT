@@ -2,24 +2,24 @@
   <title id="title">OT+T SIM icon</title>
   <defs>
     <linearGradient id="sim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#E8413F"/>
-      <stop offset="1" stop-color="#C42726"/>
+      <stop offset="0" stop-color="#CCE6F7"/>
+      <stop offset="1" stop-color="#B3D6EE"/>
     </linearGradient>
-    <radialGradient id="aura" cx="50%" cy="46%" r="54%">
-      <stop offset="0" stop-color="#CF2E2D" stop-opacity=".34"/>
-      <stop offset=".55" stop-color="#6E1514" stop-opacity=".18"/>
+    <radialGradient id="glow" cx="50%" cy="46%" r="54%">
+      <stop offset="0" stop-color="#BEDEF3" stop-opacity=".16"/>
       <stop offset="1" stop-color="#080202" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <rect width="512" height="512" fill="#080202"/>
-  <rect width="512" height="512" fill="url(#aura)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
   <path d="M154 102H300L362 164V370Q362 394 338 394H154Q130 394 130 370V126Q130 102 154 102Z" fill="url(#sim)"/>
-  <path d="M300 102V145Q300 164 319 164H362" fill="#8E1C1B"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M300 102V145Q300 164 319 164H362" fill="#8FB7D3"/>
+  <g fill="none" stroke="#080202" stroke-width="14" stroke-linecap="square" stroke-linejoin="round">
     <ellipse cx="176" cy="247" rx="19" ry="26"/>
-    <path d="M210 221H245M227.5 221V273M263 232V261M249 246.5H277M289 221H326M307.5 221V273"/>
+    <path d="M210 221H245M227.5 221V273M289 221H326M307.5 221V273"/>
   </g>
-  <g fill="#FFFFFF" opacity=".34">
+  <path d="M263 232V261M249 246.5H277" fill="none" stroke="#CF2E2D" stroke-width="14" stroke-linecap="square"/>
+  <g fill="#080202" opacity=".28">
     <rect x="186" y="317" width="29" height="22" rx="5"/>
     <rect x="231" y="317" width="29" height="22" rx="5"/>
     <rect x="276" y="317" width="29" height="22" rx="5"/>

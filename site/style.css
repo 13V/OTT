@@ -1,7 +1,8 @@
-/* OT+T, Onchain Telephone + Telegraph, set as a DeFi product. The palette is three colours:
- * Raven Black for the ground, Poppy Red for the one action that matters and for the light in the
- * otter's scenes, and Powder Blue for the surfaces you touch. The layouts follow the protocols:
- * a swap card in the hero, stat cards, product cards, a calculator, an asset table. */
+/* OT+T, Onchain Telephone + Telegraph, set as a DeFi product. The palette is three colours in a
+ * fixed order: Raven Black for the ground, Powder Blue as the main colour (the action that matters,
+ * highlighted cards, chosen options, links), and Poppy Red as a small secondary accent (status, the
+ * plus in the wordmark, counts, and the light in the otter's scenes). The layouts follow the
+ * protocols: a swap card in the hero, stat cards, product cards, a calculator, an asset table. */
 
 :root {
   color-scheme: dark;
@@ -18,26 +19,33 @@
   --border: rgba(246, 236, 233, .09);
   --border-strong: rgba(246, 236, 233, .18);
 
-  /* Powder Blue: tiles, the wallet button, light panels. Black ink on it. */
+  /* Powder Blue, the main colour: the primary action, highlighted cards, chosen options, links.
+     Raven Black ink on it. --accent is its working name in every stylesheet. */
   --powder: #BEDEF3;
   --powder-strong: #A6D0EC;
   --powder-ink: #080202;
   --powder-muted: #3F4C57;
   --powder-tint: rgba(190, 222, 243, .1);
-
-  /* Poppy Red: the primary action, the live figure, the light in the scenes. White on it. */
-  --accent: #CF2E2D;
-  --accent-hover: #DF3D3C;
-  --accent-ink: #FFFFFF;
-  --accent-deep: #6E1514;
-  --accent-tint: rgba(207, 46, 45, .14);
-  /* Poppy Red lifted for small text on the ground, where the swatch itself is under 4.5:1. */
-  --accent-text: #F04A48;
-  --accent-glow: rgba(207, 46, 45, .35);
-  --accent-gradient: linear-gradient(180deg, #D93635 0%, #C42726 100%);
-  /* The brand's aura: Poppy Red falling through deep red into Raven Black. Imagery only. */
-  --aura: radial-gradient(60% 70% at 70% 30%, rgba(207, 46, 45, .55) 0%, rgba(110, 21, 20, .35) 38%, rgba(8, 2, 2, 0) 72%);
+  --accent: var(--powder);
+  --accent-hover: #D6EBF9;
+  --accent-ink: var(--powder-ink);
+  --accent-deep: var(--powder-muted);
+  --accent-tint: rgba(190, 222, 243, .12);
+  --accent-text: var(--powder);
+  --accent-glow: rgba(190, 222, 243, .22);
+  --accent-gradient: linear-gradient(180deg, #CCE6F7 0%, #B3D6EE 100%);
+  /* A faint Powder Blue glow behind the hero's scene. Imagery only. */
+  --aura: radial-gradient(60% 70% at 70% 30%, rgba(190, 222, 243, .16) 0%, rgba(190, 222, 243, .05) 40%, rgba(8, 2, 2, 0) 72%);
   --accent-cool: var(--powder);
+
+  /* Poppy Red, the secondary accent, used small: status and pending states, the plus in the
+     wordmark, counts, and the light in the scenes. White on the swatch; --red-text for small red
+     text on the ground, where the swatch itself is under 4.5:1. */
+  --red: #CF2E2D;
+  --red-hover: #DF3D3C;
+  --red-deep: #6E1514;
+  --red-tint: rgba(207, 46, 45, .14);
+  --red-text: #F04A48;
 
   --positive: #5CD49A;
   --positive-tint: rgba(92, 212, 154, .12);
@@ -129,15 +137,15 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .mh-top { display: flex; align-items: center; gap: 28px; height: 68px; }
 @media (max-width: 860px) { .mh-top { height: 60px; } }
 
-/* The mark: the board's logo tile, Poppy Red falling into Raven Black, with a white plus. */
+/* The mark: a Powder Blue tile with a black plus. The wordmark's plus carries the red accent. */
 .brand { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: var(--text); flex: none; }
-.brand-mark { position: relative; width: 32px; height: 32px; flex: none; border-radius: 9px; background: radial-gradient(120% 120% at 20% 10%, #E8413F 0%, #CF2E2D 38%, #6E1514 78%, #2A0707 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); }
-.brand-mark::before, .brand-mark::after { content: ''; position: absolute; left: 50%; top: 50%; background: #fff; border-radius: 2px; transform: translate(-50%, -50%); }
+.brand-mark { position: relative; width: 32px; height: 32px; flex: none; border-radius: 9px; background: var(--powder); }
+.brand-mark::before, .brand-mark::after { content: ''; position: absolute; left: 50%; top: 50%; background: var(--powder-ink); border-radius: 2px; transform: translate(-50%, -50%); }
 .brand-mark::before { width: 15px; height: 3.5px; }
 .brand-mark::after { width: 3.5px; height: 15px; }
 .brand-word { font: 800 20px/1 var(--font-display); letter-spacing: -.035em; }
-.brand-word b { color: var(--accent); font-weight: 800; }
-.brand .dot-fun { color: var(--accent); }
+.brand-word b { color: var(--red); font-weight: 800; }
+.brand .dot-fun { color: var(--red); }
 
 #nav { display: flex; gap: 2px; margin-left: 6px; }
 #nav a { padding: 10px 12px; border-radius: 10px; color: var(--text-secondary); font: 500 15px/1 var(--font-sans); transition: color .15s ease, background-color .15s ease; }
@@ -273,7 +281,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
   position: absolute; top: 0; left: 24px; transform: translateY(-50%);
   display: inline-flex; align-items: center; white-space: nowrap;
   padding: 4px 12px; border-radius: var(--radius-button);
-  background: var(--accent); color: #fff; font: 600 12px/1.4 var(--font-sans);
+  background: var(--accent); color: var(--accent-ink); font: 600 12px/1.4 var(--font-sans);
 }
 .plan-size { font: 700 clamp(44px, 5vw, 68px)/1 var(--font-sans); letter-spacing: -.05em; color: var(--text); }
 .plan-price {
@@ -295,7 +303,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .step-n {
   display: flex; align-items: center; justify-content: center;
   width: 40px; height: 40px; border-radius: 50%; flex: none;
-  background: var(--accent); color: #fff; font: 700 16px/1 var(--font-sans); margin-bottom: 20px;
+  background: var(--accent); color: var(--accent-ink); font: 700 16px/1 var(--font-sans); margin-bottom: 20px;
 }
 .step-title { font: 700 18px/1.3 var(--font-sans); color: var(--text); margin-bottom: 8px; }
 .step-body { font: 400 15px/1.6 var(--font-sans); color: var(--text-secondary); max-width: 42ch; }
@@ -363,7 +371,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 
 .pos, .neg { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 7px; font: 600 12.5px/1.3 var(--font-sans); font-variant-numeric: tabular-nums; }
 .pos { background: var(--positive-tint); color: var(--positive); }
-.neg { background: var(--accent); color: #fff; }
+.neg { background: var(--red); color: #fff; }
 .pos::before { content: '\2191'; }
 .neg::before { content: '\2193'; }
 
@@ -472,12 +480,12 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .data-sizes { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
 .data-sizes .btn.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .data-sims .label { margin-top: 2px; }
-/* Membership: the account's pass, a card with the brand's red aura in its corner. The burn
+/* Membership: the account's pass, a card with a Powder Blue edge and glow. The burn
    confirmation turns its edge amber; what makes it serious is still the sentence, in bold. */
 .data-membership {
   margin: 20px 0 14px; padding: 24px 26px 26px;
-  border: 1px solid rgba(207, 46, 45, .45); border-radius: var(--radius-card);
-  background: radial-gradient(90% 120% at 100% 0%, rgba(207, 46, 45, .22), transparent 60%), var(--surface);
+  border: 1px solid rgba(190, 222, 243, .4); border-radius: var(--radius-card);
+  background: radial-gradient(90% 120% at 100% 0%, rgba(190, 222, 243, .12), transparent 60%), var(--surface);
 }
 .data-membership--confirm, .data-membership--pending { border-color: var(--warning); }
 .data-membership--closed { border-color: var(--border); background: var(--surface); }
@@ -654,7 +662,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .label--accent { color: var(--accent-text); }
 .state-pill {
   display: inline-flex; align-items: center; gap: 7px; min-height: 26px; padding: 5px 10px;
-  border: 0; border-radius: 8px; background: var(--accent-tint); color: var(--accent-text);
+  border: 0; border-radius: 8px; background: var(--red-tint); color: var(--red-text);
   font: 600 12px/1.2 var(--font-sans); white-space: nowrap;
 }
 .state-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -680,7 +688,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .route-station:last-child { border-bottom: 0; }
 .route-number { font: 500 12px/1 var(--font-mono); color: var(--text-tertiary); }
 .route-node { position: relative; z-index: 1; width: 16px; height: 16px; border: 3px solid var(--surface); border-radius: 50%; background: var(--accent); }
-.route-junction .route-node { display: flex; justify-content: center; align-items: center; width: 32px; height: 32px; margin-left: -7px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; font: 800 20px/1 var(--font-sans); }
+.route-junction .route-node { display: flex; justify-content: center; align-items: center; width: 32px; height: 32px; margin-left: -7px; border: 0; border-radius: 9px; background: var(--accent); color: var(--accent-ink); font: 800 20px/1 var(--font-sans); }
 .route-text strong, .route-text small { display: block; }
 .route-text strong { font: 600 clamp(18px, 1.8vw, 22px)/1.15 var(--font-sans); letter-spacing: -.02em; }
 .route-text small { margin-top: 5px; color: var(--text-secondary); font-size: 12.5px; }
@@ -723,10 +731,10 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 /* A plan: a card with the size large, the credit it needs, one button. The featured one is ruled
    in Poppy Red. */
 .plan-card, .plan-card.featured { padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); transition: border-color .15s ease, transform .15s ease; }
-.plan-card.featured { border-color: var(--accent); background: radial-gradient(100% 80% at 100% 0%, rgba(207, 46, 45, .16), transparent 60%), var(--surface); }
+.plan-card.featured { border-color: var(--accent); background: radial-gradient(100% 80% at 100% 0%, rgba(190, 222, 243, .1), transparent 60%), var(--surface); }
 .plan-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
 .plan-card.featured:hover { border-color: var(--accent-hover); }
-.plan-badge { top: 16px; left: auto; right: 16px; transform: none; padding: 5px 9px; border-radius: 8px; background: var(--accent); color: #fff; font: 600 12px/1.2 var(--font-sans); }
+.plan-badge { top: 16px; left: auto; right: 16px; transform: none; padding: 5px 9px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font: 600 12px/1.2 var(--font-sans); }
 .plan-destination { min-height: 28px; padding-right: 100px; color: var(--text-secondary); font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
 .plan-size { margin-top: 12px; font: 700 clamp(52px, 5.4vw, 72px)/.95 var(--font-display); letter-spacing: -.05em; }
 .plan-term { margin-top: 6px; color: var(--text-secondary); font-size: 14.5px; }
@@ -736,7 +744,7 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .plan-disclaimer { margin-top: 22px; max-width: 76ch; color: var(--text-secondary); font-size: 13px; }
 .plan-card .plan-cta { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong); }
 .plan-card .plan-cta:hover { background: var(--surface-3); }
-.plan-card.featured .plan-cta { background: var(--accent); color: #fff; border-color: var(--accent); }
+.plan-card.featured .plan-cta { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .coverage-summary { padding: 0 0 72px; background: transparent; }
 .coverage-details { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .coverage-details summary { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 20px 0; cursor: pointer; font-weight: 600; }
@@ -770,11 +778,11 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 }
 .faq-item summary::-webkit-details-marker { display: none; }
 .faq-item summary::after { content: '+'; flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--surface-3); color: var(--text); font: 400 20px/1 var(--font-sans); transition: transform .2s ease, background-color .2s ease; }
-.faq-item[open] summary::after { transform: rotate(45deg); background: var(--accent); color: #fff; }
+.faq-item[open] summary::after { transform: rotate(45deg); background: var(--accent); color: var(--accent-ink); }
 .faq-item summary:hover { color: var(--text); }
 .faq-item p { max-width: 70ch; padding: 0 22px 22px; color: var(--text-secondary); line-height: 1.7; }
 .dashboard-head { margin-bottom: 28px; }
-.dashboard-panel, .dashboard-empty { max-width: 1100px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: radial-gradient(70% 90% at 100% 0%, rgba(207, 46, 45, .14), transparent 60%), var(--surface); }
+.dashboard-panel, .dashboard-empty { max-width: 1100px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: radial-gradient(70% 90% at 100% 0%, rgba(190, 222, 243, .08), transparent 60%), var(--surface); }
 .dashboard-empty { max-width: 760px; padding: 36px; }
 /* On the page itself the card lines up with the heading above it. */
 #view > .card.dashboard-empty, #view > .card.dashboard-panel { max-width: calc(var(--wrap-width) - 48px); }
@@ -785,14 +793,14 @@ svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.7; strok
 .dashboard-empty p { max-width: 58ch; margin-bottom: 24px; color: var(--text-secondary); }
 .dashboard-panel .data-headline { gap: 12px; }
 .dashboard-panel .dh-tile { background: var(--surface-2); }
-/* The week's credit: the one figure on the account set in Poppy Red, with the brand's aura. */
+/* The week's credit: the one figure on the account set on Powder Blue, in black. */
 .credit-summary {
   display: flex; justify-content: space-between; gap: 28px; margin: 0 0 20px; padding: 26px 28px; border-radius: var(--radius-card);
-  border: 0; background: radial-gradient(100% 140% at 100% 0%, #E8413F 0%, #CF2E2D 40%, #8E1C1B 100%); color: #fff;
+  border: 0; background: var(--powder); color: var(--powder-ink);
 }
-.credit-summary-label, .credit-summary-side span { display: block; color: rgba(255, 255, 255, .8); font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
+.credit-summary-label, .credit-summary-side span { display: block; color: rgba(8, 2, 2, .7); font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
 .credit-summary strong { display: block; margin: 10px 0; font: 700 clamp(40px, 5vw, 60px)/1 var(--font-sans); letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
-.credit-summary p { max-width: 53ch; color: rgba(255, 255, 255, .86); font-size: 13.5px; }
+.credit-summary p { max-width: 53ch; color: rgba(8, 2, 2, .76); font-size: 13.5px; }
 .credit-summary-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 8px; flex: none; }
 .credit-summary-side b { font-size: 14px; font-weight: 700; }
 .status-summary { display: flex; align-items: center; gap: 20px; max-width: 840px; margin: 4px 0 30px; padding: 18px 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); }

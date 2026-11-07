@@ -1,6 +1,7 @@
 /* The public My data preview: the otter's den beside a sample account on a phone, drawn as a
  * wallet app's home screen (references on Mobbin: Phantom's balance and token rows, Base App's
- * home). The balance is a red card, the sample eSIM a Powder Blue one. Live accounts use esim.js. */
+ * home). The balance is a Powder Blue card in black type; the eSIM count is the red accent. Live
+ * accounts use esim.js. */
 .ott-account-preview.section { background: none; overflow: clip; }
 .ott-ap-header { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: end; gap: clamp(28px, 5vw, 80px); margin-bottom: clamp(36px, 5vw, 56px); }
 .ott-ap-header .ott-eyebrow { margin-bottom: 14px; }
@@ -29,24 +30,24 @@
 .ott-ap-demo-wallet { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 11px 5px 5px; border-radius: 13px; background: var(--surface-2); color: var(--text); font: 600 13px/1.2 var(--font-sans); }
 .ott-ap-demo-wallet > span { flex: none; width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle at 32% 28%, #EC4A48, #A3201F 70%); }
 .ott-ap-example-label { display: table; margin: 16px auto 14px; padding: 5px 9px; border-radius: 8px; background: var(--warning-tint); color: var(--warning); font: 600 11px/1.3 var(--font-sans); letter-spacing: .03em; text-align: center; }
-/* Two tabs as a segmented control; the chosen one is Powder Blue. */
+/* Two tabs as a segmented control; the chosen one lifts, so the blue stays with the card below. */
 .ott-ap-switch { display: flex; gap: 4px; padding: 4px; border-radius: 16px; background: var(--surface-2); }
 .ott-ap-switch button { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 12px; background: transparent; color: var(--text-secondary); font: 600 14.5px/1.2 var(--font-sans); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
-.ott-ap-switch button[aria-pressed='true'] { background: var(--powder); color: var(--powder-ink); }
+.ott-ap-switch button[aria-pressed='true'] { background: var(--surface-3); color: var(--text); }
 .ott-ap-switch button:hover { color: var(--text); }
-.ott-ap-switch button[aria-pressed='true']:hover { color: var(--powder-ink); }
-.ott-ap-count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 7px; background: var(--accent); color: #fff; font: 700 11px/1 var(--font-sans); }
+.ott-ap-switch button[aria-pressed='true']:hover { color: var(--text); }
+.ott-ap-count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 7px; background: var(--red); color: #fff; font: 700 11px/1 var(--font-sans); }
 .ott-ap-content { margin-top: 14px; }
 .ott-ap-view { min-height: 352px; }
 .ott-ap-view[hidden] { display: none; }
 
-/* The balance: a red card, the largest figure on the screen. */
-.ott-account-preview .ott-statement-balance.ott-ap-credit-card { padding: 20px 20px 18px; border-radius: 24px; color: #fff; background: radial-gradient(120% 120% at 100% 0%, #EC4A48 0%, #CF2E2D 36%, #6E1514 100%); }
-.ott-account-preview .ott-ap-credit-card .ott-ap-label { color: rgba(255, 255, 255, .84); font: 500 13px/1.3 var(--font-sans); }
-.ott-account-preview .ott-ap-credit-card .ott-ap-money { display: block; margin: 8px 0 6px; color: #fff; font: 700 clamp(52px, 5vw, 64px)/1 var(--font-display); letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
-.ott-account-preview .ott-ap-credit-card p { margin: 0; color: rgba(255, 255, 255, .84); font-size: 13.5px; line-height: 1.4; }
-.ott-ap-credit-track { display: flex; height: 6px; margin-top: 16px; border-radius: 6px; background: rgba(255, 255, 255, .22); overflow: hidden; }
-.ott-ap-credit-track > span { width: 75%; border-radius: 6px; background: #fff; }
+/* The balance: a Powder Blue card, the largest figure on the screen, in black. */
+.ott-account-preview .ott-statement-balance.ott-ap-credit-card { padding: 20px 20px 18px; border-radius: 24px; color: var(--powder-ink); background: var(--powder); }
+.ott-account-preview .ott-ap-credit-card .ott-ap-label { color: rgba(8, 2, 2, .7); font: 500 13px/1.3 var(--font-sans); }
+.ott-account-preview .ott-ap-credit-card .ott-ap-money { display: block; margin: 8px 0 6px; color: var(--powder-ink); font: 700 clamp(52px, 5vw, 64px)/1 var(--font-display); letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
+.ott-account-preview .ott-ap-credit-card p { margin: 0; color: rgba(8, 2, 2, .74); font-size: 13.5px; line-height: 1.4; }
+.ott-ap-credit-track { display: flex; height: 6px; margin-top: 16px; border-radius: 6px; background: rgba(8, 2, 2, .14); overflow: hidden; }
+.ott-ap-credit-track > span { width: 75%; border-radius: 6px; background: var(--powder-ink); }
 /* This week's credit as token rows. */
 .ott-ap-credit-stats { margin-top: 10px; }
 .ott-ap-stat { display: flex; align-items: center; gap: 12px; padding: 11px 6px; }

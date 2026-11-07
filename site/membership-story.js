@@ -48,7 +48,7 @@
           h('h3', {}, 'One burn. Your first eSIM.'),
           h('p', {}, 'Join once by burning ' + (t.burn || 'OTT') + ' from your wallet. Your membership starts with a welcome eSIM for a compatible, unlocked phone.'),
           h('div', { class: 'ott-member-pass' },
-            h('div', { class: 'ott-member-pass-head' }, h('strong', {}, 'OT+T'), h('span', {}, 'MEMBERSHIP PASS')),
+            h('div', { class: 'ott-member-pass-head' }, h('strong', {}, 'OT', h('b', {}, '+'), 'T'), h('span', {}, 'MEMBERSHIP PASS')),
             h('div', { class: 'ott-member-pass-body' },
               h('span', { class: 'ott-member-pass-chip', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('i')),
               h('div', {}, h('strong', {}, 'One-time burn'), h('span', {}, 'Then a weekly share of collected fees'))),

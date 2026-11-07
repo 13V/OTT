@@ -39,8 +39,9 @@ interface instead of competing with it.
 
 - Confident hand-inked linework, with flat fills in warm black (Raven Black, the site's `--bg`).
 - Cream for the otter's face and for paper-light details.
-- One accent, Poppy Red (`#CF2E2D`, the site's `--accent`), used only for light sources and the
-  neckerchief.
+- One accent, Poppy Red (`#CF2E2D`, the site's `--red`), used only for light sources and the
+  neckerchief. The interface leads with black and Powder Blue, so the red in the scenes stays an
+  accent there too.
 - Fine risograph grain and halftone texture, and generous dark negative space.
 - No text, letters, numbers, readable signs or logos in any scene.
 
