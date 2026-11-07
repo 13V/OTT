@@ -1,5 +1,8 @@
 'use strict';
-/** An interactive example of My data. It never reads a wallet or places an order. */
+/**
+ * An interactive example of My data, drawn as a wallet app's home screen (Phantom's balance and
+ * token rows, Base App's tiles). It never reads a wallet or places an order.
+ */
 (function () {
   function render(h, configured) {
     const credit = h('div', { class: 'ott-ap-view ott-ap-credit', id: 'account-credit-example' },
@@ -7,10 +10,13 @@
         h('span', { class: 'ott-ap-label' }, 'Sample data balance'),
         h('strong', { class: 'ott-ap-money' }, '$15.00'),
         h('p', {}, 'An example of choosing your next data package.'),
-        h('div', { class: 'ott-ap-credit-track', 'aria-hidden': 'true' }, h('span')),
-        h('div', { class: 'ott-ap-credit-stats' },
-          h('span', {}, 'Allocated ', h('strong', {}, '$20.00')),
-          h('span', {}, 'Used ', h('strong', {}, '$5.00')))),
+        h('div', { class: 'ott-ap-credit-track', 'aria-hidden': 'true' }, h('span'))),
+      // This week's credit as a wallet lists its tokens: what came in, and what went out.
+      h('div', { class: 'ott-ap-credit-stats' },
+        h('div', { class: 'ott-ap-stat' }, h('span', { class: 'ott-ap-stat-icon ott-ap-stat-icon--in', 'aria-hidden': 'true' }),
+          h('span', { class: 'ott-ap-stat-name' }, 'Allocated', h('small', {}, 'This week’s share')), h('strong', {}, '$20.00')),
+        h('div', { class: 'ott-ap-stat' }, h('span', { class: 'ott-ap-stat-icon ott-ap-stat-icon--out', 'aria-hidden': 'true' }),
+          h('span', { class: 'ott-ap-stat-name' }, 'Used', h('small', {}, 'Japan · 1 GB')), h('strong', {}, '$5.00'))),
       h('div', { class: 'ott-ap-reset' },
         h('span', { class: 'ott-ap-reset-symbol', 'aria-hidden': 'true' }, '↻'),
         h('div', {}, h('strong', {}, 'Fees fund the data pool'), h('p', {}, 'Members’ weekly credit follows their holdings and depends on collected fees. These figures are examples.'))));
@@ -54,14 +60,14 @@
     return h('section', { class: 'section ott-account-preview', 'aria-labelledby': 'account-preview-title' },
       h('div', { class: 'wrap ott-ap-wrap' },
         h('div', { class: 'ott-ap-header' },
-          h('div', {}, h('span', { class: 'ott-eyebrow' }, h('b', {}, '06'), 'My data'), h('h2', { id: 'account-preview-title' }, 'Your wallet.', h('br'), 'Your data.')),
+          h('div', {}, h('span', { class: 'ott-eyebrow' }, 'My data'), h('h2', { id: 'account-preview-title' }, 'Your wallet.', h('br'), 'Your data.')),
           h('div', { class: 'ott-ap-intro' },
             h('p', {}, configured ? 'See your membership, weekly credit and the eSIMs linked to your wallet.' : 'Take the member experience for a spin: sample data, destination choices and eSIM setup. No wallet needed. No real orders.'),
-            h('a', { class: 'ott-primary-action', href: configured ? '#/data' : '#/app' }, configured ? 'Open My data' : 'Explore the app', h('span', { 'aria-hidden': 'true' }, ' ↗')))),
+            h('a', { class: 'ott-primary-action', href: configured ? '#/data' : '#/app' }, configured ? 'Open My data' : 'Explore the app', h('span', { 'aria-hidden': 'true' }, ' →')))),
         h('div', { class: 'ott-ap-product' },
           h('figure', { class: 'ott-ap-world ott-story-figure' },
             h('img', { src: './assets/story/otter-den.webp', alt: 'Our otter curled up on a woven cushion in its den, checking its phone before a trip, with a backpack and a map at the ready.', width: '1440', height: '956', loading: 'lazy', decoding: 'async' }),
-            h('figcaption', {}, h('span', { class: 'ott-fig' }, 'Fig. 7'), 'Check your credit before you head out.')),
+            h('figcaption', {}, 'Check your credit before you head out.')),
           h('div', { class: 'ott-ap-device' },
             h('div', { class: 'ott-ap-device-top', 'aria-hidden': 'true' }, h('span'), h('span'), h('span')),
             statement,

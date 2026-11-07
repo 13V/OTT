@@ -2,11 +2,11 @@
 /** Public files only. Financial/account data and eSIM credentials always go to the network. */
 const ROOT = new URL('./', self.registration.scope);
 const CACHE_PREFIX = 'ott-pwa-' + encodeURIComponent(ROOT.pathname) + '-';
-const CACHE_NAME = CACHE_PREFIX + 'v18';
+const CACHE_NAME = CACHE_PREFIX + 'v19';
 const SHELL = [
-  'index.html', 'fonts.css?v=20261106-print', 'style.css?v=20261106-print', 'ui.css', 'home.css?v=20261106-print', 'membership-story.css?v=20261106-print', 'account-preview.css?v=20261106-print',
-  'mobile-app.css?v=20261106-print', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'account-preview.js?v=20261106-print',
-  'membership-story.js?v=20261106-print', 'home.js?v=20261106-print', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261106-print', 'app.js?v=20261106-print', 'pwa.js',
+  'index.html', 'fonts.css?v=20261107-defi', 'style.css?v=20261107-defi', 'ui.css', 'home.css?v=20261107-defi', 'membership-story.css?v=20261107-defi', 'account-preview.css?v=20261107-defi',
+  'mobile-app.css?v=20261107-defi', 'ui.js', 'qr.js', 'esim.js?v=20261021-audit', 'account-preview.js?v=20261107-defi',
+  'membership-story.js?v=20261107-defi', 'home.js?v=20261107-defi', 'status.js?v=20261017-solana', 'holders.js?v=20261017-solana', 'mobile-app.js?v=20261107-defi', 'app.js?v=20261107-defi', 'pwa.js',
   'client-config.js?v=20261017-solana', 'solana.js?v=20261021-audit', 'wallet.js?v=20261017-solana',
   'holder-tools.js?v=20261006-holders',
   'manifest.webmanifest',
@@ -21,8 +21,7 @@ const FLAGS = [
   'in', 'it', 'jp', 'mx', 'pt', 'sg', 'th', 'tr', 'us', 'vn',
 ].map((code) => 'assets/flags/' + code + '.svg');
 const FONTS = [
-  'Archivo-latin-variable', 'Archivo-latin-ext-variable',
-  'CourierPrime-latin-400', 'CourierPrime-latin-ext-400', 'CourierPrime-latin-700', 'CourierPrime-latin-ext-700',
+  'InterTight-latin-variable', 'InterTight-latin-ext-variable',
 ].map((name) => 'fonts/' + name + '.woff2');
 const ICONS = ['assets/app/icon.svg', 'assets/app/icon-180.png', 'assets/app/icon-192.png', 'assets/app/icon-512.png'];
 const urls = (files) => files.map((file) => new URL(file, ROOT).href);

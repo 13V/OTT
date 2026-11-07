@@ -208,14 +208,15 @@ stale.
 The holder web app opens at `#/app`, with Home, Plans, eSIMs and Help screens. The website's
 **Open app** link enters it; **Add to phone** offers browser installation or platform instructions.
 The manifest starts the installed app at that route and uses relative paths for GitHub Pages.
-The site and the app are set as the printed matter of a telephone company, since OT+T is named
-like one.
-- The pitch is typed on telegram strips, and the terms are a schedule of rates.
-- The pass, the fee example and the enrolment receipt are paper documents, and progress is
-  stamped.
-- The ground is the ink of the illustrations, the text is cream and the one spot colour is orange,
-  printed flat.
-- Archivo sets everything, and Courier Prime does the typing.
+The site and the app are laid out like the DeFi products people already use, in three colours:
+Raven Black, Poppy Red and Powder Blue.
+- The hero holds a join card laid out like a swap (you burn about $5 of OTT, you get a 1 GB eSIM),
+  and the token's facts run underneath as a stats strip.
+- The terms are stat cards and a checklist, the fee example is a calculator, and the coverage
+  directory is an asset list with each flag as the token icon.
+- The balance is a red card and an eSIM a Powder Blue one, in the site's account preview and in
+  the app.
+- Inter Tight sets everything.
 - An otter, drawn in ink, tells the story with one scene per chapter: the burn, the raft that
   shares the fees, the airport, Tokyo, the den and the switchboard.
 The app reuses those scenes, with compact coverage search and a step-by-step phone setup guide.

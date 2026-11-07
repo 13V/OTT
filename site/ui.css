@@ -182,31 +182,28 @@ th.u-th-sortable.num .u-th-btn { justify-content: flex-end; }
 th.u-th-active { color: var(--text); }
 
 /* ============================================================ 10. stat tile
-   A flat --surface tile with a hairline border and no shadow — quieter than .card on purpose, so a
-   row of these reads as one group of numbers rather than four cards competing for attention. */
+   A card with its icon in a small tinted tile, the label above the figure, as Aave and Uniswap set
+   their stats. A row of these reads as one group of numbers. */
 .u-tile {
   display: flex; align-items: flex-start; gap: 12px;
-  background: transparent; border: 0; border-top: 1px solid var(--border-strong); border-radius: 0;
-  padding: 14px 0 6px;
+  background: var(--surface); border: 0; border-radius: var(--radius-card); box-shadow: inset 0 0 0 1px var(--border);
+  padding: 18px;
 }
 .u-tile-icon {
   display: flex; align-items: center; justify-content: center; flex: none;
-  width: 30px; height: 30px; border-radius: 2px;
-  background: transparent; border: 1px solid var(--border-strong); color: var(--accent);
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--accent-tint); border: 0; color: var(--accent-text);
 }
 .u-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .u-tile-body { min-width: 0; flex: 1; }
-.u-tile-label {
-  font: 600 11.5px/1.15 var(--font-sans); font-stretch: var(--wide); text-transform: uppercase; letter-spacing: .06em;
-  color: var(--text-secondary); margin-bottom: 8px;
-}
+.u-tile-label { font: 500 13px/1.2 var(--font-sans); color: var(--text-secondary); margin-bottom: 8px; }
 .u-tile-value-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .u-tile-value {
-  font: 800 1.45rem/1 var(--font-sans); font-stretch: 106%;
+  font: 700 1.55rem/1 var(--font-sans);
   font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1;
-  color: var(--text); letter-spacing: -0.01em;
+  color: var(--text); letter-spacing: -0.03em;
 }
-.u-tile-sub { margin-top: 6px; font-size: .72rem; color: var(--text-secondary); }
+.u-tile-sub { margin-top: 6px; font-size: .75rem; color: var(--text-secondary); }
 
 /* ============================================================ motion & focus */
 /* :focus-visible already gets its outline from style.css; components here only need to make

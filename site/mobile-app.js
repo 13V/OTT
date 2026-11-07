@@ -48,7 +48,7 @@
   function welcomeBanner(h, membership) {
     const welcome = membership.welcome ? 'Any ' + membership.welcome.gb + ' GB, ' + membership.welcome.days + '-day plan up to ' + money(membership.welcome.maxUsd) + '. ' : '';
     return h('section', { class: 'om-welcome-banner', 'aria-label': 'Your welcome eSIM' },
-      h('span', { class: 'om-kicker' }, 'WELCOME eSIM'),
+      h('span', { class: 'om-kicker' }, 'Welcome eSIM'),
       h('h2', {}, 'Your welcome eSIM is ready to claim.'),
       h('p', { class: 'om-muted' }, welcome + 'It doesn’t use your weekly credit.'),
       action(h, [h('span', {}, 'Claim your welcome eSIM'), icon('arrow')], () => go('esims')));
@@ -266,7 +266,7 @@
       : active ? action(h, [account ? 'View My data' : 'Connect wallet', icon('arrow')], event => account ? go('esims') : wallet(ctx, event.currentTarget))
         : action(h, ['Try the app preview', icon('arrow')], () => enterPreview(ctx));
     const content = h('div', { class: 'om-pass-content' }, chip(h),
-        h('span', { class: 'om-kicker' }, preview ? 'SAMPLE DATA CREDIT' : active ? 'YOUR WEEKLY DATA CREDIT' : 'APP PREVIEW'),
+        h('span', { class: 'om-kicker' }, preview ? 'Sample data credit' : active ? 'Your weekly data credit' : 'App preview'),
         preview ? h('p', { class: 'om-balance' }, money(Math.max(0, 20 - demoSpent)))
           : h('h2', { class: 'om-pass-title' }, active ? 'Your wallet. Your connection.' : 'Try it before launch.'),
         h('p', { class: 'om-pass-note' }, preview ? 'Example balance. No real credit.'
@@ -355,7 +355,7 @@
         preview ? 'Browse plans ' : 'Open my eSIMs ', icon('arrow'))
         : action(h, ['Connect wallet', icon('arrow')], event => wallet(ctx, event.currentTarget));
     const intro = h('div', { class: 'om-home-intro' },
-      h('p', { class: 'om-home-eyebrow' }, 'OT+T / YOUR DATA'),
+      h('p', { class: 'om-home-eyebrow' }, 'Your data'),
       h('h1', {}, 'Touch grass.', h('br', {}), 'Stay online.'),
       h('p', { class: 'om-home-lede' }, preview || active ? 'Check your credit. Pick a data plan.' : 'Join once with OTT.', h('br', {}), preview || active ? 'Set up your eSIM.' : 'Trading fees fund your data.'),
       h('div', { class: 'om-home-actions' }, introAction,
@@ -542,7 +542,7 @@
     return h('article', { class: 'om-sim-card om-data-pass' }, h('div', { class: 'om-pass-content' }, chip(h),
       h('div', { class: 'om-pass-heading' }, countryFlag(h, pkg), h('h2', {}, pkg.name)),
       h('p', { class: 'om-sim-package' }, h('strong', {}, pkg.gb + ' GB package'), h('span', {}, pkg.days + ' days')),
-      h('span', { class: 'om-demo-label' }, 'SAMPLE eSIM'),
+      h('span', { class: 'om-demo-label' }, 'Sample eSIM'),
       h('a', { class: 'om-button', href: '#/app/help' }, 'See setup guide ', icon('arrow'))));
   }
 
@@ -570,7 +570,7 @@
     }
     return h('div', { class: 'om-kit-layout' },
       h('div', { class: 'om-kit-account' }, h('section', { class: 'om-empty-state om-data-pass' }, h('div', { class: 'om-pass-content' }, chip(h),
-        h('span', { class: 'om-kicker' }, 'YOUR CONNECTION KIT'), h('h2', {}, 'A place for your data.'),
+        h('span', { class: 'om-kicker' }, 'Your connection kit'), h('h2', {}, 'A place for your data.'),
         h('p', {}, cfg ? 'OTT is still in prelaunch. Try a sample account to see how packages and setup work.' : 'Go online to load your account. The setup guide still works.'),
         cfg ? action(h, 'Explore a sample account', () => enterPreview(ctx)) : action(h, 'Try again', () => ctx.refresh()))),
       h('a', { class: 'om-home-footnote om-text-link', href: '#/app/help' }, 'See how eSIM setup works ', icon('arrow'))), world(h, 'kit'));
@@ -727,7 +727,7 @@
     }, icon(name), h('span', {}, LABELS[name]))), h('a', { class: 'om-website-link', href: '#/' }, 'Visit the website ↗'));
     const body = h('div', { class: 'om-body' });
     const heading = screen === 'home' ? null : h('div', { class: 'om-heading' },
-      h('p', { class: 'om-home-eyebrow' }, 'OT+T / ' + LABELS[screen].toUpperCase()),
+      h('p', { class: 'om-home-eyebrow' }, LABELS[screen]),
       h('h1', {}, { plans: 'Find your data plan.', esims: 'Your eSIMs.', help: 'Set up your eSIM' }[screen]));
     const contents = h('div', { class: 'om-content' }, h('p', { class: 'om-loading', role: 'status' }, 'Loading OTT…'));
     shell.append(header, nav, body); if (heading) body.append(heading); body.append(contents); view.appendChild(shell);

@@ -104,9 +104,9 @@ test('the manifest and real icons launch the installed app inside the /OTT/ proj
   expect(new URL(manifest.scope, base).href).toBe(base);
   expect(new URL(manifest.id, base).href).toBe(base);
   expect(manifest.display).toBe('standalone');
-  // The installed app opens on the same obsidian as the site's theme-color.
-  expect(manifest.theme_color).toBe('#07080A');
-  expect(manifest.background_color).toBe('#07080A');
+  // The installed app opens on the same Raven Black as the site's theme-color.
+  expect(manifest.theme_color).toBe('#080202');
+  expect(manifest.background_color).toBe('#080202');
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', './manifest.webmanifest');
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', './assets/app/icon-180.png');
   for (const size of [180, 192, 512]) {
@@ -171,13 +171,13 @@ test('the service worker caches public release files but never configuration, le
       cache: 'no-store',
     });
     await fetch(new URL('assets/flags/jp.svg', base));
-    await fetch(new URL('fonts/Archivo-latin-variable.woff2', base));
+    await fetch(new URL('fonts/InterTight-latin-variable.woff2', base));
     return privatePaths.map((rel) => new URL(rel, base).href);
   }, { base, address: HOLDER });
   const urls = await cacheUrls(page);
   expect(urls).toContain(base + 'index.html');
   expect(urls).toContain(base + 'assets/flags/jp.svg');
-  expect(urls).toContain(base + 'fonts/Archivo-latin-variable.woff2');
+  expect(urls).toContain(base + 'fonts/InterTight-latin-variable.woff2');
   for (const url of result) expect(urls).not.toContain(url);
   const publicVersions = await page.locator('script[src], link[rel="stylesheet"]').evaluateAll(elements => elements
     .map(el => el.src || el.href).filter(url => new URL(url).search));

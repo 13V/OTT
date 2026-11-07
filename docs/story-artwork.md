@@ -28,7 +28,8 @@ as a reference.
 - An adult sea otter with a sleek build (not a pup).
 - Dark chocolate-brown fur; a pale cream face, muzzle, cheeks and throat.
 - Small rounded ears, round dark eyes with an amber glint, a broad dark nose, long pale whiskers.
-- One accessory: a knotted signal-orange neckerchief. In group scenes only our otter wears it.
+- One accessory: a knotted neckerchief, Poppy Red on the site (signal orange in the source files).
+  In group scenes only our otter wears it.
 - A calm, confident half-smile.
 
 ## The style
@@ -36,32 +37,31 @@ as a reference.
 The style is a premium editorial ink illustration. It is chosen so the pictures sit inside the dark
 interface instead of competing with it.
 
-- Confident hand-inked linework, with flat duotone fills in deep ink-navy and near-black.
+- Confident hand-inked linework, with flat fills in warm black (Raven Black, the site's `--bg`).
 - Cream for the otter's face and for paper-light details.
-- One signal-orange accent (`#FF6A2C`, the site's `--accent`), used only for light sources and the
+- One accent, Poppy Red (`#CF2E2D`, the site's `--accent`), used only for light sources and the
   neckerchief.
 - Fine risograph grain and halftone texture, and generous dark negative space.
 - No text, letters, numbers, readable signs or logos in any scene.
 
-On the page each scene is printed straight onto the ink, with no frame. The page's ground is the
-illustrations' own ink, and a soft mask fades every edge (`.ott-story-figure` in `site/home.css`).
-The big scenes run off one edge of the window. Each has a numbered caption, Fig. 1 to Fig. 9, in
-reading order, with one line of the story.
+On the page each scene sits in a rounded panel (`.ott-story-figure` in `site/home.css`). The
+drawing's ground is the page's black, so a panel needs no frame. Captions are one line of the
+story, laid over the bottom of the scene or set under it.
 
 ## Where each scene is used
 
 | File (`site/assets/story/`) | Size | Bytes | Scene | Used on |
 | --- | --- | --- | --- | --- |
-| `otter-hero.webp` | 1120 × 1394 | 129294 | Floating on its back in a night harbour, reading its phone | Home hero; app Home |
-| `otter-join.webp` | 1040 × 1300 | 102600 | By a fire bowl where a coin melts, tucking a glowing SIM into its pouch | Chapter 01, joining |
-| `otter-raft.webp` | 1440 × 956 | 141370 | Seven otters in a ring holding paws, threads of fee light running to each | Chapter 02, the data pool |
-| `otter-airport.webp` | 1440 × 956 | 131464 | On a suitcase at a night airport gate, phone connected | Chapter 03, spending credit; app plans for most places |
-| `otter-pier.webp` | 1440 × 956 | 94208 | Strolling along a lamp-lit pier, phone in paw | Coverage ("at home and away"); app plans for the United States |
-| `otter-tokyo.webp` | 1440 × 956 | 308628 | Checking a map at a Tokyo scramble crossing | Travel ("Shibuya, Tokyo"); app Japan plans |
-| `otter-den.webp` | 1440 × 956 | 265000 | In its den on a woven cushion, backpack and map ready | My data preview; app eSIMs |
-| `otter-operator.webp` | 1440 × 956 | 138000 | Night operator at an old telephone switchboard, receipts on a spike | Trust ("Onchain Telephone + Telegraph") |
-| `otter-paws.webp` | 1040 × 1300 | 109922 | Two otters asleep under the stars, holding paws | The close ("Stay connected") |
-| `otter-help.webp` | 960 × 960 | 117544 | Showing a phone screen to the viewer | About; app Help |
+| `otter-hero.webp` | 1120 × 1394 | 109018 | Floating on its back in a night harbour, reading its phone | Home hero; app Home |
+| `otter-join.webp` | 1040 × 1300 | 86626 | By a fire bowl where a coin melts, tucking a glowing SIM into its pouch | Membership, chapter 1 |
+| `otter-raft.webp` | 1440 × 956 | 106020 | Seven otters in a ring holding paws, threads of fee light running to each | Membership, chapter 2 |
+| `otter-airport.webp` | 1440 × 956 | 108176 | On a suitcase at a night airport gate, phone connected | Membership, chapter 3; app plans for most places |
+| `otter-pier.webp` | 1440 × 956 | 80126 | Strolling along a lamp-lit pier, phone in paw | Coverage ("at home and away"); app plans for the United States |
+| `otter-tokyo.webp` | 1440 × 956 | 266066 | Checking a map at a Tokyo scramble crossing | Travel ("Shibuya, Tokyo"); app Japan plans |
+| `otter-den.webp` | 1440 × 956 | 220528 | In its den on a woven cushion, backpack and map ready | My data preview; app eSIMs |
+| `otter-operator.webp` | 1440 × 956 | 106806 | Night operator at an old telephone switchboard, receipts on a spike | Before you burn (trust) |
+| `otter-paws.webp` | 1040 × 1300 | 86550 | Two otters asleep under the stars, holding paws | The closing banner ("Where are you heading?") |
+| `otter-help.webp` | 960 × 960 | 100790 | Showing a phone screen to the viewer | About; app Help |
 
 The service worker's `ART` list in `site/sw.js` names these files. A new scene goes into that list
 too, or the installed app won't keep it for offline use.
@@ -71,8 +71,18 @@ too, or the installed app won't keep it for offline use.
 The scenes were generated on Higgsfield with the `gpt_image_2_6` model, at medium quality and 2K
 resolution (1 credit each). The approved test frame of the floating otter was upscaled to 2K
 rather than regenerated. Every scene passed two references: the model sheet and that frame. The
-files were encoded to WebP with Pillow at quality 74. The two busiest scenes (Tokyo and the den)
-use quality 60.
+scenes came out in the first palette, deep ink-navy with a signal-orange accent. Each was then
+recoloured to the current one with [`art/recolor.py`](art/recolor.py) (Python 3 with Pillow and
+NumPy), which turns the navy to a warm black that meets `#080202`, moves orange and the warm
+browns to Poppy Red, deepens the darks and keeps the lights. It also scales the scene and writes
+the WebP:
+
+```sh
+python3 docs/art/recolor.py source.png site/assets/story/otter-new.webp 1440 74
+```
+
+Every scene uses quality 74, except the two busiest (Tokyo and the den), which use 60. A new scene
+goes through the same two steps: the prompt below with the two references, then the recolour.
 
 Each prompt named the scene and its composition, then ended with the same block:
 
